@@ -12,6 +12,10 @@
 // Environment Variables). Until it's set, this returns 500 and the Video
 // Input tab shows a clear "analysis unavailable" error — upload/preview
 // still works either way.
+//
+// Note: adding/changing an env var in the Vercel dashboard does not affect
+// deployments that already built before the change -- a new deployment is
+// required to pick it up. This comment bump exists to force that redeploy.
 
 const MODEL = "gemini-3.8-flash";
 const TIMEOUT_MS = 25000; // keep under vercel.json's maxDuration: 30 for this function
