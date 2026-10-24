@@ -2,16 +2,15 @@
 // Every Apify call lives in this file. Apify runs ready-made scrapers ("Actors")
 // in the cloud; we start them and read their results. Needs APIFY_TOKEN in the
 // Convex environment: npx convex env set APIFY_TOKEN 'apify_api_...'
-import { ApifyClient } from "apify-client";
 import { v } from "convex/values";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { pickUrls, searchQueries } from "./lib/discovery";
 import { normalizeTask } from "./lib/decide";
+import { callActor, datasetItems, getRun, isRunning, startActor } from "./lib/apify";
 import { robotFromActorRow, type ActorRow } from "./lib/actorRows";
 
-const apify = () => new ApifyClient({ token: process.env.APIFY_TOKEN });
 const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets at most 4
 
 // Our own Robot Spec Finder Actor, e.g. "yourname/robot-spec-finder". When it is set,
@@ -31,7 +30,7 @@ export const discover = internalAction({
       const actorId = finderActor();
       if (actorId) {
         // Start it and check back, because one run can take longer than an action may.
-        const run = await apify().actor(actorId).start({
+        const run = await startActor(actorId, {
           task: d.task,
           searchPhrase: d.searchPhrase,
           anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -42,11 +41,12 @@ export const discover = internalAction({
         });
         return;
       }
-      const run = await apify().actor("apify/google-search-scraper").call(
+      const run = await callActor(
+        "apify/google-search-scraper",
         { queries: searchQueries(d.task, d.searchPhrase).join("\n"), maxPagesPerQuery: 1, countryCode: "us" },
-        { waitSecs: WAIT_SECS },
+        WAIT_SECS,
       );
-      const { items } = await apify().dataset(run.defaultDatasetId).listItems();
+      const items = await datasetItems(run.defaultDatasetId);
       const urls = pickUrls(items as { organicResults?: { url?: string }[] }[]);
       await crawlAndExtract(ctx, discoveryId, urls);
     } catch (err) {
@@ -78,7 +78,8 @@ export const crawlUrls = internalAction({
 async function crawlAndExtract(ctx: ActionCtx, discoveryId: Id<"discoveries">, urls: string[]) {
   await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "crawling", urls });
   if (urls.length > 0) {
-    const run = await apify().actor("apify/website-content-crawler").call(
+    const run = await callActor(
+      "apify/website-content-crawler",
       {
         startUrls: urls.map((url) => ({ url })),
         maxCrawlDepth: 0, // just these pages, no following links
@@ -87,9 +88,9 @@ async function crawlAndExtract(ctx: ActionCtx, discoveryId: Id<"discoveries">, u
         saveMarkdown: true,
         removeCookieWarnings: true,
       },
-      { waitSecs: WAIT_SECS },
+      WAIT_SECS,
     );
-    const { items } = await apify().dataset(run.defaultDatasetId).listItems();
+    const items = await datasetItems(run.defaultDatasetId);
     for (const item of items as { url?: string; markdown?: string; text?: string; metadata?: { title?: string } }[]) {
       const markdown = item.markdown ?? item.text ?? "";
       if (!item.url || markdown.length < 200) continue; // blocked or empty pages
@@ -108,15 +109,14 @@ async function crawlAndExtract(ctx: ActionCtx, discoveryId: Id<"discoveries">, u
 export const checkFinderRun = internalAction({
   args: { discoveryId: v.id("discoveries"), runId: v.string(), startedAt: v.number() },
   handler: async (ctx, { discoveryId, runId, startedAt }) => {
-    const run = await apify().run(runId).get();
-    const running = run?.status === "READY" || run?.status === "RUNNING";
-    if (running && Date.now() - startedAt < GIVE_UP_MS) {
+    const run = await getRun(runId);
+    if (isRunning(run) && Date.now() - startedAt < GIVE_UP_MS) {
       await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, { discoveryId, runId, startedAt });
       return;
     }
-    if (run?.status !== "SUCCEEDED") {
+    if (run.status !== "SUCCEEDED") {
       await ctx.runMutation(internal.discovery.finish, {
-        discoveryId, status: "failed", robotsFound: 0, error: `Apify run ${runId} ended as ${run?.status ?? "missing"}`,
+        discoveryId, status: "failed", robotsFound: 0, error: `Apify run ${runId} ended as ${run.status}`,
       });
       return;
     }
@@ -132,8 +132,7 @@ export const checkFinderRun = internalAction({
 export const importFinderRun = internalAction({
   args: { task: v.string(), runId: v.string() },
   handler: async (ctx, { task, runId }): Promise<string> => {
-    const run = await apify().run(runId).get();
-    if (!run) throw new Error(`No Apify run ${runId}`);
+    const run = await getRun(runId);
     const discoveryId: Id<"discoveries"> = await ctx.runMutation(internal.discovery.startManual, { task });
     const found = await saveActorRows(ctx, run.defaultDatasetId, normalizeTask(task));
     await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound: found });
@@ -142,7 +141,7 @@ export const importFinderRun = internalAction({
 });
 
 async function saveActorRows(ctx: ActionCtx, datasetId: string, task: string): Promise<number> {
-  const { items } = await apify().dataset(datasetId).listItems();
+  const items = await datasetItems(datasetId);
   let found = 0;
   for (const item of items as ActorRow[]) {
     const robot = robotFromActorRow(item, task);

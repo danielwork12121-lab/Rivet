@@ -16,6 +16,7 @@ import type * as lib_decide from "../lib/decide.js";
 import type * as lib_discovery from "../lib/discovery.js";
 import type * as lib_drafts from "../lib/drafts.js";
 import type * as lib_actorRows from "../lib/actorRows.js";
+import type * as lib_apify from "../lib/apify.js";
 import type * as lib_extract from "../lib/extract.js";
 import type * as lib_personas from "../lib/personas.js";
 import type * as lib_roi from "../lib/roi.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   "lib/discovery": typeof lib_discovery;
   "lib/drafts": typeof lib_drafts;
   "lib/actorRows": typeof lib_actorRows;
+  "lib/apify": typeof lib_apify;
   "lib/extract": typeof lib_extract;
   "lib/personas": typeof lib_personas;
   "lib/roi": typeof lib_roi;
