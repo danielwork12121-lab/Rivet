@@ -59,7 +59,7 @@ p { margin: 0; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 1.35rem; font-weight: 700; }
 .brand-mark { width: 28px; height: 28px; border-radius: 6px; background: var(--hivis); color: var(--hivis-ink); display: grid; place-items: center; font-size: .95rem; }
 .sample-tag { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; padding: 2px 8px; border-radius: 99px; background: var(--warn-bg); color: var(--warn); }
-.steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; overflow-x: auto; flex: 1 1 520px; min-width: 0; }
+.steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; overflow-x: auto; flex: 1 0 auto; max-width: 100%; min-width: 0; }
 .steps button { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: .85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .steps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .steps button .n { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid currentColor; display: grid; place-items: center; font-size: .72rem; font-family: var(--mono); }
@@ -169,6 +169,26 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .bounty-stats { display: flex; flex-wrap: wrap; gap: 14px 32px; }
 .bounty-stats .v { font-family: var(--mono); font-size: 1.4rem; font-weight: 500; }
 
+/* Developer side */
+.role button[aria-pressed="true"] { background: var(--hivis); color: var(--hivis-ink); }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: .76rem; padding: 2px 8px; border-radius: 4px; background: var(--sunk); color: var(--ink); }
+.tag.have { background: var(--good-bg); color: var(--good); }
+.tag.miss { background: var(--bad-bg); color: var(--bad); }
+.status { padding: 12px 14px; border-radius: 8px; display: grid; gap: 2px; font-size: .9rem; }
+.status.good { background: var(--good-bg); }
+.status.warn { background: var(--warn-bg); }
+.status b { font-family: var(--display); font-size: 1.15rem; letter-spacing: .01em; }
+.ms { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ms:last-child { border-bottom: none; }
+.ms .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: .75rem; font-family: var(--mono); color: var(--muted); }
+.ms.done .dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ms.next .dot { border-color: var(--hivis); color: var(--ink); }
+.update { display: grid; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: .9rem; }
+.update:last-child { border-bottom: none; }
+.check { display: flex; gap: 8px; align-items: center; font-size: .88rem; }
+.check input { accent-color: var(--accent); }
+
 .toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: .9rem; z-index: 20; max-width: calc(100% - 32px); }
 @media (prefers-reduced-motion: no-preference) { .screen { animation: in .18s ease-out; } @keyframes in { from { transform: translateY(4px); } to { transform: none; } } }
 </style>
@@ -176,6 +196,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 <header class="top gutter">
   <div class="top-inner">
     <div class="brand"><span class="brand-mark" aria-hidden="true">RB</span>Robot Bounty <span class="sample-tag">Prototype · sample data</span></div>
+    <div class="seg role" id="role" role="group" aria-label="Viewing as"><button data-role="client">Client</button><button data-role="dev">Developer</button></div>
     <ol class="steps" id="steps"></ol>
   </div>
 </header>
@@ -288,12 +309,6 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2600); }
 function go(step) { S.step = step; render(); window.scrollTo({ top: 0 }); }
-
-function renderSteps() {
-  $("#steps").innerHTML = STEP_NAMES.map((n, i) =>
-    `<li><button data-step="${i}" ${i === S.step ? 'aria-current="step"' : ""} class="${i < S.step ? "done" : ""}"><span class="n">${i + 1}</span>${n}</button></li>`).join("");
-  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => go(+b.dataset.step));
-}
 
 // Step 1
 function screenIntake() {
@@ -579,11 +594,11 @@ function screenBounty() {
     </div>
     <div class="actions"><button class="btn" id="back">Back to robots</button></div>`;
   }
-  const others = OTHERS.reduce((s, o) => s + o.amt, 0);
-  const goal = 150000;
+  const others = OTHERS.reduce((s, o) => s + o.amt, 0) + (claimedMine() ? S.extra : 0);
+  const goal = claimedMine() ? S.claim.price : 150000;
   const raised = others + pledge;
   return `
-  <div class="screen-head"><span class="label">Bounty page · open</span></div>
+  <div class="screen-head"><span class="label">Bounty page · ${S.confirmed && claimedMine() ? "delivered" : claimedMine() ? "claimed" : "open"}</span></div>
   <div class="grid2">
     <div class="stack">
       <div class="panel bounty-hero">
@@ -591,11 +606,11 @@ function screenBounty() {
         <div class="progress" role="img" aria-label="${money(raised)} pledged of ${money(goal)} goal"><span class="others" style="width:${others / goal * 100}%"></span><span class="mine" style="width:${pledge / goal * 100}%"></span></div>
         <div class="bounty-stats">
           <div><span class="label">Pledged</span><div class="v">${money(raised)}</div></div>
-          <div><span class="label">Goal</span><div class="v">${money(goal)}</div></div>
-          <div><span class="label">Backers</span><div class="v">${OTHERS.length + 1}</div></div>
+          <div><span class="label">${claimedMine() ? "Developer's price" : "Goal"}</span><div class="v">${money(goal)}</div></div>
+          <div><span class="label">Backers</span><div class="v">${OTHERS.length + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
           <div><span class="label">Closes</span><div class="v">Jan 31</div></div>
         </div>
-        <p class="muted" style="font-size:.85rem">All-or-nothing: if the goal isn't reached by Jan 31, 2027, nobody is charged.</p>
+        <p class="muted" style="font-size:.85rem">${claimedMine() ? `All-or-nothing: backers are charged only once pledges reach ${money(goal)} and ${esc(S.dev.team)} delivers.` : "All-or-nothing: if the goal isn't reached by Jan 31, 2027, nobody is charged."}</p>
       </div>
       <div class="panel stack">
         <h3>Spec</h3>
@@ -603,7 +618,7 @@ function screenBounty() {
       </div>
       <div class="panel stack">
         <h3>Developer updates</h3>
-        <div class="empty" style="padding:18px">No developer has taken this on yet. Robotics teams see the spec and the pooled total, and post updates here once they start.</div>
+        ${devUpdatesHtml()}
       </div>
     </div>
     <div class="stack">
@@ -613,6 +628,7 @@ function screenBounty() {
         <p class="muted" style="font-size:.85rem">Each company pledges in proportion to its own savings, so bigger operators put in more.</p>
         <div class="backers">
           <div class="backer"><div><b>${esc(S.name)}</b> <span class="pill warn">You</span><div class="muted" style="font-size:.82rem">${S.crews} ${S.type === "lawn" ? "crews" : "techs"} · ${S.pledgePct}% of first-year savings</div></div><span class="num">${money(pledge)}</span></div>
+          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
           ${OTHERS.map(o => `<div class="backer"><div><b>${o.name}</b><div class="muted" style="font-size:.82rem">${o.size}${o.anon ? " · name hidden by choice" : ""}</div></div><span class="num">${money(o.amt)}</span></div>`).join("")}
         </div>
         <p class="muted" style="font-size:.78rem">Other backers are sample data.</p>
@@ -639,11 +655,335 @@ function bindBounty() {
   on("#restart", () => { S.answered = 0; S.bounty = null; S.posted = false; S.contacts = {}; go(0); });
 }
 
+// ---------- Developer side ----------
+const SKILLS = ["Outdoor wheeled bases", "Slope traction", "Spraying payloads", "Confined-space crawlers", "Computer vision", "Arm manipulation"];
+const REGIONS = ["West", "South", "Midwest", "Northeast"];
+const TASK_SKILLS = {
+  mow: ["Outdoor wheeled bases", "Slope traction"], spray: ["Outdoor wheeled bases", "Spraying payloads"], trim: ["Arm manipulation", "Computer vision"],
+  perim: ["Outdoor wheeled bases", "Spraying payloads"], crawl: ["Confined-space crawlers", "Computer vision"], bait: ["Outdoor wheeled bases", "Computer vision"],
+};
+const CATEGORY = { mow: "Mowing", spray: "Spraying", trim: "Trimming", perim: "Spraying", crawl: "Inspection", bait: "Inspection" };
+const TRL = { 4: "Lab prototype", 5: "Tested in a realistic setting", 6: "Prototype tested in the field", 7: "Pilot running with a customer", 8: "Product ready to sell", 9: "Product sold and in use" };
+const DEV_STEPS = ["Team profile", "Bounty board", "Claim", "Build & deliver"];
+const SAMPLE_BOUNTIES = [
+  { id: "b2", title: "Bait station checking robot for commercial sites", industry: "Pest control", cat: "Inspection", region: "South", pledged: 42300, goal: 90000, backers: 6, closes: "Dec 15",
+    skills: ["Outdoor wheeled bases", "Computer vision"], specs: ["Walks a route around commercial buildings and photographs every bait station", "Flags stations that need a refill or show rodent activity", "Runs a 2-hour route on one charge"] },
+  { id: "b3", title: "Crawlspace inspection robot under $5k", industry: "Pest control", cat: "Inspection", region: "Midwest", pledged: 88200, goal: 80000, backers: 9, closes: "Nov 30",
+    skills: ["Confined-space crawlers", "Computer vision"], specs: ["Fits through a 14-inch crawlspace opening", "Streams video and flags moisture, droppings and wood damage", "Unit price under $5,000"] },
+  { id: "b4", title: "Edging and trimming robot that works near beds", industry: "Lawn care", cat: "Trimming", region: "Northeast", pledged: 23600, goal: 120000, backers: 3, closes: "Feb 28",
+    skills: ["Arm manipulation", "Computer vision"], specs: ["Edges along beds, walks and driveways without damaging plants", "Takes over at least 50% of a crew's trimming time"] },
+  { id: "b5", title: "Hillside fertilizer spraying robot", industry: "Lawn care", cat: "Spraying", region: "West", pledged: 64000, goal: 100000, backers: 5, closes: "Jan 15",
+    skills: ["Outdoor wheeled bases", "Slope traction", "Spraying payloads"], specs: ["Sprays granular and liquid fertilizer on slopes up to 25°", "Carries at least 15 gallons"], reservedBy: "Ridgeway Autonomy", reservedUntil: "Nov 5" },
+];
+Object.assign(S, {
+  role: "client", dstep: 0,
+  dev: { team: "Bayline Robotics", size: 4, trl: 6, skills: new Set(["Outdoor wheeled bases", "Slope traction", "Computer vision"]), regions: new Set(["West", "South"]) },
+  dview: "ai", dfilt: { cat: "all", region: "all", minPledged: 0, minFunded: 0, showReserved: true },
+  sel: null, claim: null, extra: 0, delivered: false, confirmed: false,
+});
+
+function claimedMine() { return S.claim && S.claim.bountyId === "mine"; }
+function clientPledge() { return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500; }
+function mineBounty() {
+  const live = !!(S.posted && S.bounty);
+  const taskId = live ? S.bounty.taskId : "mow";
+  const skills = [...TASK_SKILLS[taskId]];
+  if (live && S.gaps.has("Can't handle slopes") && !skills.includes("Slope traction")) skills.push("Slope traction");
+  return {
+    id: "mine", live, skills, closes: "Jan 31", backers: 4,
+    title: live ? bountyTitle() : "Autonomous mower for 20° slopes",
+    industry: live ? COMPANY[S.type].label : "Lawn care", cat: CATEGORY[taskId], region: live ? S.region : "West",
+    pledged: OTHERS.reduce((s, o) => s + o.amt, 0) + clientPledge(), goal: 150000,
+    specs: live ? specLines() : ["Takes over at least 60% of mowing open turf on residential and small commercial lawns", "Works on slopes up to 20°", "Navigates around beds, fences and yard clutter"],
+  };
+}
+function allBounties() { return [mineBounty(), ...SAMPLE_BOUNTIES]; }
+function bountyById(id) { return allBounties().find(b => b.id === id); }
+const isMyClaim = b => S.claim && S.claim.bountyId === b.id;
+const raisedOf = b => b.pledged + (isMyClaim(b) ? S.extra : 0);
+const targetOf = b => isMyClaim(b) ? S.claim.price : b.goal;
+const backersOf = b => b.backers + (isMyClaim(b) && S.extra ? 2 : 0);
+const reservedByOther = b => b.reservedBy && !isMyClaim(b);
+function match(b) {
+  const have = b.skills.filter(s => S.dev.skills.has(s));
+  const missing = b.skills.filter(s => !S.dev.skills.has(s));
+  const inRegion = S.dev.regions.has(b.region);
+  const funded = raisedOf(b) / targetOf(b);
+  return { have, missing, inRegion, funded, score: .6 * have.length / b.skills.length + .2 * (inRegion ? 1 : 0) + .2 * Math.min(funded, 1) };
+}
+function devReason(b, m) {
+  const lc = a => a.map(s => s.toLowerCase()).join(", ");
+  let r = `You've built ${m.have.length} of the ${b.skills.length} capabilities it needs${m.have.length ? ` (${lc(m.have)})` : ""}`;
+  if (m.missing.length) r += `; you'd still need ${lc(m.missing)}`;
+  return r + `. ${m.inRegion ? "It's in a region you serve" : "It's outside the regions you serve"}, and it's ${Math.round(m.funded * 100)}% funded by ${backersOf(b)} companies.`;
+}
+function goDev(step) { S.dstep = step; render(); window.scrollTo({ top: 0 }); }
+
+// Dev step 1: profile
+function screenProfile() {
+  const d = S.dev;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 1 of 4</span>
+    <h1>Tell us what your team can build</h1>
+    <p class="muted">We match you to bounties with this. In the full product the AI can also read your website or GitHub to fill it in.</p>
+  </div>
+  <div class="grid2">
+    <div class="panel stack">
+      <div class="fields3">
+        <div class="field" style="grid-column:1/-1"><label for="d-team">Team name</label><input id="d-team" type="text" value="${esc(d.team)}"></div>
+        <div class="field"><label for="d-size">Engineers</label><input id="d-size" type="number" min="1" value="${d.size}"></div>
+        <div class="field" style="grid-column:span 2"><label for="d-trl">Most mature thing you've built</label><select id="d-trl">${Object.entries(TRL).map(([k, v]) => `<option value="${k}" ${+k === d.trl ? "selected" : ""}>TRL ${k}: ${v}</option>`).join("")}</select></div>
+      </div>
+      <div class="field"><span class="label">What you've already built</span><div class="row">${SKILLS.map(s => `<button class="chip" data-skill="${s}" aria-pressed="${d.skills.has(s)}">${s}</button>`).join("")}</div></div>
+      <div class="field"><span class="label">Regions you can support</span><div class="row">${REGIONS.map(r => `<button class="chip" data-reg="${r}" aria-pressed="${d.regions.has(r)}">${r}</button>`).join("")}</div></div>
+    </div>
+    <div class="panel stack">
+      <span class="label">What backers see about you</span>
+      <h2>${esc(d.team)}</h2>
+      <p class="muted">${d.size} engineers · TRL ${d.trl}: ${TRL[d.trl].toLowerCase()}</p>
+      <div class="tags">${[...d.skills].map(s => `<span class="tag have">${s}</span>`).join("") || `<span class="muted">No capabilities picked yet</span>`}</div>
+      <p class="muted" style="font-size:.88rem">Supports: ${[...d.regions].join(", ") || "no regions yet"}</p>
+    </div>
+  </div>
+  <div class="actions"><button class="btn primary" id="next">See matching bounties</button></div>`;
+}
+function bindProfile() {
+  $("#d-team").oninput = e => S.dev.team = e.target.value;
+  $("#d-team").onchange = () => render();
+  $("#d-size").onchange = e => { S.dev.size = Math.max(1, +e.target.value || 1); render(); };
+  $("#d-trl").onchange = e => { S.dev.trl = +e.target.value; render(); };
+  document.querySelectorAll("[data-skill]").forEach(b => b.onclick = () => { const s = b.dataset.skill; S.dev.skills.has(s) ? S.dev.skills.delete(s) : S.dev.skills.add(s); render(); });
+  document.querySelectorAll("[data-reg]").forEach(b => b.onclick = () => { const r = b.dataset.reg; S.dev.regions.has(r) ? S.dev.regions.delete(r) : S.dev.regions.add(r); render(); });
+  $("#next").onclick = () => goDev(1);
+}
+
+// Dev step 2: board
+function bountyCard(b, rank) {
+  const m = match(b), raised = raisedOf(b), target = targetOf(b), pct = Math.round(raised / target * 100);
+  const other = reservedByOther(b), mine = isMyClaim(b);
+  return `
+  <article class="panel prod">
+    <div class="prod-top">
+      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${b.industry} · ${b.cat} · ${b.region}${b.id === "mine" ? (b.live ? " · posted from the client side" : " · sample") : ""}</span></div></div>
+      <div class="row" style="gap:6px">${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
+    </div>
+    <div class="bar" aria-hidden="true"><span style="width:${Math.min(pct, 100)}%"></span></div>
+    <div class="prod-figs">
+      <div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div>
+      <div><span class="label">${mine ? "Your price" : "Goal"}</span><span class="v">${money(target)}</span></div>
+      <div><span class="label">Backers</span><span class="v">${backersOf(b)}</span></div>
+      <div><span class="label">Closes</span><span class="v">${b.closes}</span></div>
+    </div>
+    <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
+    ${rank != null ? `<div class="why"><b>Why it fits your team:</b> ${devReason(b, m)}</div>` : ""}
+    ${other ? `<div class="ruled">${esc(b.reservedBy)} claimed this. It reopens on ${b.reservedUntil} if they don't post a first milestone.</div>` : ""}
+    <div class="row" style="justify-content:flex-end">
+      ${mine ? `<button class="btn small primary" data-open="1">Open my claim</button>` : `<button class="btn small primary" data-sel="${b.id}" ${other ? "disabled" : ""}>View and claim</button>`}
+    </div>
+  </article>`;
+}
+function screenBoard() {
+  const f = S.dfilt;
+  const list = allBounties().filter(b => (f.cat === "all" || b.cat === f.cat) && (f.region === "all" || b.region === f.region));
+  let body;
+  if (S.dview === "ai") {
+    const open = list.filter(b => !reservedByOther(b)).map(b => [b, match(b)]).sort((a, c) => c[1].score - a[1].score);
+    const taken = list.filter(reservedByOther);
+    body = (open.length ? open.map(([b], i) => bountyCard(b, i + 1)).join("") : `<div class="empty">No open bounties match these filters.</div>`)
+      + (taken.length ? `<h3 style="margin-top:12px">Reserved by other teams</h3>` + taken.map(b => bountyCard(b, null)).join("") : "");
+  } else {
+    const shown = list.filter(b => raisedOf(b) >= f.minPledged && raisedOf(b) / targetOf(b) * 100 >= f.minFunded && (f.showReserved || !reservedByOther(b))).sort((a, c) => raisedOf(c) - raisedOf(a));
+    body = shown.length ? shown.map(b => bountyCard(b, null)).join("") : `<div class="empty">Nothing matches these filters. Try lowering the pledged or funded minimum.</div>`;
+  }
+  const tip = !mineBounty().live ? `<p class="muted" style="font-size:.8rem">Tip: post a bounty on the Client side and it shows up here.</p>` : "";
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 2 of 4</span>
+    <h1>Bounties with money behind them</h1>
+    <p class="muted">Every bounty here comes from real operators who've pledged. Browse with filters, or let the AI rank what your team is closest to building.</p>
+  </div>
+  <div class="search">
+    <aside class="panel stack filters" aria-label="Filters">
+      <div class="seg" role="group" aria-label="View"><button data-dview="ai" aria-pressed="${S.dview === "ai"}">Best for your team</button><button data-dview="all" aria-pressed="${S.dview === "all"}">All bounties</button></div>
+      <div class="field"><label for="df-cat">Job type</label><select id="df-cat"><option value="all">All jobs</option>${["Mowing", "Spraying", "Trimming", "Inspection"].map(c => `<option ${f.cat === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label for="df-region">Region</label><select id="df-region"><option value="all">All regions</option>${REGIONS.map(r => `<option ${f.region === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+      <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-pledged">Min pledged: <span class="num">${money(f.minPledged)}</span></label><input type="range" id="df-pledged" min="0" max="150000" step="5000" value="${f.minPledged}"></div>
+      <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-funded">Min funded: <span class="num">${f.minFunded}%</span></label><input type="range" id="df-funded" min="0" max="100" step="5" value="${f.minFunded}"></div>
+      <label class="check" ${S.dview === "ai" ? "hidden" : ""}><input type="checkbox" id="df-res" ${f.showReserved ? "checked" : ""}>Show bounties other teams reserved</label>
+      <p class="muted" style="font-size:.8rem">Bounties, backers and amounts are sample data.</p>
+      ${tip}
+    </aside>
+    <section class="results" aria-live="polite">${body}</section>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back to profile</button></div>`;
+}
+function bindBoard() {
+  document.querySelectorAll("[data-dview]").forEach(b => b.onclick = () => { S.dview = b.dataset.dview; render(); });
+  $("#df-cat").onchange = e => { S.dfilt.cat = e.target.value; render(); };
+  $("#df-region").onchange = e => { S.dfilt.region = e.target.value; render(); };
+  const fp = $("#df-pledged"), ff = $("#df-funded");
+  fp.oninput = e => { fp.previousElementSibling.querySelector(".num").textContent = money(+e.target.value); };
+  fp.onchange = e => { S.dfilt.minPledged = +e.target.value; render(); };
+  ff.oninput = e => { ff.previousElementSibling.querySelector(".num").textContent = e.target.value + "%"; };
+  ff.onchange = e => { S.dfilt.minFunded = +e.target.value; render(); };
+  $("#df-res").onchange = e => { S.dfilt.showReserved = e.target.checked; render(); };
+  document.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => { S.sel = b.dataset.sel; goDev(2); });
+  document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => goDev(3));
+  $("#back").onclick = () => goDev(0);
+}
+
+// Dev step 3: claim
+function claimStatus(price, raised) {
+  return price <= raised
+    ? `<div class="status good"><b>Funded &amp; claimed</b><span>Pledges of ${money(raised)} already cover your price. Backers are charged when you deliver.</span></div>`
+    : `<div class="status warn"><b>Claimed, ${money(price - raised)} to go</b><span>Backers see your price on the bounty page, which helps pull in more companies. Nobody is charged until pledges reach ${money(price)} and you deliver.</span></div>`;
+}
+function screenClaim() {
+  const b = S.sel && bountyById(S.sel);
+  if (!b) return `<div class="screen-head"><span class="label">Developer · Step 3 of 4</span><h1>Pick a bounty first</h1><p class="muted">Choose "View and claim" on the bounty board.</p></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="toboard">Go to bounty board</button></div>`;
+  const m = match(b), raised = raisedOf(b);
+  const price = S.draftPrice ?? Math.round(Math.min(b.goal, raised * 1.18) / 1000) * 1000;
+  S.draftPrice = price;
+  const ms = S.draftMs ?? ["Working prototype on a test site", "Field trial with two backers' crews", "Production units delivered to backers"];
+  S.draftMs = ms;
+  const other = S.claim && S.claim.bountyId !== b.id ? bountyById(S.claim.bountyId) : null;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 3 of 4 · Claim</span>
+    <h1>${esc(b.title)}</h1>
+    <p class="muted">${b.industry} · ${b.region} · ${backersOf(b)} backers · closes ${b.closes}</p>
+  </div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="panel stack">
+        <h3>Spec from the backers</h3>
+        <ul class="spec">${b.specs.map(l => `<li>${l}</li>`).join("")}</ul>
+        <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
+      </div>
+      <div class="panel stack">
+        <h3>Money behind it</h3>
+        <div class="bar" aria-hidden="true"><span style="width:${Math.min(raised / b.goal * 100, 100)}%"></span></div>
+        <div class="prod-figs"><div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div><div><span class="label">Backers' goal</span><span class="v">${money(b.goal)}</span></div></div>
+        <div class="why"><b>Fit:</b> ${devReason(b, m)}</div>
+      </div>
+    </div>
+    <div class="panel stack">
+      <h3>Your proposal</h3>
+      <div class="fields3">
+        <div class="field"><label for="c-price">Your price ($)</label><input id="c-price" type="number" min="1000" step="1000" value="${price}"></div>
+        <div class="field"><label for="c-weeks">Weeks to deliver</label><input id="c-weeks" type="number" min="1" value="${S.draftWeeks ?? 12}"></div>
+      </div>
+      <div class="field"><label for="c-approach">Approach</label><textarea id="c-approach">${esc(S.draftApproach ?? `Adapt our existing robot platform${m.have.length ? ` (${m.have.map(s => s.toLowerCase()).join(", ")})` : ""} to this spec${m.missing.length ? ` and add ${m.missing.map(s => s.toLowerCase()).join(" and ")}` : ""}. Field-test with two backers' crews before shipping.`)}</textarea></div>
+      <div class="field"><span class="label">Milestones (backers see each update)</span>${ms.map((t, i) => `<input type="text" data-ms="${i}" aria-label="Milestone ${i + 1}" value="${esc(t)}">`).join("")}</div>
+      <div id="c-status">${claimStatus(price, raised)}</div>
+      <p class="muted" style="font-size:.85rem">Claiming reserves this bounty for your team for 14 days, until Nov 7. Post your first milestone update by then or it reopens to other teams.</p>
+      ${other ? `<div class="notice">You already hold a claim on "${esc(other.title)}". Claiming this one releases it.</div>` : ""}
+      <button class="btn hivis" id="claim">Claim for ${money(price)}</button>
+    </div>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back to board</button></div>`;
+}
+function bindClaim() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("#toboard", () => goDev(1));
+  on("#back", () => goDev(1));
+  if (!$("#claim")) return;
+  const b = bountyById(S.sel);
+  $("#c-price").oninput = e => { S.draftPrice = Math.max(1000, +e.target.value || 0); $("#c-status").innerHTML = claimStatus(S.draftPrice, raisedOf(b)); $("#claim").textContent = "Claim for " + money(S.draftPrice); };
+  $("#c-weeks").oninput = e => S.draftWeeks = Math.max(1, +e.target.value || 1);
+  $("#c-approach").oninput = e => S.draftApproach = e.target.value;
+  document.querySelectorAll("[data-ms]").forEach(i => i.oninput = e => S.draftMs[+i.dataset.ms] = e.target.value);
+  $("#claim").onclick = () => {
+    if (S.claim && S.claim.bountyId !== b.id) toast("Released your earlier claim");
+    S.claim = { bountyId: b.id, price: S.draftPrice, weeks: S.draftWeeks ?? 12, approach: $("#c-approach").value,
+      milestones: S.draftMs.map(t => ({ title: t, done: false, update: "" })) };
+    S.extra = 0; S.delivered = false; S.confirmed = false;
+    S.draftPrice = S.draftWeeks = S.draftApproach = S.draftMs = undefined;
+    goDev(3); toast("Bounty claimed. Reserved for 14 days");
+  };
+}
+
+// Dev step 4: build & deliver
+const SAMPLE_UPDATES = [
+  "Prototype ran a full test lot. Holding its line on a 22° slope, battery lasted 3.5 hours.",
+  "Two backers' crews ran it on real routes for a week. It handled 68% of mowing time; we're fixing a snag near flower beds.",
+  "Production units built and shipped. Each backer gets setup help from our team on site.",
+];
+function msDate(i) { return `Week ${Math.round(S.claim.weeks * (i + 1) / S.claim.milestones.length)}`; }
+function screenDeliver() {
+  if (!S.claim) return `<div class="screen-head"><span class="label">Developer · Step 4 of 4</span><h1>No claim yet</h1><p class="muted">Claim a bounty from the board to start building.</p></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="toboard">Go to bounty board</button></div>`;
+  const c = S.claim, b = bountyById(c.bountyId), raised = raisedOf(b), funded = raised >= c.price;
+  const next = c.milestones.findIndex(m => !m.done);
+  const started = c.milestones.some(m => m.done);
+  let final;
+  if (S.confirmed) final = `<div class="status good"><b>Paid out</b><span>Backers confirmed delivery. ${money(c.price)} was charged across ${backersOf(b)} backers and paid to ${esc(S.dev.team)}.</span></div>`;
+  else if (S.delivered && !funded) final = `<div class="status warn"><b>Delivered, waiting on pledges</b><span>Pledges need to reach your price before anyone is charged.</span></div>`;
+  else if (S.delivered) final = `<div class="status warn"><b>Delivered, waiting for backers to confirm</b><span>Each backer checks the robot meets the spec.</span></div><button class="btn primary" id="confirm">Simulate backers confirming</button>`;
+  else final = `<button class="btn hivis" id="deliver" ${next !== -1 ? "disabled" : ""}>Mark robot delivered</button>${next !== -1 ? `<p class="muted" style="font-size:.85rem">Finish every milestone first.</p>` : ""}`;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 4 of 4 · Build &amp; deliver</span>
+    <h1>${esc(b.title)}</h1>
+    <div class="row"><span class="pill ${started ? "good" : "warn"}">${started ? "Claim locked in" : "Reserved for you until Nov 7"}</span><span class="pill plain">${esc(S.dev.team)} · ${money(c.price)} · ${c.weeks} weeks</span></div>
+  </div>
+  <div class="grid2">
+    <div class="panel stack">
+      <h3>Milestones</h3>
+      <p class="muted" style="font-size:.88rem">Each update you post shows on the bounty page every backer sees.</p>
+      <div>${c.milestones.map((m, i) => `
+        <div class="ms ${m.done ? "done" : i === next ? "next" : ""}">
+          <span class="dot">${m.done ? "✓" : i + 1}</span>
+          <div class="stack" style="gap:6px"><b>${esc(m.title)}</b>
+          ${m.done ? `<span class="muted" style="font-size:.88rem">${esc(m.update)} · ${msDate(i)}</span>` : i === next ? `<textarea id="u-text" aria-label="Update for ${esc(m.title)}" style="min-height:70px">${esc(SAMPLE_UPDATES[i] || "")}</textarea><div><button class="btn small primary" id="post-u">Post update</button></div>` : ""}</div>
+        </div>`).join("")}</div>
+    </div>
+    <div class="stack">
+      <div class="panel stack">
+        <h3>Funding</h3>
+        <div class="bar" aria-hidden="true"><span style="width:${Math.min(raised / c.price * 100, 100)}%"></span></div>
+        <div class="prod-figs"><div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div><div><span class="label">Your price</span><span class="v">${money(c.price)}</span></div><div><span class="label">Backers</span><span class="v">${backersOf(b)}</span></div></div>
+        ${claimStatus(c.price, raised)}
+        ${!funded ? `<button class="btn" id="more">Simulate 2 new backers (+${money(c.price - raised)})</button>` : ""}
+      </div>
+      <div class="panel stack"><h3>Delivery</h3>${final}</div>
+      ${b.id === "mine" && b.live ? `<button class="link" id="asclient">See the bounty page as a backer</button>` : ""}
+    </div>
+  </div>`;
+}
+function bindDeliver() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("#toboard", () => goDev(1));
+  on("#post-u", () => { const c = S.claim, i = c.milestones.findIndex(m => !m.done); c.milestones[i].done = true; c.milestones[i].update = $("#u-text").value; render(); toast("Update posted to backers"); });
+  on("#more", () => { const b = bountyById(S.claim.bountyId); S.extra += S.claim.price - raisedOf(b); render(); toast("2 new backers joined"); });
+  on("#deliver", () => { S.delivered = true; render(); });
+  on("#confirm", () => { S.confirmed = true; render(); toast("Backers confirmed. Payout sent"); });
+  on("#asclient", () => { S.role = "client"; go(4); });
+}
+
+function devUpdatesHtml() {
+  if (!claimedMine()) return `<div class="empty" style="padding:18px">No developer has taken this on yet. Robotics teams see the spec and the pooled total, and post updates here once they start.</div>`;
+  const c = S.claim, done = c.milestones.filter(m => m.done);
+  const state = S.confirmed ? `<span class="pill good">Delivered &amp; paid</span>` : S.delivered ? `<span class="pill warn">Delivered · confirm it meets the spec</span>` : `<span class="pill warn">Claimed · building</span>`;
+  return `<div class="row"><b>${esc(S.dev.team)}</b>${state}</div>
+    <p class="muted" style="font-size:.88rem">Will build it for <span class="num">${money(c.price)}</span> in ${c.weeks} weeks. ${esc(c.approach)}</p>
+    <div>${done.length ? done.map((m, i) => `<div class="update"><b>${esc(m.title)}</b><span>${esc(m.update)}</span><span class="muted" style="font-size:.8rem">${msDate(i)}</span></div>`).join("") : `<p class="muted" style="font-size:.88rem">No milestone updates yet.</p>`}</div>`;
+}
+
 // ---------- Main ----------
 const SCREENS = [[screenIntake, bindIntake], [screenFollowups, bindFollowups], [screenOpps, bindOpps], [screenSearch, bindSearch], [screenBounty, bindBounty]];
+const DEV_SCREENS = [[screenProfile, bindProfile], [screenBoard, bindBoard], [screenClaim, bindClaim], [screenDeliver, bindDeliver]];
+function renderRole() {
+  document.querySelectorAll("#role button").forEach(b => { b.setAttribute("aria-pressed", b.dataset.role === S.role); b.onclick = () => { S.role = b.dataset.role; render(); window.scrollTo({ top: 0 }); }; });
+}
 function render() {
-  renderSteps();
-  const [html, bind] = SCREENS[S.step];
+  renderRole();
+  const dev = S.role === "dev";
+  const names = dev ? DEV_STEPS : STEP_NAMES, cur = dev ? S.dstep : S.step;
+  $("#steps").innerHTML = names.map((n, i) =>
+    `<li><button data-step="${i}" ${i === cur ? 'aria-current="step"' : ""} class="${i < cur ? "done" : ""}"><span class="n">${i + 1}</span>${n}</button></li>`).join("");
+  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => dev ? goDev(+b.dataset.step) : go(+b.dataset.step));
+  const [html, bind] = (dev ? DEV_SCREENS : SCREENS)[cur];
   $("#app").innerHTML = `<div class="screen">${html()}</div>`;
   bind();
 }
