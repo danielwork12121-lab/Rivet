@@ -85,6 +85,24 @@ export const matchNext = v.union(
   v.object({ kind: v.literal("suggest_bounty"), gaps: v.array(v.string()) }),
 );
 
+// What a Client wants matched, saved on their request (see matching.ts). `basis` says where a
+// requirement's number comes from: "estimate" (the Client's own rough figure) or "measured" (a figure
+// the Client says they measured). Both are the Client's words; Rivet verifies neither. Robot specs read
+// from vendor pages are the only verified figures (see robots.specs).
+export const matchingRequirement = v.object({
+  name: v.string(), // a SPEC_NAMES entry, checked on write
+  op: v.union(v.literal("atLeast"), v.literal("atMost")),
+  value: v.number(),
+  mandatory: v.boolean(),
+  basis: v.union(v.literal("estimate"), v.literal("measured")),
+});
+export const matchingInput = v.object({
+  task: v.string(), // normalised, e.g. "mowing"
+  // Absent: derive from the follow-up answers. Present (even empty): exactly these.
+  requirements: v.optional(v.array(matchingRequirement)),
+  updatedAt: v.number(),
+});
+
 export default defineSchema({
   // One row per signed-in person. Clerk proves who they are; this row says what
   // they may do (see lib/auth.ts). Created on first sign-in by users:ensureAccount.
@@ -127,6 +145,7 @@ export default defineSchema({
     constraints: v.array(v.string()),
     cost: v.optional(costInfo),
     profile: v.optional(profileInfo),
+    matchingInput: v.optional(matchingInput), // saved by matching:saveRequirements / findRobots
     // Client-generated id that makes retries safe: create() with a token that
     // already exists returns the existing request instead of inserting again.
     // Before accounts it was also the draft's password; now it grants nothing.
