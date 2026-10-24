@@ -15,6 +15,7 @@
     "e2e:clerk": "node scripts/browser-clerk-real.mjs",
     "e2e:clerk:video": "node scripts/browser-clerk-video.mjs",
     "e2e:clerk:matching": "node scripts/browser-clerk-matching.mjs",
+    "e2e:clerk:requirements": "node scripts/browser-clerk-requirements.mjs",
     "check:frontend": "node scripts/check-frontend.mjs",
     "test-data:list": "convex run maintenance:testData '{\"action\":\"list\"}'"
   },
