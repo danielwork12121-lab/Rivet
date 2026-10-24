@@ -1,0 +1,310 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Client Bounty Journey</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one tall flow chart reading top to bottom, a short intro above and three rules below */
+:root {
+  --bg: #f5f6f3;
+  --surface: #ffffff;
+  --ink: #1d2328;
+  --muted: #5d6870;
+  --line: #c9cfd1;
+  --accent: #2f5d8a;      /* workwear denim: client actions */
+  --accent-soft: #e2ebf4;
+  --money: #9a6414;       /* savings and pledge figures */
+  --money-soft: #f6ead6;
+  --ok: #2e7d4f;
+  --ok-soft: #e1f1e7;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Public Sans", "Segoe UI", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181b; --surface: #1d2328; --ink: #e8ecee; --muted: #9aa6ad; --line: #3a444b;
+    --accent: #7fb0e0; --accent-soft: #22344a; --money: #e0b062; --money-soft: #3a2e1a;
+    --ok: #6cc893; --ok-soft: #1c3527; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181b; --surface: #1d2328; --ink: #e8ecee; --muted: #9aa6ad; --line: #3a444b;
+  --accent: #7fb0e0; --accent-soft: #22344a; --money: #e0b062; --money-soft: #3a2e1a;
+  --ok: #6cc893; --ok-soft: #1c3527; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+header { display: grid; gap: 8px; max-width: 68ch; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+h1 { font-family: var(--display); font-weight: 800; font-size: clamp(28px, 4.5vw, 42px); line-height: 1.08; margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+header p { margin: 0; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.a { background: var(--accent-soft); border-color: var(--accent); }
+.sw.m { background: var(--money-soft); border-color: var(--money); }
+.sw.o { background: var(--ok-soft); border-color: var(--ok); }
+.sw.d { background: transparent; border-color: var(--muted); border-style: dashed; }
+
+figure { margin: 0; display: grid; gap: 12px; }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.scroll svg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--muted); }
+figcaption { font-size: 13px; color: var(--muted); max-width: 72ch; }
+
+/* SVG parts, styled from page tokens */
+.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.box.act { fill: var(--accent-soft); stroke: var(--accent); }
+.box.mon { fill: var(--money-soft); stroke: var(--money); }
+.box.ok { fill: var(--ok-soft); stroke: var(--ok); }
+.box.dash { fill: none; stroke: var(--muted); stroke-dasharray: 5 4; }
+.panel { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.btn { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+.btn.solid { fill: var(--ok); stroke: var(--ok); }
+.wire { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.wire.thin { stroke-width: 1; stroke-dasharray: 3 3; }
+.bar-bg { fill: var(--line); }
+.bar-fill { fill: var(--money); }
+.band { fill: var(--money); opacity: .28; }
+.knob { fill: var(--money); stroke: var(--surface); stroke-width: 2; }
+.phase { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; fill: var(--muted); }
+.t { font-family: var(--display); font-weight: 700; font-size: 16px; fill: var(--ink); }
+.s { font-family: var(--body); font-size: 12.5px; fill: var(--muted); }
+.b { font-family: var(--body); font-size: 13px; fill: var(--ink); }
+.q { font-family: var(--body); font-style: italic; font-size: 13px; fill: var(--ink); }
+.n { font-family: var(--mono); font-size: 12.5px; fill: var(--money); }
+.lbl { font-family: var(--body); font-size: 12px; fill: var(--muted); }
+.btn-t { font-family: var(--body); font-weight: 600; font-size: 12.5px; fill: var(--accent); }
+.btn-t.inv { fill: var(--surface); }
+.ok-t { fill: var(--ok); }
+.arrowhead { fill: currentColor; }
+
+.rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.rule { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.rule h2 { font-family: var(--display); font-size: 17px; font-weight: 700; margin: 0; }
+.rule p { margin: 0; font-size: 14px; color: var(--muted); }
+.rule .fig { font-family: var(--mono); color: var(--money); font-size: 13px; }
+@media (max-width: 720px) { .rules { grid-template-columns: 1fr; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Client side · lawn care, pest control and other field crews</p>
+    <h1>From “here’s my work” to a robot someone builds for you</h1>
+    <p>How a business owner moves through the app: describe the job, see where automation pays off, shop vendors, and when nothing fits, turn the gap into a bounty that nearby companies help fund.</p>
+    <div class="legend" aria-label="Legend">
+      <span><i class="sw a"></i>Client action</span>
+      <span><i class="sw m"></i>Money: savings, bounty, pledges</span>
+      <span><i class="sw o"></i>Good outcome</span>
+      <span><i class="sw d"></i>Limit for anonymous clients</span>
+    </div>
+  </header>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 1470" role="img" aria-label="Client flow: describe work by form or voice, AI asks follow-ups, AI lists automation opportunities with ROI, client searches vendors by filters or AI picks, then either buys from a vendor or requests a bounty. Signed-in clients who opt into pooling write the gap as a spec, set a bounty of about 20 to 40 percent of first-year savings, and publish a bounty page. Others nearby pledge in proportion to their savings. If the goal is met by the deadline a developer builds it; otherwise every pledge is refunded.">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrowhead" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+        </defs>
+
+        <!-- Phase labels -->
+        <text class="phase" x="24" y="52">DESCRIBE</text>
+        <text class="phase" x="24" y="202">DISCOVER</text>
+        <text class="phase" x="24" y="402">SEARCH</text>
+        <text class="phase" x="24" y="612">DECIDE</text>
+        <text class="phase" x="24" y="862">REQUEST</text>
+        <text class="phase" x="24" y="1022">FUND</text>
+        <text class="phase" x="24" y="1402">RESULT</text>
+
+        <!-- Row 1: describe + follow-ups -->
+        <rect class="box act" x="170" y="30" width="360" height="100" rx="8"/>
+        <text class="t" x="190" y="58">Describe the work</text>
+        <text class="s" x="190" y="78">In the owner’s own words</text>
+        <rect class="btn" x="190" y="92" width="150" height="26" rx="13"/>
+        <text class="btn-t" x="265" y="109" text-anchor="middle">Guided form</text>
+        <rect class="btn" x="352" y="92" width="158" height="26" rx="13"/>
+        <text class="btn-t" x="431" y="109" text-anchor="middle">Voice note</text>
+
+        <rect class="box" x="600" y="30" width="360" height="100" rx="8"/>
+        <text class="t" x="620" y="58">AI asks follow-ups</text>
+        <text class="q" x="620" y="84">“How many acres do you mow a week?”</text>
+        <text class="q" x="620" y="108">“Who on the crew does edging now?”</text>
+
+        <path class="wire" d="M530 60 H598" marker-end="url(#ah)"/>
+        <text class="lbl" x="565" y="52" text-anchor="middle">sends</text>
+        <path class="wire" d="M600 100 H532" marker-end="url(#ah)"/>
+        <text class="lbl" x="565" y="118" text-anchor="middle">asks</text>
+
+        <path class="wire" d="M350 130 V178" marker-end="url(#ah)"/>
+        <text class="lbl" x="362" y="158">once the job is clear</text>
+
+        <!-- Row 2: opportunities -->
+        <rect class="box mon" x="170" y="180" width="360" height="150" rx="8"/>
+        <text class="t" x="190" y="208">Automation opportunities</text>
+        <text class="s" x="190" y="228">Each one priced with its ROI</text>
+        <text class="b" x="190" y="256">Robotic mowing</text>
+        <text class="n" x="510" y="256" text-anchor="end">$18.4k/yr · 7 mo payback</text>
+        <text class="b" x="190" y="282">Route-planned spraying</text>
+        <text class="n" x="510" y="282" text-anchor="end">$6.1k/yr · 4 mo</text>
+        <text class="b" x="190" y="308">Auto-scheduling</text>
+        <text class="n" x="510" y="308" text-anchor="end">$3.2k/yr · 2 mo</text>
+
+        <rect class="box dash" x="600" y="205" width="360" height="74" rx="8"/>
+        <text class="b" x="620" y="232">No account needed up to here</text>
+        <text class="s" x="620" y="254">Anonymous clients still get ROI estimates</text>
+        <text class="s" x="620" y="270">and vendor matches</text>
+        <path class="wire thin" d="M530 242 H598"/>
+
+        <path class="wire" d="M350 330 V378" marker-end="url(#ah)"/>
+        <text class="lbl" x="362" y="358">pick one to shop for</text>
+
+        <!-- Row 3: two-view search -->
+        <rect class="box" x="170" y="380" width="790" height="160" rx="8"/>
+        <text class="t" x="190" y="408">Search vendors, two views</text>
+        <text class="s" x="940" y="408" text-anchor="end">Same catalog, two ways in</text>
+
+        <rect class="panel" x="190" y="422" width="365" height="102" rx="6"/>
+        <text class="b" x="206" y="444" font-weight="600">Classic filters</text>
+        <line x1="206" y1="462" x2="400" y2="462" stroke="var(--line)" stroke-width="4" stroke-linecap="round"/>
+        <line x1="206" y1="462" x2="318" y2="462" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="318" cy="462" r="7" fill="var(--accent)"/>
+        <text class="n" x="412" y="466">Price ≤ $14k</text>
+        <text class="s" x="206" y="490">Payback ≤ 12 mo · Task: mowing</text>
+        <text class="s" x="206" y="510">Region: Central Valley</text>
+
+        <rect class="panel" x="575" y="422" width="365" height="102" rx="6"/>
+        <text class="b" x="591" y="444" font-weight="600">Best for you (AI picks)</text>
+        <text class="b" x="591" y="470">1. TurfBot X2</text>
+        <text class="s" x="591" y="490">Why: fits your 3-acre lots and pays</text>
+        <text class="s" x="591" y="508">back in 6 months at your volume</text>
+
+        <path class="wire" d="M350 540 V588" marker-end="url(#ah)"/>
+        <text class="lbl" x="362" y="568">open a result</text>
+
+        <!-- Row 4: result card -->
+        <rect class="box act" x="170" y="590" width="360" height="100" rx="8"/>
+        <text class="t" x="190" y="618">TurfBot X2</text>
+        <text class="n" x="510" y="618" text-anchor="end">$11,900</text>
+        <text class="s" x="269" y="638" text-anchor="middle">Not quite right?</text>
+        <rect class="btn" x="190" y="646" width="158" height="30" rx="6"/>
+        <text class="btn-t" x="269" y="666" text-anchor="middle">Request a bounty</text>
+        <rect class="btn solid" x="360" y="646" width="150" height="30" rx="6"/>
+        <text class="btn-t inv" x="435" y="666" text-anchor="middle">Buy / contact vendor</text>
+
+        <path class="wire" d="M510 661 H598" marker-end="url(#ah)"/>
+        <rect class="box ok" x="600" y="620" width="360" height="82" rx="8"/>
+        <text class="t ok-t" x="620" y="648">Buy from the vendor</text>
+        <text class="s" x="620" y="670">Client deals with the vendor directly.</text>
+        <text class="s" x="620" y="688">Done, no bounty needed.</text>
+
+        <!-- Gate -->
+        <path class="wire" d="M269 690 V710 H350 V728" marker-end="url(#ah)"/>
+        <polygon class="box" points="350,730 470,767 350,804 230,767"/>
+        <text class="b" x="350" y="763" text-anchor="middle">Signed in and</text>
+        <text class="b" x="350" y="780" text-anchor="middle">opted into pooling?</text>
+
+        <path class="wire" d="M470 767 H598" marker-end="url(#ah)"/>
+        <text class="lbl" x="534" y="759" text-anchor="middle">no</text>
+        <rect class="box dash" x="600" y="735" width="360" height="64" rx="8"/>
+        <text class="b" x="620" y="761">Keeps ROI and vendor matches</text>
+        <text class="s" x="620" y="781">Can’t post, pledge to, or pool a bounty</text>
+
+        <path class="wire" d="M350 804 V838" marker-end="url(#ah)"/>
+        <text class="lbl" x="362" y="826">yes</text>
+
+        <!-- Row 6: spec + amount -->
+        <rect class="box act" x="170" y="840" width="360" height="124" rx="8"/>
+        <text class="t" x="190" y="868">The gap becomes the spec</text>
+        <text class="q" x="190" y="894">“Has to edge on 20° slopes and</text>
+        <text class="q" x="190" y="913">work around sprinkler heads.”</text>
+        <text class="s" x="190" y="944">AI turns it into testable requirements</text>
+
+        <path class="wire" d="M530 902 H598" marker-end="url(#ah)"/>
+        <rect class="box mon" x="600" y="840" width="360" height="124" rx="8"/>
+        <text class="t" x="620" y="868">Set the bounty</text>
+        <text class="s" x="620" y="889">Share of first-year savings ($9.4k)</text>
+        <line x1="620" y1="910" x2="940" y2="910" stroke="var(--line)" stroke-width="4" stroke-linecap="round"/>
+        <rect class="band" x="748" y="903" width="128" height="14" rx="3"/>
+        <circle class="knob" cx="812" cy="910" r="8"/>
+        <text class="lbl" x="748" y="932" text-anchor="middle">20%</text>
+        <text class="lbl" x="812" y="932" text-anchor="middle">30%</text>
+        <text class="lbl" x="876" y="932" text-anchor="middle">40%</text>
+        <text class="n" x="620" y="953">Suggested $2,800 · client adjusts</text>
+
+        <path class="wire" d="M780 964 H780 V998" marker-end="url(#ah)"/>
+        <text class="lbl" x="792" y="986">publish</text>
+
+        <!-- Row 7: bounty page -->
+        <rect class="box" x="170" y="1000" width="790" height="190" rx="8"/>
+        <text class="t" x="190" y="1028">Bounty page</text>
+        <text class="s" x="940" y="1028" text-anchor="end">GoFundMe-style, shown to clients with the same gap</text>
+        <text class="b" x="190" y="1058" font-weight="600">Slope-safe edging for robotic mowers</text>
+        <rect class="bar-bg" x="190" y="1072" width="560" height="12" rx="6"/>
+        <rect class="bar-fill" x="190" y="1072" width="347" height="12" rx="6"/>
+        <text class="n" x="190" y="1104">$31,000 of $50,000 · 62%</text>
+        <text class="b" x="940" y="1083" text-anchor="end">18 days left</text>
+
+        <rect class="panel" x="190" y="1118" width="240" height="56" rx="6"/>
+        <text class="b" x="204" y="1140" font-weight="600">14 backers</text>
+        <text class="s" x="204" y="1160">Average pledge $2.2k</text>
+        <rect class="panel" x="445" y="1118" width="240" height="56" rx="6"/>
+        <text class="b" x="459" y="1140" font-weight="600">Companies near you need this</text>
+        <text class="s" x="459" y="1160">9 lawn crews in Central Valley</text>
+        <rect class="panel" x="700" y="1118" width="240" height="56" rx="6"/>
+        <text class="b" x="714" y="1140" font-weight="600">Developer updates</text>
+        <text class="s" x="714" y="1160">Oct 20: slope test passed</text>
+
+        <path class="wire" d="M350 1190 V1238" marker-end="url(#ah)"/>
+        <text class="lbl" x="362" y="1218">nearby companies pledge</text>
+
+        <!-- Row 8: pledges + deadline -->
+        <rect class="box mon" x="170" y="1240" width="360" height="92" rx="8"/>
+        <text class="t" x="190" y="1268">Pledges scale with savings</text>
+        <text class="n" x="190" y="1294">Saves $9k/yr  → pledges ~$2.7k</text>
+        <text class="n" x="190" y="1316">Saves $3k/yr  → pledges ~$900</text>
+
+        <path class="wire" d="M530 1286 H668" marker-end="url(#ah)"/>
+        <polygon class="box" points="780,1246 890,1286 780,1326 670,1286"/>
+        <text class="b" x="780" y="1282" text-anchor="middle">Goal met by</text>
+        <text class="b" x="780" y="1299" text-anchor="middle">the deadline?</text>
+
+        <path class="wire" d="M780 1326 V1378" marker-end="url(#ah)"/>
+        <text class="lbl" x="792" y="1358">yes</text>
+        <path class="wire" d="M780 1326 V1350 H350 V1378" marker-end="url(#ah)"/>
+        <text class="lbl" x="560" y="1342" text-anchor="middle">no</text>
+
+        <!-- Row 9: outcomes -->
+        <rect class="box dash" x="170" y="1380" width="360" height="70" rx="8"/>
+        <text class="t" x="190" y="1408">Every pledge refunded</text>
+        <text class="s" x="190" y="1430">All-or-nothing, like Kickstarter</text>
+
+        <rect class="box ok" x="600" y="1380" width="360" height="70" rx="8"/>
+        <text class="t ok-t" x="620" y="1408">Funded: a developer builds it</text>
+        <text class="s" x="620" y="1430">Posts updates on the page, then ships</text>
+      </svg>
+    </div>
+    <figcaption>Example figures are for a six-person lawn crew. Buying from a vendor is the main exit; the bounty path only opens when no product fits and the client is signed in and has opted into pooling. Money moves only if the goal is met by the deadline.</figcaption>
+  </figure>
+
+  <section class="rules" aria-label="Rules behind the flow">
+    <div class="rule">
+      <h2>Bounty size</h2>
+      <p>The app suggests a bounty from the client’s own ROI. The client can move it up or down before publishing.</p>
+      <span class="fig">≈ 20–40% of first-year savings</span>
+    </div>
+    <div class="rule">
+      <h2>Fair pledges</h2>
+      <p>Each backer’s suggested pledge scales with what the robot saves them, so a small crew isn’t asked to match a large one.</p>
+      <span class="fig">pledge ∝ that client’s savings</span>
+    </div>
+    <div class="rule">
+      <h2>Opt-in pooling</h2>
+      <p>Pooling is off by default. Anonymous clients get ROI and matches but can’t start or back a bounty until they sign in and opt in.</p>
+      <span class="fig">anonymous → browse only</span>
+    </div>
+  </section>
+</div>
+
+</body></html>
