@@ -83,6 +83,10 @@ export default defineSchema({
     confidence: v.optional(v.number()), // 0..1
     status: v.union(v.literal("draft"), v.literal("confirmed")),
     followUpQuestions: v.optional(v.array(v.string())), // what the AI still needs to know
+    jobId: v.optional(v.id("aiJobs")), // the run that produced this spec
+    // The request's version (updatedAt, else _creationTime) the AI read. If the request
+    // has changed since, the spec is stale.
+    requestVersion: v.optional(v.number()),
   }).index("by_request", ["requestId"]),
 
   // Answers the operator gave to the AI's follow-up questions.
@@ -156,6 +160,21 @@ export default defineSchema({
     .index("by_request", ["requestId"])
     .index("by_request_task", ["requestId", "taskKey"])
     .index("by_status", ["status"]),
+
+  // One row per AI run that the operator asked for, so the page can show progress.
+  // queued -> running -> succeeded | failed. Only one queued/running run per request
+  // and kind at a time (repeated clicks reuse it). errorKind "unavailable" means no
+  // usable credentials; "model_error" covers everything else. `error` is safe to show.
+  aiJobs: defineTable({
+    requestId: v.id("operatorRequests"),
+    kind: v.literal("spec"),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("succeeded"), v.literal("failed")),
+    specId: v.optional(v.id("requirementSpecs")),
+    errorKind: v.optional(v.union(v.literal("unavailable"), v.literal("model_error"))),
+    error: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+  }).index("by_request_kind", ["requestId", "kind"]),
 
   // One row per Claude call: your cost tracker and test history.
   agentRuns: defineTable({

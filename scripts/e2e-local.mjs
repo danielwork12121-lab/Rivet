@@ -1,6 +1,5 @@
 // Live check against a RUNNING local Convex backend (npx convex dev). Not part of
 // `npm test`. Uses fictional data only; each run leaves a few rows in the dev database.
-import { execFileSync } from "node:child_process";
 import { ConvexHttpClient } from "convex/browser";
 import "../js/rivet-api.js"; // classic browser script; attaches globalThis.RivetApi
 
@@ -107,19 +106,16 @@ const agentWrong = await raw.query("agent:latestSpec", { requestId: id, clientTo
 check("agent:latestSpec rejects a wrong token", api.isDraftMissing(agentWrong));
 const agentNoToken = await raw.query("agent:latestSpec", { requestId: id }).catch((e) => e);
 check("agent:latestSpec without a token is rejected", agentNoToken instanceof Error);
-const agentRuns = () => execFileSync("npx", ["convex", "data", "agentRuns", "--limit", "50", "--format", "jsonLines"],
-  { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
-const runsBefore = agentRuns().length;
-const startedAt = Date.now();
-await raw.mutation("agent:generateSpec", { requestId: id, clientToken: token });
-let failedRun = null;
-for (let i = 0; i < 40 && !failedRun; i++) {
-  await new Promise((r) => setTimeout(r, 500));
-  failedRun = agentRuns().find((r) => r.route === "spec" && r._creationTime >= startedAt - 1000) ?? null;
+const aiStatus = await raw.query("agent:aiStatus", {});
+check("agent:aiStatus reports availability without exposing any key", typeof aiStatus.available === "boolean" && Object.keys(aiStatus).length === 1, JSON.stringify(aiStatus));
+if (!aiStatus.available) {
+  const refused = await raw.mutation("agent:generateSpec", { requestId: id, clientToken: token }).catch((e) => e);
+  check("without an API key, generateSpec is refused with a clear unavailable message", /AI drafting is unavailable/.test(refused?.data ?? ""), String(refused?.data ?? refused));
+  const st = await raw.query("agent:specStatus", { requestId: id, clientToken: token });
+  check("...no job is queued and no spec exists", st.job === null && st.spec === null && st.available === false);
+} else {
+  check("AI is configured on this backend: skipping the no-key checks (no paid call made)", true);
 }
-check("without an API key a deliberate spec request fails gracefully and is logged",
-  failedRun?.ok === false && /authentication|api key|apiKey/i.test(failedRun.note ?? ""),
-  failedRun ? `${failedRun.note?.slice(0, 80)}` : `no run logged (runs before: ${runsBefore})`);
 check("...no spec is stored for the request", (await raw.query("agent:latestSpec", { requestId: id, clientToken: token })) === null);
 check("...and the request itself is untouched and still readable", (await api.getDraft(id, token)).status === "submitted");
 

@@ -28,6 +28,7 @@ async function seed() {
     });
   const testId = await make("E2E-TEST Lawn abc123", "Request", "tok-test-0001");
   await t.mutation(api.bounties.post, { requestId: testId, clientToken: "tok-test-0001", ...bounty });
+  await t.run((ctx) => ctx.db.insert("aiJobs", { requestId: testId, kind: "spec", status: "failed" }));
   await make("Fictional E2E Pest xyz");
   await make(null, "[verify] culvert");
   const keepId = await make("Green Acres Lawn Co.", "Request", "tok-keep-0001");
@@ -42,7 +43,7 @@ describe("maintenance:testData", () => {
     const r = await t.mutation(internal.maintenance.testData, { action: "list" });
     expect(r.deleted).toBe(false);
     expect(r.matchedRequests).toBe(3);
-    expect(r.relatedRows.bounties).toBe(1);
+    expect(r.relatedRows).toMatchObject({ bounties: 1, aiJobs: 1 });
     expect(r.unmatchedNames.sort()).toEqual(["Green Acres Lawn Co.", "Real-looking Co. E2E-TEST"]);
     expect(await t.query(internal.requests.list, {})).toHaveLength(5);
   });
@@ -67,5 +68,6 @@ describe("maintenance:testData", () => {
     expect(board).toHaveLength(1);
     const remaining = await t.run((ctx) => ctx.db.query("bounties").collect());
     expect(remaining.map((b) => b.requestId)).toEqual([keepId]);
+    expect(await t.run((ctx) => ctx.db.query("aiJobs").collect())).toHaveLength(0);
   });
 });

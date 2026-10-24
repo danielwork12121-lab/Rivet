@@ -50,9 +50,9 @@ export const testData = internalMutation({
     const unmatched = requests.filter((r) => !isTestRequest(r));
 
     // Rows that belong to a matched request.
-    const related = { bounties: 0, requirementSpecs: 0, recommendations: 0, clarifications: 0 };
+    const related = { bounties: 0, requirementSpecs: 0, recommendations: 0, clarifications: 0, aiJobs: 0 };
     for (const r of matched) {
-      for (const table of Object.keys(related) as (keyof typeof related)[]) {
+      for (const table of ["bounties", "requirementSpecs", "recommendations", "clarifications"] as const) {
         const rows = await ctx.db
           .query(table)
           .withIndex("by_request", (q) => q.eq("requestId", r._id))
@@ -60,6 +60,12 @@ export const testData = internalMutation({
         related[table] += rows.length;
         if (action === "delete") for (const row of rows) await ctx.db.delete(row._id);
       }
+      const jobs = await ctx.db
+        .query("aiJobs")
+        .withIndex("by_request_kind", (q) => q.eq("requestId", r._id))
+        .collect();
+      related.aiJobs += jobs.length;
+      if (action === "delete") for (const j of jobs) await ctx.db.delete(j._id);
       if (action === "delete") await ctx.db.delete(r._id);
     }
 

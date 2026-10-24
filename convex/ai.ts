@@ -12,7 +12,9 @@ import { internal } from "./_generated/api";
 import { computeRoi, suggestBounty } from "./lib/roi";
 import { PERSONAS } from "./lib/personas";
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from Convex env vars
+// Created per call so a key set later (npx convex env set) is picked up without a
+// redeploy. Reads ANTHROPIC_API_KEY from Convex env vars.
+const client = () => new Anthropic();
 const MODEL = "claude-opus-5-5";
 
 // Quick check that the key works: npx convex run ai:hello
@@ -20,7 +22,7 @@ const MODEL = "claude-opus-5-5";
 export const hello = internalAction({
   args: {},
   handler: async () => {
-    const res = await client.messages.create({
+    const res = await client().messages.create({
       model: MODEL,
       max_tokens: 1024,
       output_config: { effort: "low" },
@@ -70,7 +72,7 @@ type Spec = z.infer<typeof SpecSchema>;
 // Shared by the real action and the evals.
 async function callSpecModel(requestJson: string) {
   const started = Date.now();
-  const res = await client.messages.parse({
+  const res = await client().messages.parse({
     model: MODEL,
     max_tokens: 16000,
     output_config: { effort: "medium", format: zodOutputFormat(SpecSchema) },
@@ -83,13 +85,26 @@ async function callSpecModel(requestJson: string) {
   return { spec: res.parsed_output, ms: Date.now() - started, usage: res.usage };
 }
 
+// Missing or rejected credentials are "unavailable"; anything else is a model error.
+// The message stored on the job is safe to show; the raw error goes to agentRuns.
+function classify(err: unknown) {
+  const text = String(err);
+  return /authentication|api[_ ]?key|apiKey|401|403/i.test(text)
+    ? { errorKind: "unavailable" as const, error: "The AI service is unavailable: credentials are missing or were rejected." }
+    : { errorKind: "model_error" as const, error: "The AI could not produce a draft this time. You can try again." };
+}
+
 export const extractSpec = internalAction({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) => {
-    const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
+  args: { requestId: v.id("operatorRequests"), jobId: v.optional(v.id("aiJobs")) },
+  handler: async (ctx, { requestId, jobId }) => {
+    // Only one action may run a queued job: if it's already been picked up, stop.
+    if (jobId && !(await ctx.runMutation(internal.agent.markJobRunning, { jobId }))) return;
     try {
+      const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
+      // The version of the request this spec is based on; later edits make it stale.
+      const requestVersion = context.request.updatedAt ?? context.request._creationTime;
       const { spec, ms, usage } = await callSpecModel(JSON.stringify(context));
-      await ctx.runMutation(internal.agent.saveSpec, {
+      const specId = await ctx.runMutation(internal.agent.saveSpec, {
         requestId,
         model: MODEL,
         summary: spec.summary,
@@ -105,14 +120,18 @@ export const extractSpec = internalAction({
         })),
         confidence: Math.min(Math.max(spec.confidence, 0), 1),
         followUpQuestions: spec.followUpQuestions.slice(0, 3),
+        ...(jobId ? { jobId } : {}),
+        requestVersion,
       });
       await ctx.runMutation(internal.agent.logRun, {
         route: "spec", ms, ok: true, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
       });
+      if (jobId) await ctx.runMutation(internal.agent.finishJob, { jobId, status: "succeeded", specId });
     } catch (err) {
       await ctx.runMutation(internal.agent.logRun, {
         route: "spec", ms: 0, ok: false, inputTokens: 0, outputTokens: 0, note: String(err),
       });
+      if (jobId) await ctx.runMutation(internal.agent.finishJob, { jobId, status: "failed", ...classify(err) });
       throw err;
     }
   },
@@ -193,7 +212,7 @@ export const recommendRobots = internalAction({
       },
     });
 
-    const final = await client.beta.messages.toolRunner({
+    const final = await client().beta.messages.toolRunner({
       model: MODEL,
       max_tokens: 16000,
       output_config: { effort: "medium" },
@@ -262,7 +281,7 @@ export const writeBounty = internalAction({
     const robot = robotId ? await ctx.runQuery(internal.robots.getByString, { id: robotId }) : null;
     const started = Date.now();
 
-    const res = await client.messages.parse({
+    const res = await client().messages.parse({
       model: MODEL,
       max_tokens: 16000,
       output_config: { effort: "medium", format: zodOutputFormat(BountySchema) },
@@ -307,7 +326,7 @@ export const importFromApify = internalAction({
     const pages = (await (await fetch(url)).json()) as { url: string; text?: string }[];
     let added = 0;
     for (const page of pages) {
-      const res = await client.messages.parse({
+      const res = await client().messages.parse({
         model: MODEL,
         max_tokens: 4096,
         output_config: { effort: "low", format: zodOutputFormat(RobotPageSchema) },
