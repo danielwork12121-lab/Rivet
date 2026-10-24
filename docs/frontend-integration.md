@@ -75,7 +75,8 @@ Every public function, and what protects it:
 | `bounties:listPosted` | query | open: public projection only |
 | `agent:generateSpec`, `agent:answerQuestions`, `agent:recommend`, `agent:requestBounty` | mutation | draft token (each starts a paid Claude call) |
 | `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty`, `agent:specStatus` | query | draft token |
-| `agent:aiStatus` | query | open: returns only `{ available: boolean }` |
+| `agent:aiStatus` | query | open: `{ available }`, plus `reason` (`no_key`, `daily_limit`) and a safe `message` when unavailable |
+| `aiBudget:reserveChat` | mutation | server only: requires `RIVET_SERVER_SECRET` (called by Vercel's `/api/chat`) |
 | `robots:search`, `robots:get` | query | open (fictional catalog, no private data) |
 
 **Not public** (internal, backend/CLI only): `requests:get`, `requests:list`,
@@ -210,8 +211,9 @@ The agent from `feature/agent` is merged with these changes:
     over 10 minutes stops blocking). Without `ANTHROPIC_API_KEY` it rejects with
     `err.data = "AI drafting is unavailable: no Anthropic API key is configured on the backend."`
     and queues nothing.
-  - `agent:specStatus({ requestId, clientToken })` returns `{ available, job, spec, stale,
-    clarifications }`. `job.errorKind` is `"unavailable"` (missing/rejected credentials) or
+  - `agent:specStatus({ requestId, clientToken })` returns `{ available, unavailableReason,
+    unavailableMessage, job, spec, stale, clarifications }`. `unavailableReason` is `no_key`,
+    `daily_limit` or `request_limit` (see the limits in docs/intake-integration.md). `job.errorKind` is `"unavailable"` (missing/rejected credentials) or
     `"model_error"`; `job.error` is safe to show. `stale` is true when the request (intake or
     follow-up answers) changed after the AI read it. `clarifications` are answers to the AI's
     own questions, separate from the fixed `followUps`.

@@ -1,6 +1,7 @@
 # Intake and follow-ups ⇄ Convex
 
-`Robot Bounty Client Flow.html` keeps **one draft request per browser** in Convex. Step 1
+`pages/robot-bounty-client-flow.html` (served by Vercel at `/robot-bounty-client-flow`) keeps
+**one draft request per browser and backend** in Convex. Step 1
 creates it the first time; later step 1 saves update the same record; step 2 adds the
 follow-up answers to it. Glue code is in [`js/rivet-api.js`](../js/rivet-api.js); the page's
 own additions are marked `RIVET-BACKEND`.
@@ -10,7 +11,7 @@ own additions are marked `RIVET-BACKEND`.
 |---|---|
 | Step 1 **Continue**, or a stepper jump forward from step 1 | first time `requests:create`, afterwards `requests:updateIntake` (only if something changed) |
 | Step 2 **See automation opportunities**, or a stepper jump forward from step 2 | `requests:saveFollowUps` (only if at least one answer was picked and something changed) |
-| Page load | `requests:getDraft` and `bounties:getMine` with the id + token from `localStorage` (`rivet.intake.draft`) |
+| Page load | `requests:getDraft` and `bounties:getMine` with the id + token from `localStorage` (`rivet.intake.draft.<backend>`) |
 | Step 5 **Post bounty** | `bounties:post` (after saving the intake if it changed, e.g. "Join the shared program") |
 | Developer **Bounty board** shown | `bounties:listPosted` (at most every 3 s) |
 | Page load | `robots:search`: the page's sample products come from Convex; the built-in `PRODUCTS` copy is only an offline fallback |
@@ -76,36 +77,41 @@ that question are not restored.
 - **Not saved yet**: search filters, vendor contacts, invites, and the Developer profile, claim,
   milestones and delivery.
 
+## Which backend the page uses
+`js/rivet-config.js` decides, by one fixed rule, and the page shows it ("Saved to Rivet (cloud)"):
+
+| Page opened from | Backend |
+|---|---|
+| `localhost`, `127.0.0.1`, or a `file://` page | `local`: `http://127.0.0.1:3210` (`npx convex dev` with a local deployment) |
+| any other host, e.g. `rivet-rose.vercel.app` | `cloud`: `https://coordinated-canary-9.convex.cloud` |
+| any page with `?backend=local` or `?backend=cloud` | that one (explicit override for testing) |
+
+Each backend keeps its own saved draft in the browser, so environments never mix.
+
 ## Run it locally (fictional data only)
 ```sh
-# terminal 1: backend (leave running)
+# terminal 1: backend (leave running); .env.local decides local vs cloud deployment
 npx convex dev
 
-# terminal 2: serve the page on loopback only
+# terminal 2: serve the site on loopback only
 python3 -m http.server 8080 --bind 127.0.0.1
-# open http://127.0.0.1:8080/Robot%20Bounty%20Client%20Flow.html
+# open http://127.0.0.1:8080/pages/robot-bounty-client-flow.html
+# add ?backend=cloud to use the Convex Cloud dev deployment from your machine
 ```
-Opening the HTML file directly also works. The page uses `http://127.0.0.1:3210` unless
-`window.RIVET_CONVEX_URL` is set before `js/rivet-api.js` loads. It imports the Convex client from
-`https://esm.sh/convex@1.48.0/browser` (pinned), so it needs internet access.
-
-To start over as a new operator, clear the site's storage (DevTools → Application → Local storage →
-delete `rivet.intake.draft`).
-
-**Network exposure:** the local backend binds to all interfaces (`*:3210`). On the backend owner's Mac,
-incoming connections for `convex-local-backend` are denied in the macOS firewall; keep it that way, use
-fictional data only, and do not tunnel or deploy it publicly.
+It imports the Convex client from `https://esm.sh/convex@1.48.0/browser` (pinned), so it needs
+internet access.
 
 ## Checks
 ```sh
 npm run typecheck
-npm test               # backend + client-module unit tests
-npm run check:frontend # every page's scripts compile, alone and together
-npm run e2e:local      # needs `npx convex dev`; live API checks incl. token rejection
-npm run e2e:browser    # needs `npx convex dev` and Google Chrome; full Client + Developer journey
+npm test               # backend, page logic, config and /api/chat unit tests (no network)
+npm run check:frontend # every page's scripts compile and JSON data blocks parse
+RIVET_TARGET=cloud npm run e2e:local    # live API checks (or RIVET_TARGET=local)
+RIVET_TARGET=cloud npm run e2e:browser  # real Chrome, both roles, two browser sessions
 ```
-`e2e:local` and `e2e:browser` leave fictional rows (company names starting `E2E-TEST `) in the
-local dev database, and their bounties appear on the Developer board.
+`RIVET_TARGET` is required and must match the deployment in `.env.local`; the scripts refuse to
+mix backends. They never press the AI button while AI is available (no paid calls). They leave
+fictional rows (company names starting `E2E-TEST `) on the target backend.
 
 ## Before a demo
 ```sh
@@ -116,6 +122,24 @@ npx convex run maintenance:testData '{"action":"delete","confirm":"delete-test-d
 Delete removes only requests matching the test markers it lists, plus their bounties, specs,
 picks, clarifications and AI jobs. Unmatched requests are never touched.
 
-## AI (optional)
+## AI (optional) and its limits
 Set the key on the backend only, never in files: `npx convex env set ANTHROPIC_API_KEY ...`.
-The first live call should be a deliberate, approved test (`npx convex run ai:hello`).
+Every paid AI call (spec drafting, recommendations, bounty briefs, the website chat) is checked
+against server-side daily limits first (`convex/lib/aiBudget.ts`), counted over the last 24 hours:
+
+| Convex env var | Default | Limits |
+|---|---|---|
+| `AI_DAILY_LIMIT` | 25 | all paid AI calls together: the hard budget cap |
+| `AI_REQUEST_DAILY_LIMIT` | 3 | spec/recommend/bounty runs per operator request |
+| `AI_CLIENT_DAILY_LIMIT` | 10 | website chat calls per visitor (keyed hash of the IP) |
+
+Unset means the default; any value that isn't a whole number >= 0 means 0 (AI off). Set
+`AI_DAILY_LIMIT=0` to switch all paid AI off instantly. The page shows the server's reason when AI
+is unavailable.
+
+## Website chat (`api/chat.js`, Vercel)
+Off unless all of these are set in Vercel: `CHAT_ENABLED=true`, `ANTHROPIC_API_KEY`,
+`CONVEX_URL` (the cloud URL above) and `RIVET_SERVER_SECRET`; the same `RIVET_SERVER_SECRET` must
+be set in Convex (`npx convex env set RIVET_SERVER_SECRET ...`). Before each call it reserves budget
+in Convex (`aiBudget:reserveChat`); anything wrong means no call and an explicit error
+(`unavailable` / `limit` / `failed` / `timeout`), never a made-up reply.
