@@ -276,7 +276,7 @@ const S = {
   // step 1 save, then updated in place. Steps 3-5 and the Developer side are NOT saved yet.
   submit: { status: "idle", id: null, token: "", fp: "", error: "", errorFp: "" },
   answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
-  bountySave: { status: "idle", id: null, error: "" }, // this operator's posted bounty
+  bountySave: { status: "idle", id: null, pledged: 0, error: "" }, // this operator's posted bounty (pledged = saved amount)
   board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
 };
 
@@ -473,7 +473,7 @@ async function hydrateSaved() {
     const b = RivetApi.bountyToState(posted, tasks().map((t) => t.id));
     if (b) {
       Object.assign(S, { bounty: b.bounty, gaps: new Set(b.gaps), gapNote: b.gapNote, pledgePct: b.pledgePct, posted: true });
-      S.bountySave = { status: "saved", id: b.id, error: "" };
+      S.bountySave = { status: "saved", id: b.id, pledged: b.pledged, error: "" };
     }
     render(); toast(b ? "Restored your saved request and posted bounty" : f.answered ? "Restored your saved request and answers" : "Restored your saved request");
   } catch (e) {
@@ -501,11 +501,12 @@ async function postBounty() {
       Object.assign(S.submit, { status: "saved", fp: fingerprint() });
     }
     const t = taskById(S.bounty.taskId);
+    const pledged = Math.round(bountyBasis(t) * S.pledgePct / 100);
     b.id = await RivetApi.postBounty(S.submit.id, S.submit.token, {
       taskKey: t.id, title: bountyTitle(), specLines: specLines(), gaps: [...S.gaps], note: S.gapNote.trim(),
-      industry: COMPANY[S.type].label, pledgePercent: S.pledgePct,
-      pledged: Math.round(bountyBasis(t) * S.pledgePct / 100), goal: DEMO_BOUNTY_GOAL,
+      industry: COMPANY[S.type].label, pledgePercent: S.pledgePct, pledged, goal: DEMO_BOUNTY_GOAL,
     });
+    b.pledged = pledged;
     b.status = "saved"; S.posted = true; S.board.at = 0; // board refetches next time
     render(); window.scrollTo({ top: 0 }); toast("Bounty posted");
   } catch (e) {
@@ -535,6 +536,14 @@ function boardStatus() {
   if (bd.loading && !bd.at) return `<p class="muted" ${small}>Loading saved bounties\u2026</p>`;
   const n = savedBoardBounties().length;
   return n ? `<p class="muted" ${small}>${n} saved demo submission${n === 1 ? "" : "s"} from other operators.</p>` : "";
+}
+// Once this operator's bounty is saved, its totals count only persisted pledges;
+// the page's sample backers are still listed, but not added in.
+const sampleBackersTotal = () => (S.bountySave.id ? 0 : OTHERS.reduce((s, o) => s + o.amt, 0));
+const sampleBackerCount = () => (S.bountySave.id ? 0 : OTHERS.length);
+function originPill(b) {
+  return b.saved || (b.id === "mine" && b.live && S.bountySave.id)
+    ? `<span class="pill good">Saved demo</span>` : `<span class="pill plain">Sample</span>`;
 }
 // Card label so sample data and real saved demo submissions are never confused.
 function originLabel(b) {
@@ -669,7 +678,7 @@ function screenSearch() {
   <div class="screen-head">
     <span class="label">Step 4 of 5</span>
     <h1>Robots that could do this today</h1>
-    <p class="muted">Browse with filters, or let the AI rank what fits your sites and explain why. If nothing's right, request a bounty from any result.</p>
+    <p class="muted">Browse with filters, or rank robots by how well they fit your sites, with the reasons shown. If nothing's right, request a bounty from any result.</p>
   </div>
   <div class="search">
     <aside class="panel stack filters" aria-label="Filters">
@@ -740,7 +749,7 @@ function screenBounty() {
     <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="tosearch">Back to robots</button></div>`;
   const t = taskById(S.bounty.taskId);
   const basis = bountyBasis(t);
-  const pledge = basis * S.pledgePct / 100;
+  let pledge = basis * S.pledgePct / 100;
   if (!S.posted) {
     const anon = S.visibility === "anon";
     return `
@@ -769,7 +778,8 @@ function screenBounty() {
     </div>
     <div class="actions"><button class="btn" id="back">Back to robots</button></div>`;
   }
-  const others = OTHERS.reduce((s, o) => s + o.amt, 0) + (claimedMine() ? S.extra : 0);
+  if (S.bountySave.id) pledge = S.bountySave.pledged; // RIVET-BACKEND: show what was saved, not a recomputation
+  const others = sampleBackersTotal() + (claimedMine() ? S.extra : 0); // RIVET-BACKEND: no sample money in saved totals
   const goal = claimedMine() ? S.claim.price : 150000;
   const raised = others + pledge;
   return `
@@ -782,7 +792,7 @@ function screenBounty() {
         <div class="bounty-stats">
           <div><span class="label">Pledged</span><div class="v">${money(raised)}</div></div>
           <div><span class="label">${claimedMine() ? "Developer's price" : "Goal"}</span><div class="v">${money(goal)}</div></div>
-          <div><span class="label">Backers</span><div class="v">${OTHERS.length + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
+          <div><span class="label">Backers</span><div class="v">${sampleBackerCount() + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
           <div><span class="label">Closes</span><div class="v">Jan 31</div></div>
         </div>
         <p class="muted" style="font-size:.85rem">${claimedMine() ? `All-or-nothing: backers are charged only once pledges reach ${money(goal)} and ${esc(S.dev.team)} delivers.` : "All-or-nothing: if the goal isn't reached by Jan 31, 2027, nobody is charged."}</p>
@@ -797,13 +807,14 @@ function screenBounty() {
       </div>
     </div>
     <div class="stack">
-      <div class="callout"><b>3 companies near you need this too</b><span style="font-size:.88rem">Similar requests from lawn and grounds companies in the ${S.region}. More backers means a bigger bounty and a better shot at getting it built.</span><div style="margin-top:6px"><button class="btn small" id="invite" ${S.invited ? "disabled" : ""}>${S.invited ? "Invites sent" : "Invite them to back it"}</button></div></div>
+      <div class="callout"><b>3 companies near you need this too <span class="pill plain">Sample</span></b><span style="font-size:.88rem">Similar requests from lawn and grounds companies in the ${S.region}. More backers means a bigger bounty and a better shot at getting it built.</span><div style="margin-top:6px"><button class="btn small" id="invite" ${S.invited ? "disabled" : ""}>${S.invited ? "Invites sent" : "Invite them to back it"}</button></div></div>
       <div class="panel stack">
         <h3>Backers</h3>
         <p class="muted" style="font-size:.85rem">Each company pledges in proportion to its own savings, so bigger operators put in more.</p>
         <div class="backers">
           <div class="backer"><div><b>${esc(S.name)}</b> <span class="pill warn">You</span><div class="muted" style="font-size:.82rem">${S.crews} ${S.type === "lawn" ? "crews" : "techs"} · ${S.pledgePct}% of first-year savings</div></div><span class="num">${money(pledge)}</span></div>
-          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
+          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers (simulated)</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
+          ${S.bountySave.id ? `<span class="label">Sample backers \u00b7 not counted in the total</span>` : ""}
           ${OTHERS.map(o => `<div class="backer"><div><b>${o.name}</b><div class="muted" style="font-size:.82rem">${o.size}${o.anon ? " · name hidden by choice" : ""}</div></div><span class="num">${money(o.amt)}</span></div>`).join("")}
         </div>
         <p class="muted" style="font-size:.78rem">Other backers are sample data.</p>
@@ -865,17 +876,20 @@ Object.assign(S, {
 });
 
 function claimedMine() { return S.claim && S.claim.bountyId === "mine"; }
-function clientPledge() { return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500; }
+function clientPledge() {
+  if (S.posted && S.bountySave.id) return S.bountySave.pledged; // RIVET-BACKEND: the saved amount
+  return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500;
+}
 function mineBounty() {
   const live = !!(S.posted && S.bounty);
   const taskId = live ? S.bounty.taskId : "mow";
   const skills = [...TASK_SKILLS[taskId]];
   if (live && S.gaps.has("Can't handle slopes") && !skills.includes("Slope traction")) skills.push("Slope traction");
   return {
-    id: "mine", live, skills, closes: "Jan 31", backers: 4,
+    id: "mine", live, skills, closes: "Jan 31", backers: sampleBackerCount() + 1,
     title: live ? bountyTitle() : "Autonomous mower for 20° slopes",
     industry: live ? COMPANY[S.type].label : "Lawn care", cat: CATEGORY[taskId], region: live ? S.region : "West",
-    pledged: OTHERS.reduce((s, o) => s + o.amt, 0) + clientPledge(), goal: 150000,
+    pledged: sampleBackersTotal() + clientPledge(), goal: 150000,
     specs: live ? specLines() : ["Takes over at least 60% of mowing open turf on residential and small commercial lawns", "Works on slopes up to 20°", "Navigates around beds, fences and yard clutter"],
   };
 }
@@ -948,7 +962,7 @@ function bountyCard(b, rank) {
   <article class="panel prod">
     <div class="prod-top">
       <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${esc(b.industry)} · ${esc(b.cat)} · ${esc(b.region)}${originLabel(b)}</span></div></div>
-      <div class="row" style="gap:6px">${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
+      <div class="row" style="gap:6px">${originPill(b)}${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
     </div>
     <div class="bar" aria-hidden="true"><span style="width:${Math.min(pct, 100)}%"></span></div>
     <div class="prod-figs">
@@ -983,7 +997,7 @@ function screenBoard() {
   <div class="screen-head">
     <span class="label">Developer · Step 2 of 4</span>
     <h1>Bounties with money behind them</h1>
-    <p class="muted">Every bounty here comes from real operators who've pledged. Browse with filters, or let the AI rank what your team is closest to building.</p>
+    <p class="muted">Cards marked Sample are made-up examples; Saved demo cards were posted by operators in this demo. All amounts are illustrative. Browse with filters, or rank bounties by how close your team is to building them.</p>
   </div>
   <div class="search">
     <aside class="panel stack filters" aria-label="Filters">
@@ -993,7 +1007,7 @@ function screenBoard() {
       <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-pledged">Min pledged: <span class="num">${money(f.minPledged)}</span></label><input type="range" id="df-pledged" min="0" max="150000" step="5000" value="${f.minPledged}"></div>
       <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-funded">Min funded: <span class="num">${f.minFunded}%</span></label><input type="range" id="df-funded" min="0" max="100" step="5" value="${f.minFunded}"></div>
       <label class="check" ${S.dview === "ai" ? "hidden" : ""}><input type="checkbox" id="df-res" ${f.showReserved ? "checked" : ""}>Show bounties other teams reserved</label>
-      <p class="muted" style="font-size:.8rem">Bounties, backers and amounts are sample data.</p>
+      <p class="muted" style="font-size:.8rem">Sample cards, backers and all amounts are illustrative.</p>
       ${tip}
       ${boardStatus()}
     </aside>

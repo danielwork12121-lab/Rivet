@@ -136,6 +136,7 @@
       gaps: (b.gaps || []).slice(),
       gapNote: b.note || "",
       pledgePct: typeof b.pledgePercent === "number" ? b.pledgePercent : 30,
+      pledged: b.pledged, // what was saved; the page shows this rather than recomputing
     };
   }
 

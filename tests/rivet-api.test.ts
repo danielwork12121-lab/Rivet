@@ -226,10 +226,10 @@ describe("bounty mapping", () => {
   it("restores the newest posted bounty whose task fits the business type", () => {
     const posted = [
       { _id: "p2", taskKey: "crawl", gaps: [], pledgePercent: 20 },
-      { _id: "p1", taskKey: "mow", gaps: ["Too expensive"], note: "Fits in the trailer", pledgePercent: 35 },
+      { _id: "p1", taskKey: "mow", gaps: ["Too expensive"], note: "Fits in the trailer", pledgePercent: 35, pledged: 5200 },
     ];
     expect(api().bountyToState(posted, ["mow", "spray", "trim"])).toEqual({
-      id: "p1", bounty: { taskId: "mow", product: null }, gaps: ["Too expensive"], gapNote: "Fits in the trailer", pledgePct: 35,
+      id: "p1", bounty: { taskId: "mow", product: null }, gaps: ["Too expensive"], gapNote: "Fits in the trailer", pledgePct: 35, pledged: 5200,
     });
     expect(api().bountyToState([], ["mow"])).toBeNull();
   });

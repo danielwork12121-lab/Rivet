@@ -227,6 +227,12 @@ async function main() {
     let bRows = bountiesFor(draftId);
     check("two clicks stored exactly one posted bounty", bRows.length === 1 && bRows[0].status === "posted" && bRows[0].source === "client", `rows=${bRows.length}`);
     check("the note is stored raw, exactly as typed", bRows[0]?.note === note && bRows[0].specLines.at(-1) === note);
+    const stats = await tab.ev(`[...document.querySelectorAll(".bounty-stats .v")].map((e) => e.textContent)`);
+    check("posted page totals count only the saved pledge (no sample backer money)",
+      stats[0] === "$" + Math.round(bRows[0].pledged).toLocaleString("en-US") && stats[2] === "1", JSON.stringify(stats));
+    check("sample backers are listed as not counted, and the callout is marked sample",
+      await tab.ev(`document.body.innerText.includes("SAMPLE BACKERS · NOT COUNTED IN THE TOTAL") || document.body.innerText.toLowerCase().includes("sample backers · not counted in the total")`) &&
+      (await tab.ev(`document.querySelector(".callout .pill")?.textContent === "Sample"`)));
     check("the posted page shows the note as text, not HTML",
       await tab.ev(`window.__xss === undefined && !document.querySelector("#app .spec img") && document.querySelector("#app .spec").textContent.includes("<img src=x")`));
     for (const n of [0, 1, 2, 3, 4]) {
@@ -252,6 +258,13 @@ async function main() {
     await tab.ev(click("#next"));
     check("profile -> bounty board", await tab.waitFor(`S.dstep === 1`));
     check("board shows this operator's bounty as their saved demo submission", await tab.ev(`document.body.innerText.includes("your saved demo submission")`));
+    check("the board no longer claims every bounty comes from real operators",
+      !(await tab.ev(`document.body.innerText.includes("real operators")`)) && !(await tab.ev(`document.body.innerText.includes("let the AI rank")`)));
+    check("every board card carries a Sample or Saved demo pill",
+      await tab.ev(`[...document.querySelectorAll("article.prod")].every((a) => /^(Sample|Saved demo)$/.test(a.querySelector(".pill")?.textContent ?? ""))`));
+    const mineCard = await tab.ev(`(() => { const a = [...document.querySelectorAll("article.prod")].find((x) => x.textContent.includes("your saved demo submission")); return a && { pill: a.querySelector(".pill").textContent, pledged: a.querySelector(".prod-figs .v").textContent, backers: a.querySelectorAll(".prod-figs .v")[2].textContent }; })()`);
+    check("this operator's own card shows only the saved pledge and 1 backer",
+      mineCard?.pill === "Saved demo" && mineCard.pledged === "$" + Math.round(bRows[0].pledged).toLocaleString("en-US") && mineCard.backers === "1", JSON.stringify(mineCard));
     check("sample bounties are labelled as samples", await tab.ev(`document.body.innerText.includes("Bait station checking robot for commercial sites") && /· sample/.test(document.body.innerText)`));
     await tab.ev(click("[data-sel]"));
     check("board -> claim", await tab.waitFor(`S.dstep === 2 && !!document.querySelector("#claim")`));
