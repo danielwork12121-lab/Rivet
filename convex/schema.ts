@@ -103,7 +103,14 @@ export default defineSchema({
     environments: v.array(v.string()), // e.g. ["outdoor", "confined", "wet"]
     url: v.string(),
     sample: v.boolean(), // true = made-up demo data
-  }),
+    // Set for the page's sample products (Robot Bounty Client Flow.html PRODUCTS):
+    sampleKey: v.optional(v.string()), // the page's product id, e.g. "p1"
+    taskKey: v.optional(v.string()), // the page's task id, e.g. "mow"
+    slopeLimitDeg: v.optional(v.number()), // illustrative
+    regions: v.optional(v.array(v.string())),
+    trl: v.optional(v.number()), // technology readiness level, illustrative
+    provenance: v.optional(v.string()), // where these numbers come from
+  }).index("by_sample_key", ["sampleKey"]),
 
   // The AI's "best for you" picks for a request.
   recommendations: defineTable({

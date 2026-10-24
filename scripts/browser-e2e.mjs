@@ -188,6 +188,9 @@ async function main() {
     const company = `E2E-TEST Lawn ${RUN}`;
     let tab = await open(FRESH);
     check("page loads with no script errors", tab.errors.length === 0 && (await tab.ev("typeof RivetApi")) === "object", tab.errors.join(" | "));
+    check("the robot catalog loads from Convex (9 page products, each with a Convex id)",
+      await tab.waitFor(`S.catalog.source === "convex" && PRODUCTS.length === 9 && PRODUCTS.every((p) => p.robotId && p.sample === true)`),
+      "run `npx convex run robots:seed` if this fails");
     check("Client/Developer role toggle is present", (await tab.ev(`document.querySelectorAll("#role button").length`)) === 2);
     await tab.ev(setVal("#f-name", company));
     const sync = await tab.ev(`(() => { document.querySelector("#next").click(); const b = document.querySelector("#next"); return { disabled: b.disabled, text: b.textContent }; })()`);
@@ -241,6 +244,9 @@ async function main() {
       check(`client stepper opens step ${n + 1}`, await tab.waitFor(onStep(n)));
     }
     check("revisiting a saved, unchanged intake via the stepper adds no request", rowsFor(company).length === 1);
+    await tab.ev(stepper(3));
+    check("the search screen says the listings come from the sample catalog",
+      await tab.waitFor(`${onStep(3)} && document.querySelector("#catalog-source")?.textContent.includes("Loaded from Rivet's sample catalog") && document.querySelectorAll("article.prod").length > 0`));
     await tab.ev(stepper(0));
     await tab.waitFor(onStep(0));
     await tab.ev(setVal("#f-wage", "31"));

@@ -102,6 +102,22 @@
     return { answers: answers, answered: answered };
   }
 
+  // ---- mapping: catalog ---------------------------------------------------------------
+  // Convex robots -> the page's PRODUCTS shape. Only rows that mirror the page's sample
+  // products (they carry sampleKey + taskKey) are returned, in the page's p1..pN order.
+  function robotsToProducts(robots) {
+    return (robots || [])
+      .filter(function (r) { return r.sampleKey && r.taskKey; })
+      .sort(function (a, b) { return a.sampleKey.localeCompare(b.sampleKey, "en", { numeric: true }); })
+      .map(function (r) {
+        return {
+          id: r.sampleKey, robotId: r._id, task: r.taskKey, name: r.name, maker: r.vendor,
+          price: r.price, opex: r.yearlyOpex, share: r.automationShare, slope: r.slopeLimitDeg,
+          regions: (r.regions || []).slice(), trl: r.trl, sample: r.sample,
+        };
+      });
+  }
+
   // ---- mapping: bounties --------------------------------------------------------------
   // A public posted bounty -> the shape the Developer board's cards use. Returns null
   // for a task the page doesn't know (it couldn't compute skills or a fit for it).
@@ -207,6 +223,7 @@
     return call("mutation", "requests:saveFollowUps",
       { id: id, clientToken: token, answers: followUps.answers, complete: followUps.complete });
   }
+  function listRobots() { return call("query", "robots:search", {}); }
   function getDraft(id, token) { return call("query", "requests:getDraft", { id: id, clientToken: token }); }
   function postBounty(id, token, bounty) {
     return call("mutation", "bounties:post", Object.assign({ requestId: id, clientToken: token }, bounty));
@@ -251,6 +268,8 @@
     getMyBounties: getMyBounties,
     listPostedBounties: listPostedBounties,
     toBoardBounty: toBoardBounty,
+    robotsToProducts: robotsToProducts,
+    listRobots: listRobots,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadDraft: loadDraft,

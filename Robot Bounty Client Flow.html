@@ -278,6 +278,7 @@ const S = {
   answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
   bountySave: { status: "idle", id: null, pledged: 0, error: "" }, // this operator's posted bounty (pledged = saved amount)
   board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
+  catalog: { source: "built-in" }, // "convex" once the sample catalog loads from the backend
 };
 
 // ---------- Math (deterministic) ----------
@@ -480,6 +481,17 @@ async function hydrateSaved() {
     if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
     // otherwise the backend is unreachable: keep the blank form and the stored draft
   }
+}
+// Catalog: Convex is the canonical source. The PRODUCTS array above stays as an
+// offline fallback copy (kept identical by tests/catalog.test.ts).
+async function loadCatalog() {
+  try {
+    const products = RivetApi.robotsToProducts(await RivetApi.listRobots());
+    if (!products.length) return; // not seeded yet: keep the built-in copy
+    PRODUCTS.splice(0, PRODUCTS.length, ...products);
+    S.catalog.source = "convex";
+    if (S.role === "client" && S.step >= 2) render();
+  } catch (e) { /* backend unreachable: keep the built-in copy */ }
 }
 // Mirrors the sample goal the bounty page shows; stored as an illustrative figure.
 const DEMO_BOUNTY_GOAL = 150000;
@@ -688,6 +700,7 @@ function screenSearch() {
       <div class="field" ${S.view === "ai" ? "hidden" : ""}><label for="flt-pay">Max payback: <span class="num">${f.maxPayback} mo</span></label><input type="range" id="flt-pay" min="6" max="60" step="3" value="${f.maxPayback}"></div>
       <div class="field"><label for="flt-region">Region</label><select id="flt-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
       <p class="muted" style="font-size:.8rem">Listings, prices and contacts are made-up samples for this prototype.</p>
+      <p class="muted" style="font-size:.8rem" id="catalog-source">${S.catalog.source === "convex" ? "Loaded from Rivet's sample catalog." : "Using the page's built-in sample copy (catalog not loaded)."}</p>
     </aside>
     <section class="results" aria-live="polite">${body}</section>
   </div>
@@ -1187,6 +1200,7 @@ function render() {
 }
 render();
 hydrateSaved();
+loadCatalog(); // RIVET-BACKEND
 </script>
 
 </body></html>
