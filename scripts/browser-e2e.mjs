@@ -9,7 +9,7 @@
 // Uses fictional company names starting with "E2E-TEST " and leaves those rows in the local
 // dev database; remove them with maintenance:testData (see docs/intake-integration.md).
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
@@ -89,7 +89,7 @@ async function newIsolatedTarget(cdp) {
   return { id: targetId, webSocketDebuggerUrl: `${cdp.replace("http", "ws")}/devtools/page/${targetId}` };
 }
 
-async function openTab(cdp, pageUrl, preload, isolated = false) {
+async function openTab(cdp, pageUrl, preload, isolated = false, ready = "typeof render === 'function'") {
   const t = isolated ? await newIsolatedTarget(cdp) : await (await fetch(`${cdp}/json/new?about:blank`, { method: "PUT" })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
@@ -120,7 +120,7 @@ async function openTab(cdp, pageUrl, preload, isolated = false) {
   };
   const load = async () => {
     await send("Page.navigate", { url: pageUrl });
-    if (!(await waitFor("document.readyState === 'complete' && typeof render === 'function'", 10000))) {
+    if (!(await waitFor(`document.readyState === 'complete' && (${ready})`, 10000))) {
       throw new Error("page did not load: " + errors.join(" | "));
     }
   };
@@ -473,6 +473,17 @@ async function main() {
     check("stored markup is shown as text and never executed",
       await tab.ev(`window.__xss === undefined && !document.querySelector("#app img") && document.querySelector("#f-name").value === ${JSON.stringify(evil)}`));
     await tab.close();
+
+    // 9. The teammates' site pages (pages/, served by Vercel) still load without script errors
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    for (const f of readdirSync(join(ROOT, "pages")).filter((x) => x.endsWith(".html"))) {
+      const t = await openTab(chrome.cdp, `${origin}/pages/${f}`, null, false, "true");
+      tabs.push(t);
+      await sleep(1500); // let bundled pages finish their own startup
+      const bodyText = await t.ev("document.body.innerText.trim().length");
+      check(`pages/${f} loads with no script errors`, t.errors.length === 0 && bodyText > 0, t.errors.join(" | ").slice(0, 160));
+      await t.close();
+    }
   } finally {
     for (const t of tabs) await t.close().catch(() => {});
     await chrome.close();
