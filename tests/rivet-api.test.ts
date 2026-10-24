@@ -203,6 +203,51 @@ describe("follow-up mapping", () => {
   });
 });
 
+describe("bounty mapping", () => {
+  const TASK_SKILLS = { mow: ["Outdoor wheeled bases", "Slope traction"] };
+  const CATEGORY = { mow: "Mowing" };
+  const pub = {
+    _id: "b1", _creationTime: 1, title: "Mower for <b>slopes</b>", taskKey: "mow", industry: "Lawn care",
+    region: "West", specLines: ["Works on slopes up to 28°", "<img src=x>"], goal: 150000, pledged: 4500,
+  };
+
+  it("maps a public bounty to a board card, marked as a saved submission, text untouched", () => {
+    expect(api().toBoardBounty(pub, TASK_SKILLS, CATEGORY)).toEqual({
+      id: "saved-b1", saved: true, title: "Mower for <b>slopes</b>", industry: "Lawn care", cat: "Mowing",
+      region: "West", pledged: 4500, goal: 150000, backers: 1, closes: "\u2014",
+      skills: ["Outdoor wheeled bases", "Slope traction"], specs: ["Works on slopes up to 28°", "<img src=x>"],
+    });
+  });
+
+  it("drops bounties for tasks the page doesn't know", () => {
+    expect(api().toBoardBounty({ ...pub, taskKey: "weld" }, TASK_SKILLS, CATEGORY)).toBeNull();
+  });
+
+  it("restores the newest posted bounty whose task fits the business type", () => {
+    const posted = [
+      { _id: "p2", taskKey: "crawl", gaps: [], pledgePercent: 20 },
+      { _id: "p1", taskKey: "mow", gaps: ["Too expensive"], note: "Fits in the trailer", pledgePercent: 35 },
+    ];
+    expect(api().bountyToState(posted, ["mow", "spray", "trim"])).toEqual({
+      id: "p1", bounty: { taskId: "mow", product: null }, gaps: ["Too expensive"], gapNote: "Fits in the trailer", pledgePct: 35,
+    });
+    expect(api().bountyToState([], ["mow"])).toBeNull();
+  });
+
+  it("bounty calls send the draft id and token", async () => {
+    const mutation = vi.fn().mockResolvedValue("b1");
+    const query = vi.fn().mockResolvedValue([]);
+    api()._setClient({ mutation, query });
+    await api().postBounty("r1", "tok-12345678", { taskKey: "mow" });
+    expect(mutation).toHaveBeenCalledWith("bounties:post", { requestId: "r1", clientToken: "tok-12345678", taskKey: "mow" });
+    await api().getMyBounties("r1", "tok-12345678");
+    expect(query).toHaveBeenCalledWith("bounties:getMine", { requestId: "r1", clientToken: "tok-12345678" });
+    await api().listPostedBounties();
+    expect(query).toHaveBeenCalledWith("bounties:listPosted", { limit: 50 });
+    api()._setClient(null);
+  });
+});
+
 describe("draft storage", () => {
   const memoryStorage = () => {
     const store = new Map<string, string>();

@@ -76,6 +76,28 @@ check("the obstacle factor is stored without a unit", saved.followUps[1].assumpt
 const wrongAnswers = await api.saveFollowUps(id, "not-the-token", partial).catch((e) => e);
 check("saveFollowUps with a wrong token is rejected", api.isDraftMissing(wrongAnswers));
 
+// --- shared bounties ---
+const bountyArgs = {
+  taskKey: "mow", title: `E2E fictional mower ${Date.now().toString(36)}`, specLines: ["Works on slopes up to 28°", "Raw <b>note</b>"],
+  gaps: ["Can't handle slopes"], note: "Raw <b>note</b>", industry: "Lawn care", pledgePercent: 30, pledged: 4500, goal: 150000,
+};
+const anonPost = await api.postBounty(id, token, bountyArgs).catch((e) => e);
+check("an anonymous request cannot post a shared bounty", /Anonymous requests can't post/.test(anonPost?.data ?? ""), String(anonPost?.data ?? anonPost));
+await api.updateIntake(id, token, api.intakeToRequest({ ...edited, visibility: "shared" }));
+const bountyId = await api.postBounty(id, token, bountyArgs);
+check("after joining the shared program the bounty posts", typeof bountyId === "string");
+check("posting again for the same task returns the same bounty", (await api.postBounty(id, token, { ...bountyArgs, pledged: 5000 })) === bountyId);
+const wrongBounty = await api.postBounty(id, "not-the-token", bountyArgs).catch((e) => e);
+check("bounties:post rejects a wrong token", api.isDraftMissing(wrongBounty));
+const stranger = new ConvexHttpClient(url); // another browser: no token, nothing shared
+const board = await stranger.query("bounties:listPosted", {});
+const mineOnBoard = board.find((b) => b._id === bountyId);
+check("another session sees the posted bounty on the public list", !!mineOnBoard && mineOnBoard.pledged === 5000);
+const publicText = JSON.stringify(mineOnBoard ?? {});
+check("the public entry has no request id, company, token, gaps or note",
+  !publicText.includes(id) && !publicText.includes(form.name) && !publicText.includes(token) && !("gaps" in mineOnBoard) && !("note" in mineOnBoard));
+check("the owner's getMine returns the raw note", (await api.getMyBounties(id, token))[0]?.note === "Raw <b>note</b>");
+
 // --- agent endpoints (merged from feature/agent) ---
 for (const name of ["ai:hello", "ai:runEvals"]) {
   const err = await raw.action(name, {}).then(() => null, (e) => e);

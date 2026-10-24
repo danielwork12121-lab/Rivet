@@ -71,8 +71,25 @@ async function launchChrome() {
   };
 }
 
-async function openTab(cdp, pageUrl, preload) {
-  const t = await (await fetch(`${cdp}/json/new?about:blank`, { method: "PUT" })).json();
+// A fresh browser context has its own storage and cookies: effectively a different person.
+async function newIsolatedTarget(cdp) {
+  const { webSocketDebuggerUrl } = await (await fetch(`${cdp}/json/version`)).json();
+  const ws = new WebSocket(webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  let id = 0;
+  const send = (method, params = {}) => new Promise((r) => {
+    const i = ++id;
+    ws.addEventListener("message", function on(m) { const d = JSON.parse(m.data); if (d.id === i) { ws.removeEventListener("message", on); r(d.result); } });
+    ws.send(JSON.stringify({ id: i, method, params }));
+  });
+  const { browserContextId } = await send("Target.createBrowserContext");
+  const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
+  ws.close();
+  return { id: targetId, webSocketDebuggerUrl: `${cdp.replace("http", "ws")}/devtools/page/${targetId}` };
+}
+
+async function openTab(cdp, pageUrl, preload, isolated = false) {
+  const t = isolated ? await newIsolatedTarget(cdp) : await (await fetch(`${cdp}/json/new?about:blank`, { method: "PUT" })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   let id = 0;
@@ -121,6 +138,12 @@ function rowsFor(company) {
     .filter((r) => r.profile?.companyName === company);
 }
 
+function bountiesFor(requestId) {
+  const out = execFileSync("npx", ["convex", "data", "bounties", "--limit", "10000", "--format", "jsonLines"],
+    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).filter((b) => b.requestId === requestId);
+}
+
 // ---- page helpers -------------------------------------------------------------------
 // Start a tab with empty storage. Runs once per tab (guarded by sessionStorage, which
 // survives reloads), so a later reload still sees what the page saved.
@@ -146,7 +169,7 @@ async function main() {
   const pageUrl = `http://127.0.0.1:${server.address().port}${PAGE_PATH}`;
   const chrome = await launchChrome();
   const tabs = [];
-  const open = async (preload) => { const t = await openTab(chrome.cdp, pageUrl, preload); tabs.push(t); return t; };
+  const open = async (preload, isolated) => { const t = await openTab(chrome.cdp, pageUrl, preload, isolated); tabs.push(t); return t; };
   try {
     // 1. Load and save the intake
     const company = `Fictional E2E Lawn ${RUN}`;
@@ -177,8 +200,21 @@ async function main() {
       row.followUps[0].assumption?.unit === "degrees" && !("unit" in (row.followUps[1].assumption ?? {})));
     await tab.ev(click("[data-bounty]"));
     check("opportunities -> request a bounty", await tab.waitFor(`${onStep(4)} && !!document.querySelector("#post")`));
-    await tab.ev(click("#post"));
-    check("bounty posts in the demo view", await tab.waitFor(`S.posted && !!document.querySelector("#restart")`));
+    const note = `Fits in the trailer <img src=x onerror="window.__xss=1"> & more ${RUN}`;
+    await tab.ev(`(() => { const e = document.querySelector("#gap-note"); e.value = ${JSON.stringify(note)}; e.dispatchEvent(new Event("change")); })()`);
+    const draftId = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`)).id;
+    const bountyTitleText = await tab.ev("bountyTitle()");
+    await tab.ev(clearToast);
+    const postSync = await tab.ev(`(() => { document.querySelector("#post").click(); const b = document.querySelector("#post"); return { disabled: b.disabled, text: b.textContent }; })()`);
+    check("Post bounty shows a disabled Posting state immediately", postSync.disabled && /Posting/.test(postSync.text), JSON.stringify(postSync));
+    await tab.ev(`document.querySelector("#post")?.click()`);
+    check("bounty is shown as posted only after Convex confirms",
+      await tab.waitFor(`S.posted && S.bountySave.status === "saved" && !!document.querySelector("#restart") && /Bounty posted/.test(document.querySelector("#toast").textContent)`));
+    let bRows = bountiesFor(draftId);
+    check("two clicks stored exactly one posted bounty", bRows.length === 1 && bRows[0].status === "posted" && bRows[0].source === "client", `rows=${bRows.length}`);
+    check("the note is stored raw, exactly as typed", bRows[0]?.note === note && bRows[0].specLines.at(-1) === note);
+    check("the posted page shows the note as text, not HTML",
+      await tab.ev(`window.__xss === undefined && !document.querySelector("#app .spec img") && document.querySelector("#app .spec").textContent.includes("<img src=x")`));
     for (const n of [0, 1, 2, 3, 4]) {
       await tab.ev(stepper(n));
       check(`client stepper opens step ${n + 1}`, await tab.waitFor(onStep(n)));
@@ -201,7 +237,8 @@ async function main() {
     check("Developer role opens the team profile", await tab.waitFor(`S.role === "dev" && S.dstep === 0 && !!document.querySelector("#d-team")`));
     await tab.ev(click("#next"));
     check("profile -> bounty board", await tab.waitFor(`S.dstep === 1`));
-    check("board shows the bounty posted on the client side", await tab.ev(`document.body.innerText.includes("posted from the client side")`));
+    check("board shows this operator's bounty as their saved demo submission", await tab.ev(`document.body.innerText.includes("your saved demo submission")`));
+    check("sample bounties are labelled as samples", await tab.ev(`document.body.innerText.includes("Bait station checking robot for commercial sites") && /· sample/.test(document.body.innerText)`));
     await tab.ev(click("[data-sel]"));
     check("board -> claim", await tab.waitFor(`S.dstep === 2 && !!document.querySelector("#claim")`));
     await tab.ev(click("#claim"));
@@ -221,6 +258,7 @@ async function main() {
     check("after a refresh the intake is restored", await tab.waitFor(`document.querySelector("#f-name")?.value === ${JSON.stringify(company)}`));
     check("restored intake shows the saved confirmation", await tab.waitFor(`document.body.innerText.includes("Saved to Rivet")`));
     check("after a refresh the edited value is shown", await tab.ev(`document.querySelector("#f-wage").value === "31"`));
+    check("after a refresh the posted bounty is restored", await tab.waitFor(`S.posted && S.bountySave.id === ${JSON.stringify(bRows[0]._id)} && S.gapNote === ${JSON.stringify(note)}`));
     check("after a refresh all follow-up answers are restored", await tab.waitFor(`S.answered === 3 && S.answers.slope === 15 && S.answers.obstacles === 1 && S.answers.weeks === 26`));
     await tab.ev(stepper(1));
     check("restored answers show as selected on the follow-up screen",
@@ -233,6 +271,20 @@ async function main() {
     check("a failed answer save shows an error and stays on follow-ups", await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && ${onStep(1)}`));
     check("...with no success message and the stored answer unchanged",
       !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].followUps[2].answerLabel === "About 26");
+    // Bounty post failure: no success, nothing changed
+    await tab.ev("go(4)"); // jump straight to the bounty page (the stepper would try to save answers first)
+    await tab.waitFor(`${onStep(4)} && !!document.querySelector("#edit")`);
+    await tab.ev(click("#edit"));
+    await tab.waitFor(`!!document.querySelector("#pledge")`);
+    await tab.ev(`(() => { const p = document.querySelector("#pledge"); p.value = "40"; p.dispatchEvent(new Event("input")); })()`);
+    await tab.ev(clearToast);
+    await tab.ev(click("#post"));
+    check("a failed bounty post shows an error and is not marked posted",
+      await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && !S.posted && !document.querySelector("#post").disabled`));
+    check("...with no success message and the stored bounty unchanged",
+      !(await tab.ev(`/posted/i.test(document.querySelector("#toast").textContent)`)) && bountiesFor(draftId)[0].pledgePercent === 30);
+    await tab.ev("go(1)");
+    await tab.waitFor(onStep(1));
     // Intake update failure: same guarantees
     await tab.ev(click("#back"));
     await tab.waitFor(onStep(0));
@@ -243,6 +295,26 @@ async function main() {
     check("...with no success message and the stored record unchanged",
       !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].profile.hourlyLaborCost === 31 && rowsFor(company).length === 1);
     const realDraft = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`));
+    await tab.close();
+
+    // A different person (separate browser context, empty storage) sees the bounty as a Developer
+    tab = await open(null, true);
+    check("a separate browser session starts with no draft", await tab.ev(`localStorage.getItem("rivet.intake.draft") === null`));
+    await tab.ev(`document.querySelector('#role [data-role="dev"]').click()`);
+    await tab.waitFor(`S.role === "dev"`);
+    await tab.ev(click("#next"));
+    const savedSel = `[data-sel="saved-${bRows[0]._id}"]`;
+    check("the Developer board in another session shows the posted bounty",
+      await tab.waitFor(`S.dstep === 1 && !!document.querySelector(${JSON.stringify(savedSel)})`));
+    const card = `document.querySelector(${JSON.stringify(savedSel)}).closest("article")`;
+    check("...labelled as a saved demo submission, with its title",
+      await tab.ev(`${card}.textContent.includes("saved demo submission") && ${card}.textContent.includes(${JSON.stringify(bountyTitleText)})`));
+    check("...without the company's name anywhere on the board", !(await tab.ev(`document.body.innerText.includes(${JSON.stringify(company)})`)));
+    await tab.ev(click(savedSel));
+    check("the claim screen lists the raw note as text and runs no markup",
+      await tab.waitFor(`S.dstep === 2 && document.querySelector(".spec").textContent.includes(${JSON.stringify(note)})`) &&
+      (await tab.ev(`window.__xss === undefined && !document.querySelector(".spec img")`)));
+    check("no script errors in the developer session", tab.errors.length === 0, tab.errors.join(" | "));
     await tab.close();
 
     // Wrong token: the draft is not shown and is forgotten

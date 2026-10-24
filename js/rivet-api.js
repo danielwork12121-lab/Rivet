@@ -102,6 +102,43 @@
     return { answers: answers, answered: answered };
   }
 
+  // ---- mapping: bounties --------------------------------------------------------------
+  // A public posted bounty -> the shape the Developer board's cards use. Returns null
+  // for a task the page doesn't know (it couldn't compute skills or a fit for it).
+  // Text stays raw; the page escapes it when rendering.
+  function toBoardBounty(p, taskSkills, categories) {
+    var skills = taskSkills[p.taskKey];
+    if (!skills) return null;
+    return {
+      id: "saved-" + p._id,
+      saved: true, // a real saved demo submission, not page sample data
+      title: p.title,
+      industry: p.industry || "",
+      cat: categories[p.taskKey] || "",
+      region: p.region || "",
+      pledged: p.pledged,
+      goal: p.goal,
+      backers: 1,
+      closes: "\u2014",
+      skills: skills.slice(),
+      specs: (p.specLines || []).slice(),
+    };
+  }
+
+  // The operator's own posted bounties (newest first) -> page state for the first one
+  // whose task exists for their business type, or null.
+  function bountyToState(posted, taskIds) {
+    var b = (posted || []).find(function (x) { return taskIds.indexOf(x.taskKey) !== -1; });
+    if (!b) return null;
+    return {
+      id: b._id,
+      bounty: { taskId: b.taskKey, product: null },
+      gaps: (b.gaps || []).slice(),
+      gapNote: b.note || "",
+      pledgePct: typeof b.pledgePercent === "number" ? b.pledgePercent : 30,
+    };
+  }
+
   // Cheap client-side check so obvious mistakes don't cost a round trip.
   // The backend re-validates everything; this is only for friendlier messages.
   function precheck(S) {
@@ -170,6 +207,11 @@
       { id: id, clientToken: token, answers: followUps.answers, complete: followUps.complete });
   }
   function getDraft(id, token) { return call("query", "requests:getDraft", { id: id, clientToken: token }); }
+  function postBounty(id, token, bounty) {
+    return call("mutation", "bounties:post", Object.assign({ requestId: id, clientToken: token }, bounty));
+  }
+  function getMyBounties(id, token) { return call("query", "bounties:getMine", { requestId: id, clientToken: token }); }
+  function listPostedBounties(limit) { return call("query", "bounties:listPosted", { limit: limit || 50 }); }
 
   // ---- ids and persistence --------------------------------------------------------
   function newClientToken() {
@@ -204,6 +246,11 @@
     updateIntake: updateIntake,
     saveFollowUps: saveFollowUps,
     getDraft: getDraft,
+    postBounty: postBounty,
+    getMyBounties: getMyBounties,
+    listPostedBounties: listPostedBounties,
+    toBoardBounty: toBoardBounty,
+    bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadDraft: loadDraft,
     saveDraft: saveDraft,

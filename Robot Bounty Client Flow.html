@@ -276,6 +276,8 @@ const S = {
   // step 1 save, then updated in place. Steps 3-5 and the Developer side are NOT saved yet.
   submit: { status: "idle", id: null, token: "", fp: "", error: "", errorFp: "" },
   answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
+  bountySave: { status: "idle", id: null, error: "" }, // this operator's posted bounty
+  board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
 };
 
 // ---------- Math (deterministic) ----------
@@ -453,7 +455,10 @@ async function hydrateSaved() {
   if (!d) return;
   const startFp = fingerprint(), startAnswers = answersFp();
   try {
-    const doc = await RivetApi.getDraft(d.id, d.token);
+    const [doc, posted] = await Promise.all([
+      RivetApi.getDraft(d.id, d.token),
+      RivetApi.getMyBounties(d.id, d.token).catch(() => null), // a bounty restore failure must not block the rest
+    ]);
     // Keep using this draft even if we don't refill the form: later saves update it.
     Object.assign(S.submit, { id: d.id, token: d.token });
     const p = RivetApi.requestToIntake(doc);
@@ -465,11 +470,77 @@ async function hydrateSaved() {
     S.answered = f.answered;
     Object.assign(S.submit, { status: "saved", fp: fingerprint() });
     Object.assign(S.answersSave, { status: "saved", fp: f.answered ? answersFp() : "" });
-    render(); toast(f.answered ? "Restored your saved request and answers" : "Restored your saved request");
+    const b = RivetApi.bountyToState(posted, tasks().map((t) => t.id));
+    if (b) {
+      Object.assign(S, { bounty: b.bounty, gaps: new Set(b.gaps), gapNote: b.gapNote, pledgePct: b.pledgePct, posted: true });
+      S.bountySave = { status: "saved", id: b.id, error: "" };
+    }
+    render(); toast(b ? "Restored your saved request and posted bounty" : f.answered ? "Restored your saved request and answers" : "Restored your saved request");
   } catch (e) {
     if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
     // otherwise the backend is unreachable: keep the blank form and the stored draft
   }
+}
+// Mirrors the sample goal the bounty page shows; stored as an illustrative figure.
+const DEMO_BOUNTY_GOAL = 150000;
+function bountyStatus() {
+  const b = S.bountySave;
+  return b.status === "error" ? `<div class="notice" role="alert">${esc(b.error)}</div>` : "";
+}
+// Client "Post bounty": saved to Convex first; the posted view and toast only after it confirms.
+async function postBounty() {
+  const b = S.bountySave;
+  if (b.status === "saving") return; // repeated clicks
+  if (!S.submit.id) {
+    Object.assign(b, { status: "error", error: "Go back to step 1 and press Continue to save your request first." }); render(); return;
+  }
+  b.status = "saving"; b.error = ""; render();
+  try {
+    if (S.submit.fp !== fingerprint()) { // e.g. "Join the shared program" was picked on this screen
+      await RivetApi.updateIntake(S.submit.id, S.submit.token, RivetApi.intakeToRequest(S));
+      Object.assign(S.submit, { status: "saved", fp: fingerprint() });
+    }
+    const t = taskById(S.bounty.taskId);
+    b.id = await RivetApi.postBounty(S.submit.id, S.submit.token, {
+      taskKey: t.id, title: bountyTitle(), specLines: specLines(), gaps: [...S.gaps], note: S.gapNote.trim(),
+      industry: COMPANY[S.type].label, pledgePercent: S.pledgePct,
+      pledged: Math.round(bountyBasis(t) * S.pledgePct / 100), goal: DEMO_BOUNTY_GOAL,
+    });
+    b.status = "saved"; S.posted = true; S.board.at = 0; // board refetches next time
+    render(); window.scrollTo({ top: 0 }); toast("Bounty posted");
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(b, { status: "error", error: RivetApi.friendlyError(e) }); render();
+  }
+}
+// Developer board: saved demo bounties from Convex, fetched when the board is shown.
+function savedBoardBounties() {
+  return S.board.items
+    .filter((p) => p._id !== S.bountySave.id) // the operator's own bounty is already shown as "mine"
+    .map((p) => RivetApi.toBoardBounty(p, TASK_SKILLS, CATEGORY))
+    .filter(Boolean);
+}
+async function loadBoard() {
+  const bd = S.board;
+  if (bd.loading || Date.now() - bd.at < 3000) return;
+  bd.loading = true;
+  try { bd.items = await RivetApi.listPostedBounties(); bd.error = ""; }
+  catch (e) { bd.error = RivetApi.friendlyError(e); }
+  bd.loading = false; bd.at = Date.now();
+  if (S.role === "dev" && S.dstep === 1) render();
+}
+function boardStatus() {
+  const bd = S.board, small = `style="font-size:.8rem"`;
+  if (bd.error) return `<div class="notice" ${small} role="alert">Couldn't load saved bounties, so only samples are shown. ${esc(bd.error)}</div>`;
+  if (bd.loading && !bd.at) return `<p class="muted" ${small}>Loading saved bounties\u2026</p>`;
+  const n = savedBoardBounties().length;
+  return n ? `<p class="muted" ${small}>${n} saved demo submission${n === 1 ? "" : "s"} from other operators.</p>` : "";
+}
+// Card label so sample data and real saved demo submissions are never confused.
+function originLabel(b) {
+  if (b.saved) return " \u00b7 saved demo submission";
+  if (b.id === "mine") return b.live ? (S.bountySave.id ? " \u00b7 your saved demo submission" : " \u00b7 posted from the client side") : " \u00b7 sample";
+  return " \u00b7 sample";
 }
 
 // Step 2
@@ -655,7 +726,7 @@ function specLines() {
   if (S.gaps.has("Doesn't do the whole job")) L.push("Handles the full job without a person following it");
   if (S.gaps.has("Too slow for my route")) L.push("Keeps pace with a crew's daily route");
   if (S.answers.obstacles < 1) L.push("Navigates around beds, fences and yard clutter");
-  if (S.gapNote.trim()) L.push(esc(S.gapNote.trim()));
+  if (S.gapNote.trim()) L.push(S.gapNote.trim()); // RIVET-BACKEND: stored raw, escaped where rendered
   return L;
 }
 const OTHERS = [
@@ -683,7 +754,7 @@ function screenBounty() {
         <h3>What's missing?</h3>
         <div class="row">${GAPS.map(g => `<button class="chip" data-g="${esc(g)}" aria-pressed="${S.gaps.has(g)}">${g}</button>`).join("")}</div>
         <div class="field"><label for="gap-note">Anything else? (optional)</label><input id="gap-note" type="text" placeholder="e.g. Has to fit in the trailer with the mowers" value="${esc(S.gapNote)}"></div>
-        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul></div>
+        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul></div>
       </div>
       <div class="panel stack">
         <h3>Your pledge</h3>
@@ -692,7 +763,8 @@ function screenBounty() {
         <div class="field"><label for="pledge">Pledge: <span class="num">${S.pledgePct}%</span> of first-year savings</label><input type="range" id="pledge" min="20" max="40" step="1" value="${S.pledgePct}"></div>
         <div class="callout"><b>You're only charged if it works out</b><span style="font-size:.88rem">Pledges are all-or-nothing. Nobody pays unless the bounty reaches its goal and a developer delivers a robot that meets the spec.</span></div>
         ${anon ? `<div class="notice">You chose to stay anonymous, so you can't pledge to shared bounties. <button class="link" id="optin">Join the shared program</button></div>` : ""}
-        <button class="btn hivis" id="post" ${anon ? "disabled" : ""}>Post bounty and pledge ${money(pledge)}</button>
+        ${bountyStatus()}
+        <button class="btn hivis" id="post" ${anon || S.bountySave.status === "saving" ? "disabled" : ""}>${S.bountySave.status === "saving" ? "Posting\u2026" : `Post bounty and pledge ${money(pledge)}`}</button>
       </div>
     </div>
     <div class="actions"><button class="btn" id="back">Back to robots</button></div>`;
@@ -717,7 +789,7 @@ function screenBounty() {
       </div>
       <div class="panel stack">
         <h3>Spec</h3>
-        <ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul>
+        <ul class="spec">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul>
       </div>
       <div class="panel stack">
         <h3>Developer updates</h3>
@@ -752,7 +824,7 @@ function bindBounty() {
     pl.oninput = e => { S.pledgePct = +e.target.value; pl.previousElementSibling.querySelector(".num").textContent = S.pledgePct + "%"; $(".pledge-big").textContent = money(basis * S.pledgePct / 100); $("#post").textContent = "Post bounty and pledge " + money(basis * S.pledgePct / 100); };
   }
   on("#optin", () => { S.visibility = "shared"; render(); toast("You joined the shared program"); });
-  on("#post", () => { S.posted = true; render(); window.scrollTo({ top: 0 }); toast("Bounty posted"); });
+  on("#post", postBounty); // RIVET-BACKEND: save before showing it as posted
   on("#invite", () => { S.invited = true; render(); toast("Invites sent to 3 companies"); });
   on("#edit", () => { S.posted = false; render(); });
   on("#restart", () => { S.answered = 0; S.bounty = null; S.posted = false; S.contacts = {}; go(0); });
@@ -800,7 +872,7 @@ function mineBounty() {
     specs: live ? specLines() : ["Takes over at least 60% of mowing open turf on residential and small commercial lawns", "Works on slopes up to 20°", "Navigates around beds, fences and yard clutter"],
   };
 }
-function allBounties() { return [mineBounty(), ...SAMPLE_BOUNTIES]; }
+function allBounties() { return [mineBounty(), ...savedBoardBounties(), ...SAMPLE_BOUNTIES]; } // RIVET-BACKEND: + saved bounties
 function bountyById(id) { return allBounties().find(b => b.id === id); }
 const isMyClaim = b => S.claim && S.claim.bountyId === b.id;
 const raisedOf = b => b.pledged + (isMyClaim(b) ? S.extra : 0);
@@ -868,7 +940,7 @@ function bountyCard(b, rank) {
   return `
   <article class="panel prod">
     <div class="prod-top">
-      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${b.industry} · ${b.cat} · ${b.region}${b.id === "mine" ? (b.live ? " · posted from the client side" : " · sample") : ""}</span></div></div>
+      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${esc(b.industry)} · ${esc(b.cat)} · ${esc(b.region)}${originLabel(b)}</span></div></div>
       <div class="row" style="gap:6px">${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
     </div>
     <div class="bar" aria-hidden="true"><span style="width:${Math.min(pct, 100)}%"></span></div>
@@ -916,6 +988,7 @@ function screenBoard() {
       <label class="check" ${S.dview === "ai" ? "hidden" : ""}><input type="checkbox" id="df-res" ${f.showReserved ? "checked" : ""}>Show bounties other teams reserved</label>
       <p class="muted" style="font-size:.8rem">Bounties, backers and amounts are sample data.</p>
       ${tip}
+      ${boardStatus()}
     </aside>
     <section class="results" aria-live="polite">${body}</section>
   </div>
@@ -934,6 +1007,7 @@ function bindBoard() {
   document.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => { S.sel = b.dataset.sel; goDev(2); });
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => goDev(3));
   $("#back").onclick = () => goDev(0);
+  loadBoard(); // RIVET-BACKEND
 }
 
 // Dev step 3: claim
@@ -955,13 +1029,13 @@ function screenClaim() {
   <div class="screen-head">
     <span class="label">Developer · Step 3 of 4 · Claim</span>
     <h1>${esc(b.title)}</h1>
-    <p class="muted">${b.industry} · ${b.region} · ${backersOf(b)} backers · closes ${b.closes}</p>
+    <p class="muted">${esc(b.industry)} · ${esc(b.region)} · ${backersOf(b)} backers · closes ${b.closes}</p>
   </div>
   <div class="grid2">
     <div class="stack">
       <div class="panel stack">
         <h3>Spec from the backers</h3>
-        <ul class="spec">${b.specs.map(l => `<li>${l}</li>`).join("")}</ul>
+        <ul class="spec">${b.specs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
         <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
       </div>
       <div class="panel stack">
