@@ -301,7 +301,7 @@ function evalProduct(p) {
   const fails = [];
   if (p.slope < S.answers.slope) fails.push(`Handles slopes up to ${p.slope}°, your sites need about ${S.answers.slope}°`);
   if (!p.regions.includes(S.region)) fails.push(`Not sold or serviced in the ${S.region}`);
-  if (payback > 5) fails.push(isFinite(payback) ? `Takes about ${Math.round(payback)} years to pay back for a company your size` : "Running costs are higher than the labor it saves");
+  if (payback > 5) fails.push(isFinite(payback) ? `Takes about ${Math.round(payback)} years to pay back for a company your size (this demo rules out anything over 5 years)` : "Running costs are higher than the labor it saves");
   const lo = net * 0.8 > 0 ? upfront / (net * 0.8) : Infinity;
   const hi = upfront / (net * 1.2);
   return { p, t, units, upfront, savings, opex, net, payback, fails, lo, hi };
@@ -485,6 +485,9 @@ async function hydrateSaved() {
     // otherwise the backend is unreachable: keep the blank form and the stored draft
   }
 }
+// "What we're assuming": mark values that are still the page's defaults.
+const notAnswered = (key) =>
+  QUESTIONS.findIndex((q) => q.key === key) >= S.answered ? ` <span class="muted" style="font-size:.75rem">default</span>` : "";
 // ---- AI requirement draft (step 2) ----
 // Reading status is free. Only the button calls generateSpec, which starts one paid
 // AI run (the backend reuses a run already in progress and refuses without a key).
@@ -679,9 +682,9 @@ function screenFollowups() {
       <div class="assump">
         <div><span>Workers on the job</span><span class="num">${people()}</span></div>
         <div><span>Hourly cost</span><span class="num">${money(S.wage)}</span></div>
-        <div><span>Steepest slope a robot must handle</span><span class="num">${S.answers.slope}°</span></div>
-        <div><span>Site complexity factor</span><span class="num">${S.answers.obstacles.toFixed(2)}</span></div>
-        <div><span>Working weeks per year</span><span class="num">${S.answers.weeks}</span></div>
+        <div><span>Steepest slope a robot must handle</span><span class="num">${S.answers.slope}°${notAnswered("slope")}</span></div>
+        <div><span>Site complexity factor</span><span class="num">${S.answers.obstacles.toFixed(2)}${notAnswered("obstacles")}</span></div>
+        <div><span>Working weeks per year</span><span class="num">${S.answers.weeks}${notAnswered("weeks")}</span></div>
         <div><span>Region</span><span>${S.region}</span></div>
       </div>
       <p class="muted" style="font-size:.82rem">The AI only reads your answers. The ROI math in the next step is a fixed formula you can check.</p>
@@ -710,18 +713,19 @@ function screenOpps() {
     <span class="label">Step 3 of 5</span>
     <h1>Where a robot could take work off your crews</h1>
     <p class="muted">Payback = robot cost ÷ (yearly labor saved − yearly running cost). Ranges show what happens if our savings estimate is 20% off either way.</p>
+    <p class="muted" style="font-size:.85rem" id="roi-basis">Illustrative estimates, not quotes or verified feasibility: they combine your crew size, hourly cost and answers with <b>sample</b> hours per task and <b>sample</b> robot prices, running costs and automation shares.</p>
   </div>
   <div class="opps">
     ${rows.map(({ t, cost, best }) => `
     <div class="panel opp">
       <div class="stack" style="gap:8px">
         <div class="row"><h2>${t.name}</h2>${best ? `<span class="pill good">Robots available</span>` : `<span class="pill warn">No robot fits yet · bounty candidate</span>`}</div>
-        <p class="muted">${t.note} Your team spends about <span class="num">${t.hours}</span> hrs per ${S.type === "lawn" ? "crew member" : "tech"} each week on it.</p>
+        <p class="muted">${t.note} Sample assumption: about <span class="num">${t.hours}</span> hrs per ${S.type === "lawn" ? "crew member" : "tech"} each week (you haven't told us this yet).</p>
         <div class="bar" aria-hidden="true"><span style="width:${(cost / maxCost * 100).toFixed(0)}%"></span></div>
       </div>
       <div class="opp-stats">
-        <div><div class="label">Labor cost / yr</div><div class="v">${money(cost)}</div></div>
-        <div><div class="label">Best net saving</div><div class="v">${best ? money(best.net) : "—"}</div></div>
+        <div><div class="label">Labor cost / yr (est.)</div><div class="v">${money(cost)}</div></div>
+        <div><div class="label">Best net saving (est.)</div><div class="v">${best ? money(best.net) : "—"}</div></div>
         <div><div class="label">Payback</div><div class="v">${best ? months(best.payback) : "—"}</div>${best ? `<div class="muted num" style="font-size:.75rem">${months(best.hi)}–${months(best.lo)}</div>` : ""}</div>
       </div>
       <div class="row" style="grid-column:1/-1;justify-content:flex-end">
@@ -752,9 +756,9 @@ function productCard(e, rank) {
       <div class="row" style="gap:6px"><span class="pill plain">TRL ${p.trl}</span>${fit ? `<span class="pill good">Fits your sites</span>` : `<span class="pill bad">Ruled out</span>`}</div>
     </div>
     <div class="prod-figs">
-      <div><span class="label">Price / unit</span><span class="v">${money(p.price)}</span></div>
+      <div><span class="label">Sample price / unit</span><span class="v">${money(p.price)}</span></div>
       <div><span class="label">Units (1 per ${S.type === "lawn" ? "crew" : "tech"})</span><span class="v">${e.units}</span></div>
-      <div><span class="label">Net saving / yr</span><span class="v">${money(e.net)}</span></div>
+      <div><span class="label">Est. net saving / yr</span><span class="v">${money(e.net)}</span></div>
       <div><span class="label">Payback</span><span class="v">${months(e.payback)}</span></div>
     </div>
     ${why ? `<div class="why"><b>Why it's a fit:</b> ${why}</div>` : ""}
@@ -768,7 +772,7 @@ function productCard(e, rank) {
 }
 function reason(e) {
   const unit = S.type === "lawn" ? "crews" : "techs";
-  return `pays back in about ${months(e.payback).replace(" mo", " months")} for your ${S.crews} ${unit}. It covers about ${Math.round(e.p.share * 100)}% of ${e.t.name.toLowerCase()}, handles your ${S.answers.slope}° slopes, and is serviced in the ${S.region}.`;
+  return `pays back in about ${months(e.payback).replace(" mo", " months")} for your ${S.crews} ${unit}. Its sample data says it covers about ${Math.round(e.p.share * 100)}% of ${e.t.name.toLowerCase()}, handles your ${S.answers.slope}° slopes, and is serviced in the ${S.region}.`;
 }
 function screenSearch() {
   const f = S.filters;

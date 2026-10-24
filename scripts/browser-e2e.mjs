@@ -209,13 +209,18 @@ async function main() {
     check("three clicks stored exactly one request", rowsFor(company).length === 1, `rows=${rowsFor(company).length}`);
 
     // 2. Client navigation through all five steps
+    const defaultTags = `[...document.querySelectorAll(".assump .num")].filter((n) => n.textContent.includes("default")).length`;
+    check("unanswered assumptions are marked as defaults", (await tab.ev(defaultTags)) === 3);
     for (let i = 0; i < 3; i++) { // first option each time: "Very few", "Mostly open", "About 26"
       await tab.ev(`document.querySelector('.chip[data-q="${i}"]').click()`);
       await sleep(50);
     }
     check("answering all follow-ups enables the next button", await tab.ev(`!document.querySelector("#next").disabled`));
+    check("answered assumptions are no longer marked as defaults", (await tab.ev(defaultTags)) === 0);
     await tab.ev(click("#next"));
     check("follow-ups -> opportunities after the answers are saved", await tab.waitFor(onStep(2)));
+    check("opportunities say the estimates use sample task hours and sample robot data",
+      await tab.ev(`document.querySelector("#roi-basis")?.textContent.includes("sample") && document.body.innerText.includes("Sample assumption: about") && !document.body.innerText.includes("Your team spends about")`));
     let row = rowsFor(company)[0];
     check("all three answers stored on the same request, marked complete",
       row?.followUps?.length === 3 && row.followUpsComplete === true && rowsFor(company).length === 1,
@@ -254,6 +259,10 @@ async function main() {
     }
     check("revisiting a saved, unchanged intake via the stepper adds no request", rowsFor(company).length === 1);
     await tab.ev(stepper(3));
+    const figLabels = await tab.ev(`[...document.querySelectorAll("article.prod .prod-figs .label")].map((l) => l.textContent)`);
+    check("robot cards label prices as samples and savings as estimates",
+      figLabels.includes("Sample price / unit") && figLabels.includes("Est. net saving / yr") && !figLabels.includes("Price / unit"),
+      JSON.stringify([...new Set(figLabels)]));
     check("the search screen says the listings come from the sample catalog",
       await tab.waitFor(`${onStep(3)} && document.querySelector("#catalog-source")?.textContent.includes("Loaded from Rivet's sample catalog") && document.querySelectorAll("article.prod").length > 0`));
     await tab.ev(stepper(0));
