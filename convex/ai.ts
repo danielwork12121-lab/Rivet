@@ -454,8 +454,9 @@ export const matchRobots = internalAction({
       }
 
       // 2. Catalog, or a web search when we have no real robots for this task yet.
-      const robots = await ctx.runQuery(internal.robots.forTask, { task: intent.task });
-      if (!searched && !robots.some((r) => !r.sample) && process.env.APIFY_TOKEN) {
+      // Only real robots: the fictional demo ones are never shown to operators.
+      const robots = (await ctx.runQuery(internal.robots.forTask, { task: intent.task })).filter((r) => !r.sample);
+      if (!searched && robots.length === 0 && process.env.APIFY_TOKEN) {
         const search = await ctx.runMutation(internal.discovery.start, {
           task: intent.task, searchPhrase: intent.searchPhrase, matchId,
         });

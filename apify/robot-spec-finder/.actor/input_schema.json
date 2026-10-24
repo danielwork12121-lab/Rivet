@@ -25,8 +25,8 @@
     "maxSites": {
       "title": "Max sites from Google",
       "type": "integer",
-      "description": "How many websites to read from Google results (one page each). Each page can list several robots.",
-      "default": 15,
+      "description": "How many websites to read (one page each). Fewer is faster: 8 takes about 3 minutes. Each page can list several robots.",
+      "default": 8,
       "minimum": 1,
       "maximum": 40
     },

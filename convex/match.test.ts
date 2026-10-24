@@ -116,7 +116,7 @@ describe("matchRobots (real action, stubbed transport)", () => {
     await t.action(internal.ai.matchRobots, { matchId, searched: true });
     m = (await latest())!;
     expect(m.status).toBe("done");
-    expect(m.picks[0].name).toBe("sample-mower");
+    expect(m.picks).toEqual([]); // fictional robots are never shown
   });
 
   it("asks a second operator with the same task to wait for the same search", async () => {

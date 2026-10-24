@@ -34,6 +34,7 @@ export const discover = internalAction({
           task: d.task,
           searchPhrase: d.searchPhrase,
           anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+          maxSites: Number(process.env.APIFY_MAX_SITES) || 8, // pages to read; more = slower but more robots
         });
         await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "crawling" });
         await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, {

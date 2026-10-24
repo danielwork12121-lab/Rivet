@@ -61,6 +61,17 @@ export const seed = internalMutation({
   },
 });
 
+// Deletes every fictional demo robot, so only robots found on the web remain.
+// Run: npx convex run --prod robots:removeSamples
+export const removeSamples = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const samples = (await ctx.db.query("robots").collect()).filter((r) => r.sample);
+    for (const r of samples) await ctx.db.delete(r._id);
+    return `Removed ${samples.length} sample robots`;
+  },
+});
+
 // The manual-filter side of search (price slider, task).
 export const search = query({
   args: { task: v.optional(v.string()), maxPrice: v.optional(v.number()) },

@@ -69,7 +69,7 @@ const apiKey = input.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
 if (!task) await Actor.fail("Input 'task' is required, e.g. \"gutter cleaning\".");
 if (!apiKey) await Actor.fail("Add your Anthropic API key in the input (it's stored as a secret).");
 const claude = new Anthropic({ apiKey });
-const maxSites = Math.min(Math.max(input.maxSites ?? 15, 1), 40);
+const maxSites = Math.min(Math.max(input.maxSites ?? 8, 1), 40);
 
 // 1. Which pages to read
 let urls = (input.startUrls ?? []).map((u) => u.url).filter(Boolean);
@@ -81,8 +81,7 @@ if (urls.length === 0) {
     countryCode: "us",
   });
   const { items } = await Actor.newClient().dataset(run.defaultDatasetId).listItems();
-  // A few spare sites, because some will still block the crawler.
-  urls = pickUrls(items as { organicResults?: { url?: string }[] }[], maxSites + Math.ceil(maxSites / 2));
+  urls = pickUrls(items as { organicResults?: { url?: string }[] }[], maxSites);
 }
 log.info(`Reading ${urls.length} pages`, { urls });
 
