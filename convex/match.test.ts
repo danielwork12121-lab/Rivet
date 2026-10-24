@@ -130,6 +130,26 @@ describe("matchRobots (real action, stubbed transport)", () => {
     expect(await t.run((ctx) => ctx.db.query("discoveries").collect())).toHaveLength(1);
   });
 
+  it("retries a search that failed or found nothing, but not one that found robots", async () => {
+    const { t } = await setup();
+    vi.useFakeTimers();
+    const insert = (status: "done" | "failed", robotsFound: number) =>
+      t.run((ctx) => ctx.db.insert("discoveries", {
+        task: "mowing", searchPhrase: "x", status, urls: [], robotsFound, waitingMatches: [], finishedAt: Date.now(),
+      }));
+    const clear = () => t.run(async (ctx) => {
+      for (const d of await ctx.db.query("discoveries").collect()) await ctx.db.delete(d._id);
+    });
+    await insert("failed", 0);
+    expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("run");
+    await clear();
+    await insert("done", 0);
+    expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("run");
+    await clear();
+    await insert("done", 3);
+    expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("done");
+  });
+
   it("suggests a bounty listing the gap when no robot meets a must-have", async () => {
     const { t, matchId, latest } = await setup();
     await addRobot(t, "flat-mower", 15);

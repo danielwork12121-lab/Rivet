@@ -24,7 +24,9 @@ export const start = internalMutation({
         await ctx.db.patch(existing._id, { waitingMatches: [...existing.waitingMatches, ...waiting] });
         return "wait";
       }
-      if (!running && Date.now() - lastTouched < RECENT_MS) return "done";
+      // Only a search that found robots counts; a failed or empty one is retried.
+      const found = existing.status === "done" && existing.robotsFound > 0;
+      if (found && Date.now() - lastTouched < RECENT_MS) return "done";
       await ctx.db.delete(existing._id); // stale or stuck: start over
     }
     const discoveryId = await ctx.db.insert("discoveries", {
