@@ -1,8 +1,9 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { loadOwnedDraft, withoutToken } from "./lib/drafts";
+import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./lib/aiBudget";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -18,6 +19,13 @@ const owner = { requestId: v.id("operatorRequests"), clientToken: v.string() };
 // ANTHROPIC_API_KEY ...). It never reaches the browser; only this yes/no does.
 const aiAvailable = () => !!process.env.ANTHROPIC_API_KEY;
 const AI_UNAVAILABLE = "AI drafting is unavailable: no Anthropic API key is configured on the backend.";
+
+// Why a new paid call can't start right now (no key, or a daily limit), or null.
+async function aiUnavailable(ctx: QueryCtx, requestId?: Id<"operatorRequests">) {
+  if (!aiAvailable()) return { reason: "no_key" as const, message: AI_UNAVAILABLE };
+  const block: AiBlock | null = await budgetBlock(ctx, { requestId });
+  return block && { reason: block, message: AI_BLOCK_MESSAGES[block] };
+}
 
 // A request's version: changes on every edit to the intake or follow-up answers.
 export const requestVersion = (r: Doc<"operatorRequests">) => r.updatedAt ?? r._creationTime;
@@ -37,15 +45,19 @@ async function enqueueSpecJob(ctx: MutationCtx, request: Doc<"operatorRequests">
   if (active && Date.now() - (latest.startedAt ?? latest._creationTime) < STUCK_JOB_MS) {
     return { jobId: latest._id, reused: true };
   }
+  await spendAiBudget(ctx, "spec", { requestId: request._id }); // throws if a daily limit is reached
   const jobId = await ctx.db.insert("aiJobs", { requestId: request._id, kind: "spec", status: "queued" });
   await ctx.scheduler.runAfter(0, internal.ai.extractSpec, { requestId: request._id, jobId });
   return { jobId, reused: false };
 }
 
-// Whether AI features can run at all. No secrets: just a yes/no.
+// Whether a new AI call could start right now, and if not, why. No secrets.
 export const aiStatus = query({
   args: {},
-  handler: async () => ({ available: aiAvailable() }),
+  handler: async (ctx) => {
+    const blocked = await aiUnavailable(ctx);
+    return blocked ? { available: false, reason: blocked.reason, message: blocked.message } : { available: true };
+  },
 });
 
 function requireText(label: string, value: string, max: number) {
@@ -84,8 +96,9 @@ export const answerQuestions = mutation({
         answer: requireText("answer", a.answer, 1000),
       });
     }
-    // Answers are kept either way; the spec is redone only when AI is available.
-    return aiAvailable() ? await enqueueSpecJob(ctx, request) : null;
+    // Answers are kept either way; the spec is redone only when AI is available
+    // and within budget.
+    return (await aiUnavailable(ctx, requestId)) ? null : await enqueueSpecJob(ctx, request);
   },
 });
 
@@ -208,8 +221,11 @@ export const specStatus = query({
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
     const currentVersion = requestVersion(request);
+    const blocked = await aiUnavailable(ctx, requestId);
     return {
-      available: aiAvailable(),
+      available: !blocked,
+      unavailableReason: blocked?.reason,
+      unavailableMessage: blocked?.message,
       job: job && {
         _id: job._id, status: job.status, errorKind: job.errorKind, error: job.error,
         queuedAt: job._creationTime, startedAt: job.startedAt, finishedAt: job.finishedAt,
@@ -231,6 +247,8 @@ export const recommend = mutation({
     if (maxPrice !== undefined && !(Number.isFinite(maxPrice) && maxPrice >= 0)) {
       throw new ConvexError("maxPrice must be a non-negative number");
     }
+    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
+    await spendAiBudget(ctx, "recommend", { requestId });
     await ctx.scheduler.runAfter(0, internal.ai.recommendRobots, { requestId, maxPrice });
   },
 });
@@ -270,10 +288,13 @@ export const requestBounty = mutation({
   args: { ...owner, robotId: v.optional(v.id("robots")), gap: v.string() },
   handler: async (ctx, { requestId, clientToken, robotId, gap }) => {
     await loadOwnedDraft(ctx, requestId, clientToken);
+    const cleanGap = requireText("gap", gap, 1000);
+    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
+    await spendAiBudget(ctx, "bounty", { requestId });
     await ctx.scheduler.runAfter(0, internal.ai.writeBounty, {
       requestId,
       ...(robotId ? { robotId } : {}),
-      gap: requireText("gap", gap, 1000),
+      gap: cleanGap,
     });
   },
 });

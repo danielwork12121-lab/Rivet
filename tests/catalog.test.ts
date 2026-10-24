@@ -7,9 +7,9 @@ import { PAGE_SAMPLE_PRODUCTS } from "../convex/robots";
 beforeAll(async () => { await import("../js/rivet-api.js"); });
 const api = () => (globalThis as any).RivetApi;
 
-// The page's built-in PRODUCTS array, read straight from Trevor's HTML.
+// The page's built-in PRODUCTS array, read straight from the deployed page's HTML.
 function pageProducts() {
-  const html = readFileSync(new URL("../Robot Bounty Client Flow.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../pages/robot-bounty-client-flow.html", import.meta.url), "utf8");
   const literal = html.match(/const PRODUCTS = (\[[\s\S]*?\n\]);/)?.[1];
   if (!literal) throw new Error("PRODUCTS not found in the page");
   return new Function(`return ${literal};`)();

@@ -108,7 +108,9 @@ describe("AI job lifecycle", () => {
     );
     expect(await scheduled()).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.query("aiJobs").collect())).toHaveLength(0);
-    expect(await t.query(api.agent.aiStatus, {})).toEqual({ available: false });
+    expect(await t.query(api.agent.aiStatus, {})).toEqual({
+      available: false, reason: "no_key", message: expect.stringMatching(/AI drafting is unavailable/),
+    });
     const status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
     expect(status).toMatchObject({ available: false, job: null, spec: null, stale: false });
   });

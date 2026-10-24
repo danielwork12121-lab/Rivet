@@ -10,7 +10,9 @@
 
 import type * as agent from "../agent.js";
 import type * as ai from "../ai.js";
+import type * as aiBudget from "../aiBudget.js";
 import type * as bounties from "../bounties.js";
+import type * as lib_aiBudget from "../lib/aiBudget.js";
 import type * as lib_drafts from "../lib/drafts.js";
 import type * as lib_personas from "../lib/personas.js";
 import type * as lib_roi from "../lib/roi.js";
@@ -28,7 +30,9 @@ import type {
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
   ai: typeof ai;
+  aiBudget: typeof aiBudget;
   bounties: typeof bounties;
+  "lib/aiBudget": typeof lib_aiBudget;
   "lib/drafts": typeof lib_drafts;
   "lib/personas": typeof lib_personas;
   "lib/roi": typeof lib_roi;

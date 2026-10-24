@@ -176,6 +176,14 @@ export default defineSchema({
     finishedAt: v.optional(v.number()),
   }).index("by_request_kind", ["requestId", "kind"]),
 
+  // One row per paid AI call that was allowed to start (see lib/aiBudget.ts).
+  // Used only to enforce the daily limits.
+  aiUsage: defineTable({
+    kind: v.union(v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat")),
+    requestId: v.optional(v.id("operatorRequests")),
+    clientKey: v.optional(v.string()), // keyed hash of a website visitor's IP, never the IP itself
+  }),
+
   // One row per Claude call: your cost tracker and test history.
   agentRuns: defineTable({
     route: v.string(),
