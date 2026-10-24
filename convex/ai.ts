@@ -7,7 +7,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { computeRoi, suggestBounty } from "./lib/roi";
 import { PERSONAS } from "./lib/personas";
@@ -16,7 +16,8 @@ const client = new Anthropic(); // reads ANTHROPIC_API_KEY from Convex env vars
 const MODEL = "claude-opus-5-5";
 
 // Quick check that the key works: npx convex run ai:hello
-export const hello = action({
+// Internal so browsers can't spend the API key; `npx convex run` can still call it.
+export const hello = internalAction({
   args: {},
   handler: async () => {
     const res = await client.messages.create({
@@ -28,6 +29,14 @@ export const hello = action({
     return res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   },
 });
+
+// Record a failed run (e.g. missing ANTHROPIC_API_KEY) like extractSpec does,
+// then rethrow so the scheduled function is marked failed too.
+async function logFailure(ctx: ActionCtx, route: string, err: unknown) {
+  await ctx.runMutation(internal.agent.logRun, {
+    route, ms: 0, ok: false, inputTokens: 0, outputTokens: 0, note: String(err).slice(0, 500),
+  });
+}
 
 // ---------- 1. Requirement spec + follow-up questions ----------
 
@@ -131,6 +140,7 @@ function numbersIn(text: string): string[] {
 export const recommendRobots = internalAction({
   args: { requestId: v.id("operatorRequests"), maxPrice: v.optional(v.number()) },
   handler: async (ctx, { requestId, maxPrice }) => {
+   try {
     const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
     const spec = await ctx.runQuery(internal.agent.latestSpecInternal, { requestId });
     const annualCost = context.request.cost?.currentAnnualCost;
@@ -221,6 +231,10 @@ export const recommendRobots = internalAction({
       outputTokens: final.usage.output_tokens,
       ...(dropped.length ? { note: "dropped " + dropped.join("; ") } : {}),
     });
+   } catch (err) {
+    await logFailure(ctx, "recommend", err);
+    throw err;
+   }
   },
 });
 
@@ -242,6 +256,7 @@ const BountySchema = z.object({
 export const writeBounty = internalAction({
   args: { requestId: v.id("operatorRequests"), robotId: v.optional(v.id("robots")), gap: v.string() },
   handler: async (ctx, { requestId, robotId, gap }) => {
+   try {
     const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
     const spec = await ctx.runQuery(internal.agent.latestSpecInternal, { requestId });
     const robot = robotId ? await ctx.runQuery(internal.robots.getByString, { id: robotId }) : null;
@@ -265,6 +280,10 @@ export const writeBounty = internalAction({
       route: "bounty", ms: Date.now() - started, ok: true,
       inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
     });
+   } catch (err) {
+    await logFailure(ctx, "bounty", err);
+    throw err;
+   }
   },
 });
 
@@ -314,8 +333,9 @@ export const importFromApify = internalAction({
 });
 
 // ---------- Evals: npx convex run ai:runEvals ----------
+// Internal for the same reason as hello.
 
-export const runEvals = action({
+export const runEvals = internalAction({
   args: {},
   handler: async () => {
     const results = [];

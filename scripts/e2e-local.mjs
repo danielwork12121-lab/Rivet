@@ -1,5 +1,6 @@
 // Live check against a RUNNING local Convex backend (npx convex dev). Not part of
 // `npm test`. Uses fictional data only; each run leaves a few rows in the dev database.
+import { execFileSync } from "node:child_process";
 import { ConvexHttpClient } from "convex/browser";
 import "../js/rivet-api.js"; // classic browser script; attaches globalThis.RivetApi
 
@@ -74,6 +75,31 @@ check("answers restore to the same selections", JSON.stringify(restored) === JSO
 check("the obstacle factor is stored without a unit", saved.followUps[1].assumption.value === 0.7 && !("unit" in saved.followUps[1].assumption));
 const wrongAnswers = await api.saveFollowUps(id, "not-the-token", partial).catch((e) => e);
 check("saveFollowUps with a wrong token is rejected", api.isDraftMissing(wrongAnswers));
+
+// --- agent endpoints (merged from feature/agent) ---
+for (const name of ["ai:hello", "ai:runEvals"]) {
+  const err = await raw.action(name, {}).then(() => null, (e) => e);
+  check(`${name} is not callable from a browser (would spend the API key)`, !!err && /Could not find public function/.test(err.message));
+}
+const agentWrong = await raw.query("agent:latestSpec", { requestId: id, clientToken: "not-the-token" }).catch((e) => e);
+check("agent:latestSpec rejects a wrong token", api.isDraftMissing(agentWrong));
+const agentNoToken = await raw.query("agent:latestSpec", { requestId: id }).catch((e) => e);
+check("agent:latestSpec without a token is rejected", agentNoToken instanceof Error);
+const agentRuns = () => execFileSync("npx", ["convex", "data", "agentRuns", "--limit", "50", "--format", "jsonLines"],
+  { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
+const runsBefore = agentRuns().length;
+const startedAt = Date.now();
+await raw.mutation("agent:generateSpec", { requestId: id, clientToken: token });
+let failedRun = null;
+for (let i = 0; i < 40 && !failedRun; i++) {
+  await new Promise((r) => setTimeout(r, 500));
+  failedRun = agentRuns().find((r) => r.route === "spec" && r._creationTime >= startedAt - 1000) ?? null;
+}
+check("without an API key a deliberate spec request fails gracefully and is logged",
+  failedRun?.ok === false && /authentication|api key|apiKey/i.test(failedRun.note ?? ""),
+  failedRun ? `${failedRun.note?.slice(0, 80)}` : `no run logged (runs before: ${runsBefore})`);
+check("...no spec is stored for the request", (await raw.query("agent:latestSpec", { requestId: id, clientToken: token })) === null);
+check("...and the request itself is untouched and still readable", (await api.getDraft(id, token)).status === "submitted");
 
 // --- errors ---
 const bad = await api.createRequest({ ...args, clientToken: api.newClientToken(), description: "  " }).catch((e) => e);

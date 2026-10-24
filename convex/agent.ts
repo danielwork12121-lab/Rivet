@@ -1,17 +1,32 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { loadOwnedDraft, withoutToken } from "./lib/drafts";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
+//
+// Every public function here belongs to one operator request, so each takes
+// the draft's clientToken and checks it (lib/drafts.ts) before reading or
+// scheduling anything. Nothing calls these automatically: the frontend must
+// trigger them deliberately, since each one starts a paid Claude call.
+
+const owner = { requestId: v.id("operatorRequests"), clientToken: v.string() };
+
+function requireText(label: string, value: string, max: number) {
+  const t = value.trim();
+  if (!t || t.length > max) throw new ConvexError(`${label} must be 1-${max} characters`);
+  return t;
+}
 
 // ---------- 1. Requirement spec + follow-up questions ----------
 
 // Frontend calls this after requests:create. Returns right away; the spec
 // appears in agent:latestSpec a few seconds later.
 export const generateSpec = mutation({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) => {
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
     await ctx.scheduler.runAfter(0, internal.ai.extractSpec, { requestId });
   },
 });
@@ -19,25 +34,34 @@ export const generateSpec = mutation({
 // The operator answers the AI's follow-up questions; the spec is redone.
 export const answerQuestions = mutation({
   args: {
-    requestId: v.id("operatorRequests"),
+    ...owner,
     answers: v.array(v.object({ question: v.string(), answer: v.string() })),
   },
-  handler: async (ctx, { requestId, answers }) => {
+  handler: async (ctx, { requestId, clientToken, answers }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    if (answers.length > 10) throw new ConvexError("At most 10 answers at a time");
     for (const a of answers) {
-      if (a.answer.trim()) await ctx.db.insert("clarifications", { requestId, ...a });
+      if (!a.answer.trim()) continue;
+      await ctx.db.insert("clarifications", {
+        requestId,
+        question: requireText("question", a.question, 500),
+        answer: requireText("answer", a.answer, 1000),
+      });
     }
     await ctx.scheduler.runAfter(0, internal.ai.extractSpec, { requestId });
   },
 });
 
 export const latestSpec = query({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) =>
-    ctx.db
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    return ctx.db
       .query("requirementSpecs")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .order("desc")
-      .first(),
+      .first();
+  },
 });
 
 export const latestSpecInternal = internalQuery({
@@ -61,7 +85,7 @@ export const requestContext = internalQuery({
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
     return {
-      request,
+      request: withoutToken(request), // never send the draft token to Claude
       answers: clarifications.map((c) => ({ question: c.question, answer: c.answer })),
     };
   },
@@ -98,20 +122,26 @@ export const saveSpec = internalMutation({
 // ---------- 2. "Best for you" robot picks ----------
 
 export const recommend = mutation({
-  args: { requestId: v.id("operatorRequests"), maxPrice: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    await ctx.scheduler.runAfter(0, internal.ai.recommendRobots, args);
+  args: { ...owner, maxPrice: v.optional(v.number()) },
+  handler: async (ctx, { requestId, clientToken, maxPrice }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    if (maxPrice !== undefined && !(Number.isFinite(maxPrice) && maxPrice >= 0)) {
+      throw new ConvexError("maxPrice must be a non-negative number");
+    }
+    await ctx.scheduler.runAfter(0, internal.ai.recommendRobots, { requestId, maxPrice });
   },
 });
 
 export const latestPicks = query({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) =>
-    ctx.db
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    return ctx.db
       .query("recommendations")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .order("desc")
-      .first(),
+      .first();
+  },
 });
 
 export const savePicks = internalMutation({
@@ -134,20 +164,27 @@ export const savePicks = internalMutation({
 // ---------- 3. "Not quite right? Request a bounty" ----------
 
 export const requestBounty = mutation({
-  args: { requestId: v.id("operatorRequests"), robotId: v.optional(v.id("robots")), gap: v.string() },
-  handler: async (ctx, args) => {
-    await ctx.scheduler.runAfter(0, internal.ai.writeBounty, args);
+  args: { ...owner, robotId: v.optional(v.id("robots")), gap: v.string() },
+  handler: async (ctx, { requestId, clientToken, robotId, gap }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    await ctx.scheduler.runAfter(0, internal.ai.writeBounty, {
+      requestId,
+      ...(robotId ? { robotId } : {}),
+      gap: requireText("gap", gap, 1000),
+    });
   },
 });
 
 export const latestBounty = query({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) =>
-    ctx.db
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    return ctx.db
       .query("bounties")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .order("desc")
-      .first(),
+      .first();
+  },
 });
 
 export const saveBounty = internalMutation({

@@ -1,12 +1,11 @@
-import { ConvexError, v } from "convex/values";
-import { internalQuery, mutation, query, type QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import { v } from "convex/values";
+import { internalQuery, mutation, query } from "./_generated/server";
 import { costInfo, followUpAnswer, profileInfo } from "./schema";
 import { validateFollowUps, validateRequestInput } from "./lib/validation";
+import { loadOwnedDraft, withoutToken } from "./lib/drafts";
 
-// Access model (fictional demo, no accounts): whoever holds a request's
-// `clientToken` owns that draft. The browser generates it, keeps it in
-// localStorage, and must send it to read or change the draft. No public
+// The browser generates each draft's `clientToken`, keeps it in localStorage,
+// and must send it to read or change the draft (see lib/drafts.ts). No public
 // function returns a token or lists other operators' requests.
 
 const intakeFields = {
@@ -17,26 +16,6 @@ const intakeFields = {
   cost: v.optional(costInfo),
   profile: v.optional(profileInfo),
 };
-
-// Same error for "no such id" and "wrong token", so ids can't be probed.
-const DRAFT_NOT_FOUND = "Draft not found";
-
-async function loadOwnedDraft(
-  ctx: QueryCtx,
-  id: Id<"operatorRequests">,
-  clientToken: string,
-): Promise<Doc<"operatorRequests">> {
-  const doc = await ctx.db.get(id);
-  if (!doc || doc.clientToken === undefined || doc.clientToken !== clientToken) {
-    throw new ConvexError(DRAFT_NOT_FOUND);
-  }
-  return doc;
-}
-
-// Everything the owner may see; the token itself is never sent back.
-function toDraft({ clientToken: _token, ...draft }: Doc<"operatorRequests">) {
-  return draft;
-}
 
 // Operator submits a problem. Returns the request's id. If `clientToken` was
 // already used, returns that request's id and inserts nothing, so a retried or
@@ -104,7 +83,7 @@ export const saveFollowUps = mutation({
 export const getDraft = query({
   args: { id: v.id("operatorRequests"), clientToken: v.string() },
   handler: async (ctx, { id, clientToken }) =>
-    toDraft(await loadOwnedDraft(ctx, id, clientToken)),
+    withoutToken(await loadOwnedDraft(ctx, id, clientToken)),
 });
 
 // ---- internal only: not callable from browsers ---------------------------------
