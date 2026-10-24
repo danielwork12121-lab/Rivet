@@ -74,6 +74,12 @@ Titles, descriptions and constraints are stored as the operator typed them and a
 | `cost.currentAnnualCost` | number | optional, ≥0 |
 | `cost.budget` | number | optional, ≥0 |
 | `cost.notes` | string | optional, ≤1000 |
+| `profile` | object | optional. See below |
+| `clientToken` | string | optional, 8–100 chars of letters, digits, `-`, `_`. **Makes retries safe**: if a request with this token already exists, its id is returned and nothing is inserted. Generate one per logical submission (`crypto.randomUUID()`) and reuse it when retrying the same submission |
+
+`profile` fields: `companyName` (1–100), `businessType` (1–50, free text), `region` (1–50, free text),
+`crewCount` (whole number 1–10000), `peoplePerCrew` (optional, whole number 1–10000),
+`hourlyLaborCost` (>0, ≤10000), `visibility` (`"shared"` or `"anonymous"`).
 
 Returns: the new request's id (string).
 
@@ -93,10 +99,12 @@ Args: `{ id: string }`. Returns the request or `null`. A malformed id rejects.
   "environment": "string",
   "constraints": ["string"],
   "cost": { "currency": "USD", "currentAnnualCost": 40000, "budget": 25000, "notes": "optional" },
+  "profile": { "companyName": "string", "businessType": "lawn", "region": "West", "crewCount": 3, "peoplePerCrew": 2, "hourlyLaborCost": 24, "visibility": "shared" },
+  "clientToken": "string",
   "status": "submitted"
 }
 ```
-`cost` and its inner fields are absent (not null) when not provided.
+`cost`, `profile`, `clientToken` and their optional inner fields are absent (not null) when not provided.
 `_creationTime` is milliseconds since the epoch. `status` is `"submitted"` or `"specified"`.
 
 ## For the AI teammate
