@@ -8,8 +8,13 @@
  * @module
  */
 
+import type * as agent from "../agent.js";
+import type * as ai from "../ai.js";
+import type * as lib_personas from "../lib/personas.js";
+import type * as lib_roi from "../lib/roi.js";
 import type * as lib_validation from "../lib/validation.js";
 import type * as requests from "../requests.js";
+import type * as robots from "../robots.js";
 
 import type {
   ApiFromModules,
@@ -18,8 +23,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agent: typeof agent;
+  ai: typeof ai;
+  "lib/personas": typeof lib_personas;
+  "lib/roi": typeof lib_roi;
   "lib/validation": typeof lib_validation;
   requests: typeof requests;
+  robots: typeof robots;
 }>;
 
 /**
