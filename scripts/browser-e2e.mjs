@@ -124,8 +124,20 @@ async function openTab(cdp, pageUrl, preload, isolated = false) {
     }
   };
   await load();
+  // Real input events (focus, blur, mousedown/up order) rather than element.click().
+  const mouseClick = async (selector) => {
+    const box = await ev(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, vh: innerHeight }; })()`);
+    if (box.y < 0 || box.y > box.vh) throw new Error(`${selector} is outside the viewport`);
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
+  };
+  const typeInto = async (selector, text) => {
+    await mouseClick(selector);
+    await send("Input.insertText", { text });
+  };
   return {
-    ev, waitFor, errors, reload: load,
+    ev, waitFor, errors, reload: load, mouseClick, typeInto,
     close: () => { ws.close(); return fetch(`${cdp}/json/close/${t.id}`); },
   };
 }
@@ -201,15 +213,17 @@ async function main() {
     await tab.ev(click("[data-bounty]"));
     check("opportunities -> request a bounty", await tab.waitFor(`${onStep(4)} && !!document.querySelector("#post")`));
     const note = `Fits in the trailer <img src=x onerror="window.__xss=1"> & more ${RUN}`;
-    await tab.ev(`(() => { const e = document.querySelector("#gap-note"); e.value = ${JSON.stringify(note)}; e.dispatchEvent(new Event("change")); })()`);
     const draftId = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`)).id;
     const bountyTitleText = await tab.ev("bountyTitle()");
     await tab.ev(clearToast);
-    const postSync = await tab.ev(`(() => { document.querySelector("#post").click(); const b = document.querySelector("#post"); return { disabled: b.disabled, text: b.textContent }; })()`);
-    check("Post bounty shows a disabled Posting state immediately", postSync.disabled && /Posting/.test(postSync.text), JSON.stringify(postSync));
-    await tab.ev(`document.querySelector("#post")?.click()`);
-    check("bounty is shown as posted only after Convex confirms",
+    // Like a person: type the note, then go straight for the Post button with the mouse
+    // (the field blurs on mousedown). Then press it again while it saves.
+    await tab.typeInto("#gap-note", note);
+    await tab.mouseClick("#post"); // exactly one click
+    check("typing a note then clicking Post posts on the first click",
       await tab.waitFor(`S.posted && S.bountySave.status === "saved" && !!document.querySelector("#restart") && /Bounty posted/.test(document.querySelector("#toast").textContent)`));
+    await tab.ev(`document.querySelector("#post")?.click(); document.querySelector("#post")?.click();`); // late extra clicks
+    await sleep(500);
     let bRows = bountiesFor(draftId);
     check("two clicks stored exactly one posted bounty", bRows.length === 1 && bRows[0].status === "posted" && bRows[0].source === "client", `rows=${bRows.length}`);
     check("the note is stored raw, exactly as typed", bRows[0]?.note === note && bRows[0].specLines.at(-1) === note);
@@ -278,7 +292,8 @@ async function main() {
     await tab.waitFor(`!!document.querySelector("#pledge")`);
     await tab.ev(`(() => { const p = document.querySelector("#pledge"); p.value = "40"; p.dispatchEvent(new Event("input")); })()`);
     await tab.ev(clearToast);
-    await tab.ev(click("#post"));
+    const postSync = await tab.ev(`(() => { document.querySelector("#post").click(); const b = document.querySelector("#post"); return { disabled: b.disabled, text: b.textContent }; })()`);
+    check("Post bounty shows a disabled Posting state immediately", postSync.disabled && /Posting/.test(postSync.text), JSON.stringify(postSync));
     check("a failed bounty post shows an error and is not marked posted",
       await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && !S.posted && !document.querySelector("#post").disabled`));
     check("...with no success message and the stored bounty unchanged",

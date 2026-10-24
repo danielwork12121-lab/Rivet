@@ -754,7 +754,7 @@ function screenBounty() {
         <h3>What's missing?</h3>
         <div class="row">${GAPS.map(g => `<button class="chip" data-g="${esc(g)}" aria-pressed="${S.gaps.has(g)}">${g}</button>`).join("")}</div>
         <div class="field"><label for="gap-note">Anything else? (optional)</label><input id="gap-note" type="text" placeholder="e.g. Has to fit in the trailer with the mowers" value="${esc(S.gapNote)}"></div>
-        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul></div>
+        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec" id="spec-preview">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul></div>
       </div>
       <div class="panel stack">
         <h3>Your pledge</h3>
@@ -817,7 +817,14 @@ function bindBounty() {
   on("#tosearch", () => go(3));
   on("#back", () => go(3));
   document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; S.gaps.has(g) ? S.gaps.delete(g) : S.gaps.add(g); render(); });
-  const note = $("#gap-note"); if (note) note.onchange = e => { S.gapNote = e.target.value; render(); };
+  // RIVET-BACKEND: update the spec preview in place while typing. A full render() on
+  // "change" fired on blur, i.e. on mousedown of Post, and replaced the button mid-click.
+  const note = $("#gap-note");
+  if (note) note.oninput = e => {
+    S.gapNote = e.target.value;
+    const preview = $("#spec-preview");
+    if (preview) preview.innerHTML = specLines().map(l => `<li>${esc(l)}</li>`).join("");
+  };
   const pl = $("#pledge");
   if (pl) {
     const basis = bountyBasis(taskById(S.bounty.taskId));
