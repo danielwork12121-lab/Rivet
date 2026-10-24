@@ -8,6 +8,18 @@ export const costInfo = v.object({
   notes: v.optional(v.string()),
 });
 
+// Who is asking and how their operation is staffed. Free-form strings for
+// businessType/region on purpose: the frontend owns those vocabularies.
+export const profileInfo = v.object({
+  companyName: v.string(),
+  businessType: v.string(),
+  region: v.string(),
+  crewCount: v.number(),
+  peoplePerCrew: v.optional(v.number()),
+  hourlyLaborCost: v.number(), // fully loaded, in the cost currency (USD in the demo)
+  visibility: v.union(v.literal("shared"), v.literal("anonymous")),
+});
+
 export default defineSchema({
   // A problem submitted by an infrastructure operator.
   operatorRequests: defineTable({
@@ -16,8 +28,14 @@ export default defineSchema({
     environment: v.string(),
     constraints: v.array(v.string()),
     cost: v.optional(costInfo),
+    profile: v.optional(profileInfo),
+    // Client-generated id that makes retries safe: create() with a token that
+    // already exists returns the existing request instead of inserting again.
+    clientToken: v.optional(v.string()),
     status: v.union(v.literal("submitted"), v.literal("specified")),
-  }).index("by_status", ["status"]),
+  })
+    .index("by_status", ["status"])
+    .index("by_client_token", ["clientToken"]),
 
   // AI-extracted structured requirements for a request. Schema only for now:
   // no functions write to this table until the AI integration exists.

@@ -13,7 +13,13 @@ export const LIMITS = {
   constraint: 500,
   costNotes: 1000,
   maxMoney: 1_000_000_000_000,
+  companyName: 100,
+  profileText: 50,
+  headcount: 10_000,
+  maxHourlyCost: 10_000,
 } as const;
+
+const CLIENT_TOKEN = /^[A-Za-z0-9_-]{8,100}$/;
 
 export type CostInfo = {
   currency: string;
@@ -22,12 +28,24 @@ export type CostInfo = {
   notes?: string;
 };
 
+export type ProfileInfo = {
+  companyName: string;
+  businessType: string;
+  region: string;
+  crewCount: number;
+  peoplePerCrew?: number;
+  hourlyLaborCost: number;
+  visibility: "shared" | "anonymous";
+};
+
 export type RequestInput = {
   title: string;
   description: string;
   environment: string;
   constraints: string[];
   cost?: CostInfo;
+  profile?: ProfileInfo;
+  clientToken?: string;
 };
 
 function requireText(label: string, value: string, max: number): string {
@@ -44,6 +62,35 @@ function checkMoney(label: string, value: number | undefined) {
   if (!Number.isFinite(value) || value < 0 || value > LIMITS.maxMoney) {
     throw new ConvexError(`${label} must be a non-negative number`);
   }
+}
+
+function requireCount(label: string, value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > LIMITS.headcount) {
+    throw new ConvexError(`${label} must be a whole number from 1 to ${LIMITS.headcount}`);
+  }
+}
+
+function validateProfile(p: ProfileInfo): ProfileInfo {
+  requireCount("profile.crewCount", p.crewCount);
+  if (p.peoplePerCrew !== undefined) requireCount("profile.peoplePerCrew", p.peoplePerCrew);
+  if (
+    !Number.isFinite(p.hourlyLaborCost) ||
+    p.hourlyLaborCost <= 0 ||
+    p.hourlyLaborCost > LIMITS.maxHourlyCost
+  ) {
+    throw new ConvexError(
+      `profile.hourlyLaborCost must be greater than 0 and at most ${LIMITS.maxHourlyCost}`,
+    );
+  }
+  return {
+    companyName: requireText("profile.companyName", p.companyName, LIMITS.companyName),
+    businessType: requireText("profile.businessType", p.businessType, LIMITS.profileText),
+    region: requireText("profile.region", p.region, LIMITS.profileText),
+    crewCount: p.crewCount,
+    ...(p.peoplePerCrew !== undefined && { peoplePerCrew: p.peoplePerCrew }),
+    hourlyLaborCost: p.hourlyLaborCost,
+    visibility: p.visibility,
+  };
 }
 
 /** Returns a trimmed, validated copy of the input or throws an Error. */
@@ -82,11 +129,19 @@ export function validateRequestInput(input: RequestInput): RequestInput {
     };
   }
 
+  if (input.clientToken !== undefined && !CLIENT_TOKEN.test(input.clientToken)) {
+    throw new ConvexError(
+      "clientToken must be 8-100 characters: letters, digits, '-' or '_'",
+    );
+  }
+
   return {
     title: requireText("title", input.title, LIMITS.title),
     description: requireText("description", input.description, LIMITS.description),
     environment: requireText("environment", input.environment, LIMITS.environment),
     constraints,
     ...(cost ? { cost } : {}),
+    ...(input.profile ? { profile: validateProfile(input.profile) } : {}),
+    ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
   };
 }
