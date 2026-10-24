@@ -1,0 +1,7 @@
+# Files the website does not need. Keeps local secrets off Vercel when deploying with `npx vercel`.
+.env
+.env.*
+.convex/
+apify/
+tests/
+node_modules/
