@@ -149,28 +149,31 @@ async function openTab(cdp, pageUrl, preload, isolated = false, ready = "typeof 
   };
 }
 
-// Admin read of the local dev table; no public query involved.
+// Admin CLI calls fail loudly instead of stalling the whole run.
+const CLI_TIMEOUT_MS = 90_000;
+
+// Admin read of the target's table; no public query involved.
 function rowsFor(company) {
   const out = execFileSync("npx", ["convex", "data", "operatorRequests", "--limit", "10000", "--format", "jsonLines"],
-    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: CLI_TIMEOUT_MS });
   return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l))
     .filter((r) => r.profile?.companyName === company);
 }
 
 function bountiesFor(requestId) {
   const out = execFileSync("npx", ["convex", "data", "bounties", "--limit", "10000", "--format", "jsonLines"],
-    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: CLI_TIMEOUT_MS });
   return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).filter((b) => b.requestId === requestId);
 }
 
 function aiJobsFor(requestId) {
   const out = execFileSync("npx", ["convex", "data", "aiJobs", "--limit", "10000", "--format", "jsonLines"],
-    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: CLI_TIMEOUT_MS });
   return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).filter((j) => j.requestId === requestId);
 }
 // Internal functions via the CLI (admin access to the local dev deployment only).
 const convexRun = (fn, args) =>
-  execFileSync("npx", ["convex", "run", fn, JSON.stringify(args)], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("npx", ["convex", "run", fn, JSON.stringify(args)], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: CLI_TIMEOUT_MS });
 
 // ---- page helpers -------------------------------------------------------------------
 // Start a tab with empty storage. Runs once per tab (guarded by sessionStorage, which
