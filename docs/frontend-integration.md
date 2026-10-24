@@ -65,10 +65,21 @@ Titles, descriptions and constraints are stored as the operator typed them and a
 
 ## Functions
 
-Public: `requests:create`, `requests:updateIntake`, `requests:saveFollowUps`,
-`requests:getDraft`. **Not public** (internal, callable only from backend code):
-`requests:get`, `requests:list`. Calling them from a browser fails with
-"Could not find public function".
+Every public function, and what protects it:
+
+| Function | Kind | Access |
+|---|---|---|
+| `requests:create` | mutation | open (creates; returns an id) |
+| `requests:updateIntake`, `requests:saveFollowUps`, `requests:getDraft` | mutation/query | draft token |
+| `bounties:post`, `bounties:getMine` | mutation/query | draft token |
+| `bounties:listPosted` | query | open: public projection only |
+| `agent:generateSpec`, `agent:answerQuestions`, `agent:recommend`, `agent:requestBounty` | mutation | draft token (each starts a paid Claude call) |
+| `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty` | query | draft token |
+| `robots:search`, `robots:get` | query | open (fictional catalog, no private data) |
+
+**Not public** (internal, backend/CLI only): `requests:get`, `requests:list`,
+`ai:hello`, `ai:runEvals`, and every internal agent/robots helper. Calling them from a
+browser fails with "Could not find public function".
 
 ### Changes from the first version of this contract
 | Before | Now | Why |
@@ -151,7 +162,48 @@ rejects with a generic error.
 absent (not null) when not set.
 `_creationTime` is milliseconds since the epoch. `status` is `"submitted"` or `"specified"`.
 
-## For the AI teammate
-The `requirementSpecs` table (see `convex/schema.ts`) defines where extracted
-requirements go. Nothing writes to it yet; a mutation/action will be added once the
-extraction output shape is agreed.
+## Shared bounties
+
+### `bounties:post` (mutation)
+Args: `{ requestId, clientToken, taskKey, title, specLines, gaps, note, industry, pledgePercent, pledged, goal }`.
+Posts the operator's bounty for one task, or updates it if that request already posted for
+that task, so retries never create a second bounty. Returns the bounty id.
+Rejected for requests whose profile says `visibility: "anonymous"`.
+
+| Arg | Rules |
+|---|---|
+| `taskKey` | the page's task id, e.g. `"mow"` (letter first; letters, digits, `-`, `_`; ≤30) |
+| `title` | 1–160 |
+| `specLines` | ≤12 lines, each 1–300: the spec exactly as the operator saw it |
+| `gaps` | ≤10 chip labels, each 1–100 |
+| `note` | ≤500, may be empty. **Stored raw**: escape when rendering |
+| `industry` | 1–50 |
+| `pledgePercent` | 0–100 |
+| `pledged`, `goal` | USD, ≥0 and >0. **Illustrative demo figures, not commitments** |
+
+### `bounties:getMine` (query)
+Args: `{ requestId, clientToken }`. The owner's posted bounties, newest first (full rows).
+
+### `bounties:listPosted` (query)
+Args: `{ limit?: number }` (default 50, 1–100). Posted bounties, newest first, as
+`{ _id, _creationTime, title, taskKey, industry, region, specLines, goal, pledged }`.
+No request id, company name, token, gaps, note or AI drafts.
+
+### Draft vs posted
+The `bounties` table holds both. `status: "draft"` rows are AI-written briefs
+(`agent:requestBounty`), visible only to the owner via `agent:latestBounty`.
+`status: "posted"` rows come only from `bounties:post` and are the only ones on the board.
+
+## For the AI teammate (agent functions)
+The agent from `feature/agent` is merged with these changes:
+- Every public `agent:*` function now takes `{ requestId, clientToken, ... }` and rejects a
+  wrong token with `"Draft not found"`. The page must pass the draft token it already holds.
+- `agent:requestContext` strips `clientToken` before the request is sent to Claude.
+- `ai:hello` and `ai:runEvals` are internal: run them with `npx convex run ai:hello`.
+- AI-written bounties are saved as private drafts (`status: "draft"`, `source: "ai"`).
+- Failed runs (`spec`, `recommend`, `bounty`) are logged to `agentRuns` with `ok: false`.
+  There is no per-request job status yet, so the page cannot yet tell "still running" from
+  "failed".
+- Nothing in the page triggers AI calls; each trigger must be a deliberate user action.
+- `ANTHROPIC_API_KEY` belongs in Convex env vars (`npx convex env set`), never in files.
+  Without it, AI actions fail and are logged; nothing else is affected.

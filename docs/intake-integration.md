@@ -10,7 +10,9 @@ own additions are marked `RIVET-BACKEND`.
 |---|---|
 | Step 1 **Continue**, or a stepper jump forward from step 1 | first time `requests:create`, afterwards `requests:updateIntake` (only if something changed) |
 | Step 2 **See automation opportunities**, or a stepper jump forward from step 2 | `requests:saveFollowUps` (only if at least one answer was picked and something changed) |
-| Page load | `requests:getDraft` with the id + token from `localStorage` (`rivet.intake.draft`) |
+| Page load | `requests:getDraft` and `bounties:getMine` with the id + token from `localStorage` (`rivet.intake.draft`) |
+| Step 5 **Post bounty** | `bounties:post` (after saving the intake if it changed, e.g. "Join the shared program") |
+| Developer **Bounty board** shown | `bounties:listPosted` (at most every 3 s) |
 
 Moving backwards never saves. Leaving step 2 through **Back** does not save answers picked
 since the last save.
@@ -57,7 +59,12 @@ that question are not restored.
   the same id, and updates replace values rather than adding records.
 - **Refresh** restores step 1 and the answers. A stored draft whose token is rejected (or whose record
   is gone) is forgotten. If the backend is unreachable the blank form is shown and the draft is kept.
-- **Not saved yet**: steps 3–5 (filters, vendor contacts, bounty, pledge) and the whole Developer side.
+- **Bounty (step 5)**: **Post bounty** saves via `bounties:post`; the posted view appears only after
+  Convex confirms. "Edit my pledge" re-posts and updates the same bounty. Refresh restores it.
+- **Developer board** loads posted bounties when shown and labels every card: *sample*,
+  *saved demo submission*, or *your saved demo submission*.
+- **Not saved yet**: search filters, vendor contacts, invites, and the Developer profile, claim,
+  milestones and delivery.
 
 ## Run it locally (fictional data only)
 ```sh
@@ -87,4 +94,5 @@ npm run check:frontend # every page's scripts compile, alone and together
 npm run e2e:local      # needs `npx convex dev`; live API checks incl. token rejection
 npm run e2e:browser    # needs `npx convex dev` and Google Chrome; full Client + Developer journey
 ```
-`e2e:local` and `e2e:browser` leave fictional rows in the local dev database.
+`e2e:local` and `e2e:browser` leave fictional rows in the local dev database, and those test
+bounties appear on the Developer board. Reset the local database before a demo.
