@@ -42,3 +42,11 @@ export function suggestBounty(yearlyNetSavings: number): number {
   if (yearlyNetSavings <= 0) return 0;
   return Math.round((yearlyNetSavings * 0.3) / 100) * 100;
 }
+
+// The yearly cost of this task at which the robot pays for itself within
+// `months`. Lets the agent say "this only pays off if mowing costs you over $X".
+export function breakEvenAnnualCost(input: Omit<RoiInput, "currentAnnualCost">, months = 24): number | null {
+  if (input.automationShare <= 0) return null;
+  const neededNetSavings = (input.robotPrice * 12) / months;
+  return Math.round((neededNetSavings + input.yearlyOpex) / input.automationShare);
+}
