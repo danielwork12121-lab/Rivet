@@ -17,9 +17,14 @@ export const LIMITS = {
   profileText: 50,
   headcount: 10_000,
   maxHourlyCost: 10_000,
+  followUpCount: 10,
+  question: 500,
+  answerLabel: 200,
+  unit: 30,
 } as const;
 
 const CLIENT_TOKEN = /^[A-Za-z0-9_-]{8,100}$/;
+const ANSWER_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,49}$/;
 
 export type CostInfo = {
   currency: string;
@@ -144,4 +149,44 @@ export function validateRequestInput(input: RequestInput): RequestInput {
     ...(input.profile ? { profile: validateProfile(input.profile) } : {}),
     ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
   };
+}
+
+export type FollowUpAnswer = {
+  key: string;
+  question: string;
+  answerLabel: string;
+  assumption?: { value: number; unit?: string };
+};
+
+/** Validates a full set of follow-up answers; returns a trimmed copy or throws. */
+export function validateFollowUps(answers: FollowUpAnswer[]): FollowUpAnswer[] {
+  if (answers.length > LIMITS.followUpCount) {
+    throw new ConvexError(`At most ${LIMITS.followUpCount} follow-up answers allowed`);
+  }
+  const seen = new Set<string>();
+  return answers.map((a) => {
+    if (!ANSWER_KEY.test(a.key)) {
+      throw new ConvexError(
+        "followUps.key must start with a letter and use only letters, digits, '-' or '_' (max 50)",
+      );
+    }
+    if (seen.has(a.key)) throw new ConvexError(`followUps has a duplicate key: ${a.key}`);
+    seen.add(a.key);
+    const out: FollowUpAnswer = {
+      key: a.key,
+      question: requireText("followUps.question", a.question, LIMITS.question),
+      answerLabel: requireText("followUps.answerLabel", a.answerLabel, LIMITS.answerLabel),
+    };
+    if (a.assumption) {
+      if (!Number.isFinite(a.assumption.value)) {
+        throw new ConvexError("followUps.assumption.value must be a finite number");
+      }
+      const unit =
+        a.assumption.unit === undefined
+          ? undefined
+          : requireText("followUps.assumption.unit", a.assumption.unit, LIMITS.unit);
+      out.assumption = { value: a.assumption.value, ...(unit ? { unit } : {}) };
+    }
+    return out;
+  });
 }

@@ -96,7 +96,7 @@ describe("friendlyError", () => {
   });
 });
 
-describe("createRequest / getRequest with a fake client", () => {
+describe("network calls with a fake client", () => {
   beforeEach(() => api()._setClient(null));
 
   it("resolves with the id only after the mutation resolves", async () => {
@@ -117,33 +117,127 @@ describe("createRequest / getRequest with a fake client", () => {
     await expect(api().createRequest({})).rejects.toThrow("Failed to fetch");
   });
 
-  it("getRequest passes the id and returns null for unknown ids", async () => {
+  it("draft calls send id + token to the token-protected functions", async () => {
+    const mutation = vi.fn().mockResolvedValue("id1");
+    const query = vi.fn().mockResolvedValue({ _id: "id1" });
+    api()._setClient({ mutation, query });
+    await api().getDraft("id1", "tok-12345678");
+    expect(query).toHaveBeenCalledWith("requests:getDraft", { id: "id1", clientToken: "tok-12345678" });
+    await api().updateIntake("id1", "tok-12345678", { title: "t" });
+    expect(mutation).toHaveBeenCalledWith("requests:updateIntake", { id: "id1", clientToken: "tok-12345678", title: "t" });
+    await api().saveFollowUps("id1", "tok-12345678", { answers: [], complete: false });
+    expect(mutation).toHaveBeenCalledWith("requests:saveFollowUps", { id: "id1", clientToken: "tok-12345678", answers: [], complete: false });
+  });
+
+  it("never calls the legacy public requests:get / requests:list", async () => {
     const query = vi.fn().mockResolvedValue(null);
-    api()._setClient({ mutation: vi.fn(), query });
-    expect(await api().getRequest("abc")).toBeNull();
-    expect(query).toHaveBeenCalledWith("requests:get", { id: "abc" });
+    api()._setClient({ mutation: vi.fn().mockResolvedValue("x"), query });
+    expect(api()).not.toHaveProperty("getRequest");
+    await api().getDraft("a", "b");
+    expect(query.mock.calls.map((c) => c[0])).toEqual(["requests:getDraft"]);
   });
 });
 
-describe("storage helpers", () => {
-  it("round-trips the saved id", () => {
+describe("draft errors", () => {
+  it("recognises the backend's draft-not-found error and explains it", () => {
+    const e = { data: "Draft not found" };
+    expect(api().isDraftMissing(e)).toBe(true);
+    expect(api().isDraftMissing({ data: "title must not be empty" })).toBe(false);
+    expect(api().isDraftMissing(new TypeError("Failed to fetch"))).toBe(false);
+    expect(api().friendlyError(e)).toMatch(/could not be found/);
+  });
+});
+
+describe("follow-up mapping", () => {
+  const QUESTIONS = [
+    { key: "slope", q: "Slopes?", opts: [["Very few", 15], ["Some", 20], ["A lot of them", 28]] },
+    { key: "obstacles", q: "Obstacles?", opts: [["Mostly open", 1], ["Mixed", .85], ["Lots of obstacles", .7]] },
+    { key: "weeks", q: "Weeks?", opts: [["About 26", 26], ["About 32", 32], ["Most of the year (45)", 45]] },
+  ];
+  const defaults = { slope: 20, obstacles: .85, weeks: 32 };
+
+  it("never sends untouched defaults: nothing answered -> nothing saved", () => {
+    expect(api().followUpsFromState({ answers: defaults, answered: 0 }, QUESTIONS)).toEqual({ answers: [], complete: false });
+  });
+
+  it("sends only the answered prefix, with raw label, key and assumption separate", () => {
+    const f = api().followUpsFromState({ answers: { ...defaults, slope: 28 }, answered: 1 }, QUESTIONS);
+    expect(f).toEqual({
+      answers: [{ key: "slope", question: "Slopes?", answerLabel: "A lot of them", assumption: { value: 28, unit: "degrees" } }],
+      complete: false,
+    });
+  });
+
+  it("gives the obstacle multiplier no unit and marks a full set complete", () => {
+    const f = api().followUpsFromState({ answers: { slope: 15, obstacles: .7, weeks: 45 }, answered: 3 }, QUESTIONS);
+    expect(f.complete).toBe(true);
+    expect(f.answers[1]).toEqual({ key: "obstacles", question: "Obstacles?", answerLabel: "Lots of obstacles", assumption: { value: .7 } });
+    expect(f.answers[2].assumption).toEqual({ value: 45, unit: "weeks per year" });
+  });
+
+  it("restores saved answers by raw label, in question order", () => {
+    const saved = [
+      { key: "weeks", question: "Weeks?", answerLabel: "About 26", assumption: { value: 26, unit: "weeks per year" } },
+      { key: "slope", question: "Slopes?", answerLabel: "Some", assumption: { value: 20, unit: "degrees" } },
+      { key: "obstacles", question: "Obstacles?", answerLabel: "Mixed", assumption: { value: .85 } },
+    ];
+    expect(api().followUpsToState(saved, QUESTIONS)).toEqual({ answers: { slope: 20, obstacles: .85, weeks: 26 }, answered: 3 });
+  });
+
+  it("stops restoring at the first unknown label or gap, and ignores unknown keys", () => {
+    const saved = [
+      { key: "slope", question: "Slopes?", answerLabel: "Some" },
+      { key: "obstacles", question: "Obstacles?", answerLabel: "Renamed option" },
+      { key: "weeks", question: "Weeks?", answerLabel: "About 26" },
+      { key: "colour", question: "?", answerLabel: "Blue" },
+    ];
+    expect(api().followUpsToState(saved, QUESTIONS)).toEqual({ answers: { slope: 20 }, answered: 1 });
+    expect(api().followUpsToState(undefined, QUESTIONS)).toEqual({ answers: {}, answered: 0 });
+  });
+
+  it("round-trips: save -> restore -> save gives the same payload", () => {
+    const state = { answers: { slope: 28, obstacles: 1, weeks: 32 }, answered: 3 };
+    const saved = api().followUpsFromState(state, QUESTIONS);
+    const restored = api().followUpsToState(saved.answers, QUESTIONS);
+    expect(api().followUpsFromState({ answers: { ...defaults, ...restored.answers }, answered: restored.answered }, QUESTIONS)).toEqual(saved);
+  });
+});
+
+describe("draft storage", () => {
+  const memoryStorage = () => {
     const store = new Map<string, string>();
     (globalThis as any).localStorage = {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
       removeItem: (k: string) => void store.delete(k),
     };
-    expect(api().loadSavedId()).toBeNull();
-    api().saveId("abc");
-    expect(api().loadSavedId()).toBe("abc");
-    api().clearSavedId();
-    expect(api().loadSavedId()).toBeNull();
+    return store;
+  };
+
+  it("round-trips id and token", () => {
+    memoryStorage();
+    expect(api().loadDraft()).toBeNull();
+    api().saveDraft("abc", "tok-12345678");
+    expect(api().loadDraft()).toEqual({ id: "abc", token: "tok-12345678" });
+    api().clearDraft();
+    expect(api().loadDraft()).toBeNull();
+  });
+
+  it("discards the legacy id-only key and malformed values", () => {
+    const store = memoryStorage();
+    store.set("rivet.intake.requestId", "old-id");
+    expect(api().loadDraft()).toBeNull();
+    expect(store.has("rivet.intake.requestId")).toBe(false);
+    store.set("rivet.intake.draft", "{not json");
+    expect(api().loadDraft()).toBeNull();
+    store.set("rivet.intake.draft", JSON.stringify({ id: "x" }));
+    expect(api().loadDraft()).toBeNull();
   });
 
   it("never throws when storage is blocked", () => {
     (globalThis as any).localStorage = new Proxy({}, { get() { throw new Error("blocked"); } });
-    expect(() => { api().saveId("x"); api().clearSavedId(); }).not.toThrow();
-    expect(api().loadSavedId()).toBeNull();
+    expect(() => { api().saveDraft("x", "y"); api().clearDraft(); }).not.toThrow();
+    expect(api().loadDraft()).toBeNull();
   });
 });
 

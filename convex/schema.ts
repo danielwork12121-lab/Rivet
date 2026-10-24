@@ -20,6 +20,18 @@ export const profileInfo = v.object({
   visibility: v.union(v.literal("shared"), v.literal("anonymous")),
 });
 
+// One answered follow-up question. Three kinds of data, kept apart on purpose:
+// - key: stable identifier for the question (frontend vocabulary, e.g. "slope")
+// - question / answerLabel: exactly what the user saw and picked (the raw answer)
+// - assumption: the frontend's illustrative number for that pick. It is NOT a
+//   measurement or an engineering threshold; unit is omitted when it has none.
+export const followUpAnswer = v.object({
+  key: v.string(),
+  question: v.string(),
+  answerLabel: v.string(),
+  assumption: v.optional(v.object({ value: v.number(), unit: v.optional(v.string()) })),
+});
+
 export default defineSchema({
   // A problem submitted by an infrastructure operator.
   operatorRequests: defineTable({
@@ -32,6 +44,10 @@ export default defineSchema({
     // Client-generated id that makes retries safe: create() with a token that
     // already exists returns the existing request instead of inserting again.
     clientToken: v.optional(v.string()),
+    // Only questions the user actually answered; never the page's defaults.
+    followUps: v.optional(v.array(followUpAnswer)),
+    followUpsComplete: v.optional(v.boolean()),
+    updatedAt: v.optional(v.number()), // ms since epoch, set on every edit after creation
     status: v.union(v.literal("submitted"), v.literal("specified")),
   })
     .index("by_status", ["status"])

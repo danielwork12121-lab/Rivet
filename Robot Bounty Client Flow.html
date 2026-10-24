@@ -272,9 +272,10 @@ const S = {
   pledgePct: 30,
   posted: false,
   invited: false,
-  // Backend save state for the step 1 intake (see submitIntake). Follow-up answers,
-  // search filters and the bounty are NOT saved yet.
-  submit: { status: "idle", id: null, fp: "", attemptFp: "", token: "", error: "", errorFp: "" },
+  // RIVET-BACKEND: save state. One draft request per browser: created on the first
+  // step 1 save, then updated in place. Steps 3-5 and the Developer side are NOT saved yet.
+  submit: { status: "idle", id: null, token: "", fp: "", error: "", errorFp: "" },
+  answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
 };
 
 // ---------- Math (deterministic) ----------
@@ -373,50 +374,102 @@ function bindIntake() {
   $("#next").onclick = () => submitIntake(1);
 }
 
-// Save the step 1 intake to Convex before moving on. Success is only shown after
-// Convex confirms the write. See js/rivet-api.js for the field mapping.
+// RIVET-BACKEND: save to Convex before moving on. Success is only shown after Convex
+// confirms the write. Field mapping and network calls live in js/rivet-api.js.
 const fingerprint = () => JSON.stringify(RivetApi.intakeToRequest(S));
-function intakeStatus() {
-  const u = S.submit;
-  if (u.status === "error" && u.errorFp === fingerprint()) return `<div class="notice" role="alert" style="flex:1 1 220px;align-self:center">${esc(u.error)}</div>`;
-  if (u.id && u.fp === fingerprint()) return `<span class="hint" style="flex:1 1 220px;align-self:center" role="status">Saved to Rivet \u00b7 ref ${esc(u.id.slice(-6))}</span>`;
+const answersFp = () => JSON.stringify(RivetApi.followUpsFromState(S, QUESTIONS));
+const statusSlot = "flex:1 1 220px;align-self:center";
+function saveStatus(st, fp, savedText) {
+  if (st.status === "error" && st.errorFp === fp) return `<div class="notice" role="alert" style="${statusSlot}">${esc(st.error)}</div>`;
+  if (savedText && st.fp === fp) return `<span class="hint" style="${statusSlot}" role="status">${savedText}</span>`;
   return "";
+}
+function intakeStatus() {
+  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
+}
+function answersStatus() {
+  return saveStatus(S.answersSave, answersFp(), S.submit.id && S.answered > 0 && "Answers saved");
+}
+// The saved draft is gone (e.g. local database reset): forget it so the next save creates a new one.
+function resetDraft() {
+  Object.assign(S.submit, { id: null, token: "", fp: "" });
+  S.answersSave.fp = "";
+  RivetApi.clearDraft();
 }
 async function submitIntake(target) {
   const u = S.submit;
   if (u.status === "saving") return; // repeated clicks
   const args = RivetApi.intakeToRequest(S), fp = JSON.stringify(args);
   const problem = RivetApi.precheck(S);
-  if (problem) { u.status = "error"; u.error = problem; u.errorFp = fp; render(); return; }
+  if (problem) { Object.assign(u, { status: "error", error: problem, errorFp: fp }); render(); return; }
   if (u.id && u.fp === fp) { go(target); return; } // already saved, nothing changed
-  if (u.attemptFp !== fp) { u.token = RivetApi.newClientToken(); u.attemptFp = fp; } // same token on retry => no duplicate
+  if (!u.token) u.token = RivetApi.newClientToken(); // one per draft: a retried create returns the same id
+  const creating = !u.id;
   u.status = "saving"; u.error = ""; render();
   try {
-    const id = await RivetApi.createRequest({ ...args, clientToken: u.token });
-    u.id = id; u.fp = fp; u.status = "saved"; RivetApi.saveId(id);
+    if (creating) {
+      u.id = await RivetApi.createRequest({ ...args, clientToken: u.token });
+      RivetApi.saveDraft(u.id, u.token);
+    } else {
+      await RivetApi.updateIntake(u.id, u.token, args);
+    }
+    u.fp = fp; u.status = "saved";
     if (fingerprint() !== fp) { render(); toast("Saved. You changed something while saving, so press Continue again."); return; }
-    toast("Request saved"); go(target);
+    toast(creating ? "Request saved" : "Changes saved"); go(target);
   } catch (e) {
-    u.status = "error"; u.error = RivetApi.friendlyError(e); u.errorFp = fp; render();
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(u, { status: "error", error: RivetApi.friendlyError(e), errorFp: fp }); render();
   }
 }
-// Client stepper: leaving step 1 forward saves first, like the Continue button.
-function navTo(step) { S.step === 0 && step > 0 ? submitIntake(step) : go(step); }
-// After a refresh, reload the saved request by id and refill the form.
-async function hydrateSaved() {
-  const id = RivetApi.loadSavedId();
-  if (!id) return;
-  const startFp = fingerprint();
+async function submitFollowUps(target) {
+  const a = S.answersSave;
+  if (a.status === "saving") return; // repeated clicks
+  const f = RivetApi.followUpsFromState(S, QUESTIONS), fp = JSON.stringify(f);
+  if (!f.answers.length || a.fp === fp) { go(target); return; } // nothing picked yet, or already saved
+  if (!S.submit.id) {
+    Object.assign(a, { status: "error", error: "Go back to step 1 and press Continue to save your request first.", errorFp: fp }); render(); return;
+  }
+  a.status = "saving"; a.error = ""; render();
   try {
-    const doc = await RivetApi.getRequest(id);
-    if (!doc) { RivetApi.clearSavedId(); return; }
+    await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+    a.fp = fp; a.status = "saved";
+    if (answersFp() !== fp) { render(); toast("Saved. You changed an answer while saving, so press the button again."); return; }
+    toast("Answers saved"); go(target);
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(a, { status: "error", error: RivetApi.friendlyError(e), errorFp: fp }); render();
+  }
+}
+// Client stepper: moving forward out of step 1 or step 2 saves first, like their buttons.
+function navTo(step) {
+  if (S.step === 0 && step > 0) submitIntake(step);
+  else if (S.step === 1 && step > 1) submitFollowUps(step);
+  else go(step);
+}
+// After a refresh, load this browser's draft (id + token from localStorage) and refill
+// step 1 and the follow-up answers.
+async function hydrateSaved() {
+  const d = RivetApi.loadDraft();
+  if (!d) return;
+  const startFp = fingerprint(), startAnswers = answersFp();
+  try {
+    const doc = await RivetApi.getDraft(d.id, d.token);
+    // Keep using this draft even if we don't refill the form: later saves update it.
+    Object.assign(S.submit, { id: d.id, token: d.token });
     const p = RivetApi.requestToIntake(doc);
     if (!p || !Object.hasOwn(COMPANY, p.type) || !REGIONS.includes(p.region)) return;
-    if (S.step !== 0 || fingerprint() !== startFp) return; // user already started editing
+    if (S.role !== "client" || S.step !== 0 || fingerprint() !== startFp || answersFp() !== startAnswers) return; // user already started
     Object.assign(S, p);
-    S.submit = { status: "saved", id, fp: fingerprint(), attemptFp: fingerprint(), token: doc.clientToken || "", error: "", errorFp: "" };
-    render(); toast("Restored your saved request");
-  } catch (e) { /* backend unreachable: keep the blank form; the saved id stays in storage */ }
+    const f = RivetApi.followUpsToState(doc.followUps, QUESTIONS);
+    Object.assign(S.answers, f.answers);
+    S.answered = f.answered;
+    Object.assign(S.submit, { status: "saved", fp: fingerprint() });
+    Object.assign(S.answersSave, { status: "saved", fp: f.answered ? answersFp() : "" });
+    render(); toast(f.answered ? "Restored your saved request and answers" : "Restored your saved request");
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
+    // otherwise the backend is unreachable: keep the blank form and the stored draft
+  }
 }
 
 // Step 2
@@ -449,14 +502,14 @@ function screenFollowups() {
       <p class="muted" style="font-size:.82rem">The AI only reads your answers. The ROI math in the next step is a fixed formula you can check.</p>
     </div>
   </div>
-  <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length ? "disabled" : ""}>See automation opportunities</button></div>`;
+  <div class="actions">${answersStatus()}<button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length || S.answersSave.status === "saving" ? "disabled" : ""}>${S.answersSave.status === "saving" ? "Saving\u2026" : "See automation opportunities"}</button></div>`;
 }
 function bindFollowups() {
   document.querySelectorAll(".chip[data-q]").forEach(b => b.onclick = () => {
     const i = +b.dataset.q; S.answers[QUESTIONS[i].key] = +b.dataset.v; S.answered = Math.max(S.answered, i + 1); render();
   });
   $("#back").onclick = () => go(0);
-  $("#next").onclick = () => go(2);
+  $("#next").onclick = () => submitFollowUps(2); // RIVET-BACKEND: save answers first
 }
 
 // Step 3

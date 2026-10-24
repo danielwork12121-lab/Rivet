@@ -130,6 +130,10 @@ const setVal = (sel, v) =>
 const click = (sel) => `document.querySelector(${JSON.stringify(sel)}).click()`;
 const onStep = (n) => `S.role === "client" && S.step === ${n}`;
 const stepper = (n) => `document.querySelectorAll("#steps button")[${n}].click()`;
+const clearToast = `document.querySelector("#toast").textContent = ""`;
+const toastSaysSaved = `/saved/i.test(document.querySelector("#toast").textContent)`;
+// Make every Convex call from the page fail as if the network dropped.
+const breakNetwork = `RivetApi._setClient({ mutation: () => Promise.reject(new TypeError("Failed to fetch")), query: () => Promise.reject(new TypeError("Failed to fetch")) })`;
 const noticeHas = (text) => `(document.querySelector(".notice")?.textContent ?? "").includes(${JSON.stringify(text)})`;
 
 // ---- scenarios ----------------------------------------------------------------------
@@ -157,13 +161,20 @@ async function main() {
     check("three clicks stored exactly one request", rowsFor(company).length === 1, `rows=${rowsFor(company).length}`);
 
     // 2. Client navigation through all five steps
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 3; i++) { // first option each time: "Very few", "Mostly open", "About 26"
       await tab.ev(`document.querySelector('.chip[data-q="${i}"]').click()`);
       await sleep(50);
     }
     check("answering all follow-ups enables the next button", await tab.ev(`!document.querySelector("#next").disabled`));
     await tab.ev(click("#next"));
-    check("follow-ups -> opportunities", await tab.waitFor(onStep(2)));
+    check("follow-ups -> opportunities after the answers are saved", await tab.waitFor(onStep(2)));
+    let row = rowsFor(company)[0];
+    check("all three answers stored on the same request, marked complete",
+      row?.followUps?.length === 3 && row.followUpsComplete === true && rowsFor(company).length === 1,
+      JSON.stringify(row?.followUps?.map((a) => a.answerLabel)));
+    check("stored answers keep raw label, stable key and illustrative assumption apart",
+      row?.followUps?.[0]?.key === "slope" && row.followUps[0].answerLabel === "Very few" &&
+      row.followUps[0].assumption?.unit === "degrees" && !("unit" in (row.followUps[1].assumption ?? {})));
     await tab.ev(click("[data-bounty]"));
     check("opportunities -> request a bounty", await tab.waitFor(`${onStep(4)} && !!document.querySelector("#post")`));
     await tab.ev(click("#post"));
@@ -173,6 +184,17 @@ async function main() {
       check(`client stepper opens step ${n + 1}`, await tab.waitFor(onStep(n)));
     }
     check("revisiting a saved, unchanged intake via the stepper adds no request", rowsFor(company).length === 1);
+    await tab.ev(stepper(0));
+    await tab.waitFor(onStep(0));
+    await tab.ev(setVal("#f-wage", "31"));
+    await tab.ev(clearToast);
+    await tab.ev(click("#next"));
+    check("editing a saved intake and continuing succeeds", await tab.waitFor(`${onStep(1)} && /Changes saved/.test(document.querySelector("#toast").textContent)`));
+    row = rowsFor(company)[0];
+    check("...updates the same record: still exactly one request", rowsFor(company).length === 1 && row.profile.hourlyLaborCost === 31, `rows=${rowsFor(company).length}`);
+    check("...and keeps its follow-up answers", row.followUps?.length === 3);
+    await tab.ev(stepper(4));
+    await tab.waitFor(onStep(4));
 
     // 3. Developer role, all screens, and back
     await tab.ev(`document.querySelector('#role [data-role="dev"]').click()`);
@@ -198,6 +220,36 @@ async function main() {
     await tab.reload();
     check("after a refresh the intake is restored", await tab.waitFor(`document.querySelector("#f-name")?.value === ${JSON.stringify(company)}`));
     check("restored intake shows the saved confirmation", await tab.waitFor(`document.body.innerText.includes("Saved to Rivet")`));
+    check("after a refresh the edited value is shown", await tab.ev(`document.querySelector("#f-wage").value === "31"`));
+    check("after a refresh all follow-up answers are restored", await tab.waitFor(`S.answered === 3 && S.answers.slope === 15 && S.answers.obstacles === 1 && S.answers.weeks === 26`));
+    await tab.ev(stepper(1));
+    check("restored answers show as selected on the follow-up screen",
+      await tab.waitFor(`${onStep(1)} && document.querySelectorAll('.chip[data-q][aria-pressed="true"]').length === 3 && document.body.innerText.includes("Answers saved")`));
+    // Follow-up save failure: error, no success, nothing changed
+    await tab.ev(breakNetwork);
+    await tab.ev(`document.querySelector('.chip[data-q="2"][data-v="45"]').click()`);
+    await tab.ev(clearToast);
+    await tab.ev(click("#next"));
+    check("a failed answer save shows an error and stays on follow-ups", await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && ${onStep(1)}`));
+    check("...with no success message and the stored answer unchanged",
+      !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].followUps[2].answerLabel === "About 26");
+    // Intake update failure: same guarantees
+    await tab.ev(click("#back"));
+    await tab.waitFor(onStep(0));
+    await tab.ev(setVal("#f-wage", "44"));
+    await tab.ev(clearToast);
+    await tab.ev(click("#next"));
+    check("a failed intake update shows an error and stays on step 1", await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && ${onStep(0)}`));
+    check("...with no success message and the stored record unchanged",
+      !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].profile.hourlyLaborCost === 31 && rowsFor(company).length === 1);
+    const realDraft = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`));
+    await tab.close();
+
+    // Wrong token: the draft is not shown and is forgotten
+    tab = await open(`${FRESH} localStorage.setItem("rivet.intake.draft", JSON.stringify({ id: ${JSON.stringify(realDraft.id)}, token: "not-the-right-token" }));`);
+    check("a stored draft with a wrong token is rejected and forgotten",
+      await tab.waitFor(`localStorage.getItem("rivet.intake.draft") === null`));
+    check("...and none of its data is shown", await tab.ev(`document.querySelector("#f-name").value !== ${JSON.stringify(company)} && !document.body.innerText.includes("Saved to Rivet")`));
     await tab.close();
 
     // 5. Leaving step 1 through the stepper saves first
@@ -207,6 +259,15 @@ async function main() {
     await tab.ev(stepper(3));
     check("stepper jump from step 1 saves, then lands on the chosen step", await tab.waitFor(onStep(3)));
     check("...with exactly one request", rowsFor(company2).length === 1);
+    await tab.ev(stepper(1));
+    await tab.waitFor(onStep(1));
+    await tab.ev(`document.querySelector('.chip[data-q="0"][data-v="28"]').click()`);
+    await tab.ev(stepper(3));
+    check("leaving follow-ups early through the stepper saves first", await tab.waitFor(onStep(3)));
+    const partial = rowsFor(company2)[0];
+    check("only the one answered question is stored, never the defaults",
+      partial?.followUps?.length === 1 && partial.followUps[0].key === "slope" && partial.followUps[0].answerLabel === "A lot of them" && partial.followUpsComplete === false,
+      JSON.stringify(partial?.followUps));
     await tab.close();
 
     // 6. Empty description: error, no save, no success
