@@ -8,7 +8,13 @@
 // falls back to its built-in static copy — the page still works either way.
 
 const MODEL = "claude-opus-5-5"; // matches convex/ai.ts
-const TIMEOUT_MS = 12000;
+// Vercel's default function timeout (10s on Hobby) was shorter than our old
+// 12s AbortController, so Vercel could kill the function before our own
+// timeout/error-handling ever ran, leaving the frontend with a bare failed
+// fetch and no clean error — that's the intermittent "Rivet AI is unavailable"
+// behavior. vercel.json now sets maxDuration: 30 for this function; keep this
+// value comfortably under that so we always get to return our own JSON error.
+const TIMEOUT_MS = 25000;
 
 const SYSTEM_PROMPTS = {
   // First message: the operator just described a job. The app's own form asks

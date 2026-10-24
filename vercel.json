@@ -3,6 +3,11 @@
   "buildCommand": null,
   "outputDirectory": ".",
   "framework": null,
+  "functions": {
+    "api/chat.js": {
+      "maxDuration": 30
+    }
+  },
   "git": {
     "deploymentEnabled": {
       "integration/agent": false
