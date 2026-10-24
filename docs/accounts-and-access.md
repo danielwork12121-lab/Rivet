@@ -125,6 +125,10 @@ deployment). It creates two fictional users with `+clerk_test` emails (Clerk acc
 code `424242` for those and sends no mail) and makes no AI calls. Delete the `rivet.e2e.*`
 users in the Clerk Dashboard afterwards.
 
+- `HEADED=1 npm run e2e:clerk:video` checks the video endpoint's authorization with real Clerk
+  sessions against the same isolated deployment (anonymous 401, Developer 403, disabled 503,
+  malformed 400, Client 200 x3, then 429), with only Gemini stubbed. It sets a fresh random
+  `RIVET_SERVER_SECRET` on that deployment.
 - It needs a normal (windowed) Chrome. This instance has **Clerk Protect** on; its bot check
   ("Verifying your request") never finishes in headless Chrome, so sign-up stalls there.
 - Sign-in and sign-up use Clerk's **Future API** (`__internal_future`) and load the **`@clerk/ui`**
