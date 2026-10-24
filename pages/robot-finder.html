@@ -88,9 +88,10 @@
   <div id="picks" style="display:grid; gap:14px"></div>
 </main>
 
+<script src="../js/rivet-config.js"></script>
 <script src="../js/rivet-api.js"></script>
 <script>
-  // Set window.RIVET_CONVEX_URL before rivet-api.js to point at a cloud deployment.
+  // The backend URL comes from js/rivet-config.js.
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
