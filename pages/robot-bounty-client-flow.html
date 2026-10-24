@@ -1,0 +1,993 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Robot Bounty Client Flow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: work-order style. Sticky step bar on top, one screen per step, filter rail + results on search. */
+:root {
+  --bg: #F3F5EF;
+  --surface: #FFFFFF;
+  --sunk: #E8ECE2;
+  --ink: #18241C;
+  --muted: #5B6A5F;
+  --line: #CDD5C8;
+  --accent: #1E5B3A;
+  --accent-ink: #FFFFFF;
+  --hivis: #F0B400;
+  --hivis-ink: #1B1A12;
+  --good: #1E7A45;
+  --warn: #A86500;
+  --bad: #B23A2E;
+  --good-bg: #E1F1E6;
+  --warn-bg: #FBEFD6;
+  --bad-bg: #F8E1DE;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111813; --surface: #18211B; --sunk: #202B23; --ink: #E6ECE4; --muted: #9AAA9E; --line: #304035;
+    --accent: #5FBF86; --accent-ink: #0D1A12; --hivis: #F3C230; --hivis-ink: #1B1A12;
+    --good: #6CCB91; --warn: #E8B04A; --bad: #EE8A7E; --good-bg: #1C3325; --warn-bg: #362B12; --bad-bg: #3A1F1B;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111813; --surface: #18211B; --sunk: #202B23; --ink: #E6ECE4; --muted: #9AAA9E; --line: #304035;
+  --accent: #5FBF86; --accent-ink: #0D1A12; --hivis: #F3C230; --hivis-ink: #1B1A12;
+  --good: #6CCB91; --warn: #E8B04A; --bad: #EE8A7E; --good-bg: #1C3325; --warn-bg: #362B12; --bad-bg: #3A1F1B;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: .01em; line-height: 1.1; text-wrap: balance; margin: 0; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.2rem; }
+p { margin: 0; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.muted { color: var(--muted); }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+/* Top bar */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top-inner { max-width: 1120px; margin: 0 auto; padding-block: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 1.35rem; font-weight: 700; }
+.brand-mark { width: 28px; height: 28px; border-radius: 6px; background: var(--hivis); color: var(--hivis-ink); display: grid; place-items: center; font-size: .95rem; }
+.sample-tag { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; padding: 2px 8px; border-radius: 99px; background: var(--warn-bg); color: var(--warn); }
+.steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; overflow-x: auto; flex: 1 0 auto; max-width: 100%; min-width: 0; }
+.steps button { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: .85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.steps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.steps button .n { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid currentColor; display: grid; place-items: center; font-size: .72rem; font-family: var(--mono); }
+.steps button[aria-current="step"] { color: var(--ink); background: var(--sunk); }
+.steps button[aria-current="step"] .n { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.steps button.done .n { background: var(--sunk); }
+
+main { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px; }
+.screen-head { display: grid; gap: 6px; margin-bottom: 22px; max-width: 70ch; }
+
+/* Generic pieces */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; align-items: start; }
+.stack { display: grid; gap: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.field { display: grid; gap: 5px; }
+.field label { font-size: .85rem; font-weight: 600; }
+.field .hint { font-size: .78rem; color: var(--muted); }
+input[type="text"], input[type="number"], select, textarea {
+  font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%;
+}
+textarea { min-height: 96px; resize: vertical; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.fields3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.btn { font: inherit; font-weight: 600; cursor: pointer; border-radius: 6px; padding: 9px 16px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.btn:hover { background: var(--sunk); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.hivis { background: var(--hivis); border-color: var(--hivis); color: var(--hivis-ink); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.small { padding: 6px 12px; font-size: .85rem; }
+.link { all: unset; cursor: pointer; color: var(--accent); font-weight: 600; font-size: .88rem; text-decoration: underline; text-underline-offset: 3px; }
+.link:focus-visible { outline: 2px solid var(--accent); }
+.chip { font: inherit; font-size: .85rem; cursor: pointer; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: .74rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.plain { background: var(--sunk); color: var(--muted); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { all: unset; cursor: pointer; padding: 7px 14px; font-weight: 600; font-size: .88rem; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Intake */
+.voice { display: flex; gap: 12px; align-items: center; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--bg); }
+.mic { width: 42px; height: 42px; border-radius: 50%; border: none; background: var(--hivis); color: var(--hivis-ink); cursor: pointer; display: grid; place-items: center; flex: none; }
+.mic:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mic svg { width: 20px; height: 20px; }
+.radio-card { display: flex; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; align-items: flex-start; }
+.radio-card:has(input:checked) { border-color: var(--accent); background: var(--good-bg); }
+.radio-card input { margin-top: 3px; accent-color: var(--accent); }
+
+/* Chat */
+.chat { display: grid; gap: 12px; }
+.msg { max-width: 560px; padding: 10px 14px; border-radius: 12px; }
+.msg.ai { background: var(--surface); border: 1px solid var(--line); border-top-left-radius: 3px; }
+.msg.me { background: var(--accent); color: var(--accent-ink); justify-self: end; border-top-right-radius: 3px; }
+.msg .who { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 2px; opacity: .75; }
+.assump { display: grid; gap: 8px; }
+.assump div { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px dotted var(--line); font-size: .9rem; }
+
+/* Opportunities */
+.opps { display: grid; gap: 14px; }
+.opp { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px 24px; align-items: center; }
+.opp-stats { display: grid; grid-template-columns: repeat(3, minmax(92px, auto)); gap: 18px; text-align: right; }
+.opp-stats .v { font-family: var(--mono); font-size: 1.15rem; font-weight: 500; }
+.bar { height: 8px; border-radius: 99px; background: var(--sunk); overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+@media (max-width: 720px) { .opp { grid-template-columns: 1fr; } .opp-stats { text-align: left; grid-template-columns: repeat(3, 1fr); } }
+
+/* Search */
+.search { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 22px; align-items: start; }
+@media (max-width: 820px) { .search { grid-template-columns: 1fr; } }
+.filters { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 72px); }
+@media (max-width: 820px) { .filters { position: static; } }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.results { display: grid; gap: 12px; }
+.prod { display: grid; gap: 10px; }
+.prod-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
+.prod-figs { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+.prod-figs div { display: grid; }
+.prod-figs .v { font-family: var(--mono); font-weight: 500; }
+.why { font-size: .9rem; padding: 8px 12px; background: var(--good-bg); color: var(--ink); border-radius: 6px; }
+.why b { color: var(--good); }
+.ruled { font-size: .88rem; padding: 8px 12px; background: var(--bad-bg); border-radius: 6px; }
+.contact { font-family: var(--mono); font-size: .85rem; padding: 8px 12px; background: var(--sunk); border-radius: 6px; user-select: all; }
+.rank { font-family: var(--display); font-size: 1.6rem; color: var(--muted); line-height: 1; }
+.empty { padding: 28px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); }
+
+/* Bounty */
+.spec { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.pledge-big { font-family: var(--mono); font-size: 2rem; font-weight: 500; }
+.progress { height: 14px; border-radius: 99px; background: var(--sunk); overflow: hidden; display: flex; }
+.progress .others { background: var(--accent); }
+.progress .mine { background: var(--hivis); }
+.backers { display: grid; gap: 0; }
+.backer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.backer:last-child { border-bottom: none; }
+.callout { padding: 14px 16px; border-radius: 8px; background: var(--warn-bg); display: grid; gap: 4px; }
+.notice { padding: 12px 14px; border-radius: 8px; background: var(--bad-bg); font-size: .9rem; }
+.bounty-hero { display: grid; gap: 14px; }
+.bounty-stats { display: flex; flex-wrap: wrap; gap: 14px 32px; }
+.bounty-stats .v { font-family: var(--mono); font-size: 1.4rem; font-weight: 500; }
+
+/* Developer side */
+.role button[aria-pressed="true"] { background: var(--hivis); color: var(--hivis-ink); }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: .76rem; padding: 2px 8px; border-radius: 4px; background: var(--sunk); color: var(--ink); }
+.tag.have { background: var(--good-bg); color: var(--good); }
+.tag.miss { background: var(--bad-bg); color: var(--bad); }
+.status { padding: 12px 14px; border-radius: 8px; display: grid; gap: 2px; font-size: .9rem; }
+.status.good { background: var(--good-bg); }
+.status.warn { background: var(--warn-bg); }
+.status b { font-family: var(--display); font-size: 1.15rem; letter-spacing: .01em; }
+.ms { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.ms:last-child { border-bottom: none; }
+.ms .dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: .75rem; font-family: var(--mono); color: var(--muted); }
+.ms.done .dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ms.next .dot { border-color: var(--hivis); color: var(--ink); }
+.update { display: grid; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: .9rem; }
+.update:last-child { border-bottom: none; }
+.check { display: flex; gap: 8px; align-items: center; font-size: .88rem; }
+.check input { accent-color: var(--accent); }
+
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: .9rem; z-index: 20; max-width: calc(100% - 32px); }
+@media (prefers-reduced-motion: no-preference) { .screen { animation: in .18s ease-out; } @keyframes in { from { transform: translateY(4px); } to { transform: none; } } }
+</style>
+
+<header class="top gutter">
+  <div class="top-inner">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">RB</span>Robot Bounty <span class="sample-tag">Prototype · sample data</span></div>
+    <div class="seg role" id="role" role="group" aria-label="Viewing as"><button data-role="client">Client</button><button data-role="dev">Developer</button></div>
+    <ol class="steps" id="steps"></ol>
+  </div>
+</header>
+<main class="gutter" id="app"></main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+// ---------- Data (all sample / illustrative) ----------
+const COMPANY = {
+  lawn: {
+    label: "Lawn care",
+    name: "Green Acres Lawn Co.",
+    describe: "We mow and treat about 120 residential and small commercial lawns a week around Sacramento. 3 crews of 2 guys. Mowing takes most of the day, then edging and trimming, and we spray fertilizer and weed control on a monthly route.",
+    voice: "So we've got three crews, two guys each. Mowing is like most of the day, edging and trimming after. Once a month we spray fert and weed control on every property. Hardest part is finding people who'll stay the whole season.",
+    tasks: [
+      { id: "mow", robot: "Autonomous mower", name: "Mowing open turf", hours: 22, share: .7, note: "Large flat areas are the easiest work to hand to a robot." },
+      { id: "spray", robot: "Fertilizer spraying robot", name: "Fertilizer and weed spraying", hours: 6, share: .6, note: "Repeatable routes with a known chemical load." },
+      { id: "trim", robot: "Edging and trimming robot", name: "Edging and trimming", hours: 8, share: .25, note: "Close to beds and fences, so robots only cover part of it today." },
+    ],
+  },
+  pest: {
+    label: "Pest control",
+    name: "Valley Shield Pest Control",
+    describe: "We service around 90 homes a week. 3 techs, each solo in a truck. Most of the time goes to perimeter spraying, then crawlspace inspections, and checking rodent bait stations on commercial accounts.",
+    voice: "Three techs, each in their own truck. Perimeter spray is the bulk of it. Crawlspaces are the job nobody wants. Bait stations on the commercial accounts eat a ton of time walking around buildings.",
+    tasks: [
+      { id: "perim", robot: "Perimeter spraying robot", name: "Perimeter spraying", hours: 14, share: .55, note: "Same pattern around every house." },
+      { id: "crawl", robot: "Crawlspace inspection robot", name: "Crawlspace inspection", hours: 5, share: .7, note: "Tight, dirty, and a common source of injuries." },
+      { id: "bait", robot: "Bait station checking robot", name: "Bait station checks", hours: 6, share: .5, note: "Walking routes around commercial buildings." },
+    ],
+  },
+};
+
+const PRODUCTS = [
+  { id: "p1", task: "mow", name: "TurfRover R2", maker: "Sample Robotics Co. A", price: 18500, opex: 1200, share: .7, slope: 20, regions: ["West", "South"], trl: 9 },
+  { id: "p2", task: "mow", name: "Fieldline AutoMow Pro", maker: "Sample Robotics Co. B", price: 32000, opex: 2000, share: .8, slope: 30, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
+  { id: "p3", task: "mow", name: "GreenPath Compact", maker: "Sample Robotics Co. C", price: 6900, opex: 600, share: .4, slope: 15, regions: ["West", "Midwest", "Northeast"], trl: 9 },
+  { id: "p4", task: "trim", name: "EdgeBot E1", maker: "Sample Robotics Co. D", price: 14000, opex: 1500, share: .3, slope: 10, regions: ["West", "South", "Midwest", "Northeast"], trl: 6 },
+  { id: "p5", task: "spray", name: "SprayScout S", maker: "Sample Robotics Co. E", price: 21000, opex: 1800, share: .6, slope: 15, regions: ["West", "South"], trl: 7 },
+  { id: "p6", task: "spray", name: "TankWalker T3", maker: "Sample Robotics Co. F", price: 27500, opex: 2400, share: .65, slope: 25, regions: ["West", "South", "Midwest"], trl: 7 },
+  { id: "p7", task: "perim", name: "PerimeterPro Rover", maker: "Sample Robotics Co. G", price: 24000, opex: 2200, share: .5, slope: 20, regions: ["West", "South", "Midwest", "Northeast"], trl: 7 },
+  { id: "p8", task: "crawl", name: "CrawlEye C2", maker: "Sample Robotics Co. H", price: 9800, opex: 700, share: .7, slope: 35, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
+  { id: "p9", task: "crawl", name: "UnderView Mini", maker: "Sample Robotics Co. I", price: 4200, opex: 300, share: .45, slope: 25, regions: ["South", "Midwest"], trl: 9 },
+];
+
+const QUESTIONS = [
+  { key: "slope", q: "How many of your properties have slopes steeper than about 20°?", opts: [["Very few", 15], ["Some", 20], ["A lot of them", 28]] },
+  { key: "obstacles", q: "Are most sites wide open, or full of beds, toys, fences and other obstacles?", opts: [["Mostly open", 1], ["Mixed", .85], ["Lots of obstacles", .7]] },
+  { key: "weeks", q: "How many weeks a year are your crews out working?", opts: [["About 26", 26], ["About 32", 32], ["Most of the year (45)", 45]] },
+];
+
+const GAPS = ["Too expensive", "Can't handle slopes", "Not sold in my region", "Doesn't do the whole job", "Too slow for my route"];
+
+const STEP_NAMES = ["Describe your work", "AI follow-ups", "Opportunities", "Find robots", "Bounty"];
+
+// ---------- State ----------
+const S = {
+  step: 0,
+  type: "lawn",
+  name: COMPANY.lawn.name,
+  describe: COMPANY.lawn.describe,
+  crews: 3, perCrew: 2, wage: 24, region: "West",
+  visibility: "shared",
+  answers: { slope: 20, obstacles: .85, weeks: 32 },
+  answered: 0,
+  view: "ai",
+  filters: { maxPrice: 35000, maxPayback: 48, task: "all" },
+  contacts: {},
+  bounty: null,
+  gaps: new Set(["Can't handle slopes"]),
+  gapNote: "",
+  pledgePct: 30,
+  posted: false,
+  invited: false,
+};
+
+// ---------- Math (deterministic) ----------
+const money = n => "$" + Math.round(n).toLocaleString("en-US");
+const months = y => isFinite(y) && y > 0 ? Math.round(y * 12) + " mo" : "never";
+const people = () => S.type === "lawn" ? S.crews * S.perCrew : S.crews;
+const tasks = () => COMPANY[S.type].tasks;
+const taskById = id => tasks().find(t => t.id === id);
+function laborCost(t) { return t.hours * S.crews * (S.type === "lawn" ? S.perCrew : 1) * S.answers.weeks * S.wage; }
+function evalProduct(p) {
+  const t = taskById(p.task);
+  const units = S.crews;
+  const upfront = p.price * units;
+  const savings = laborCost(t) * p.share * S.answers.obstacles;
+  const opex = p.opex * units;
+  const net = savings - opex;
+  const payback = net > 0 ? upfront / net : Infinity;
+  const fails = [];
+  if (p.slope < S.answers.slope) fails.push(`Handles slopes up to ${p.slope}°, your sites need about ${S.answers.slope}°`);
+  if (!p.regions.includes(S.region)) fails.push(`Not sold or serviced in the ${S.region}`);
+  if (payback > 5) fails.push(isFinite(payback) ? `Takes about ${Math.round(payback)} years to pay back for a company your size` : "Running costs are higher than the labor it saves");
+  const lo = net * 0.8 > 0 ? upfront / (net * 0.8) : Infinity;
+  const hi = upfront / (net * 1.2);
+  return { p, t, units, upfront, savings, opex, net, payback, fails, lo, hi };
+}
+function productsForMe() { return PRODUCTS.filter(p => tasks().some(t => t.id === p.task)).map(evalProduct); }
+function bestForTask(t) {
+  const fit = productsForMe().filter(e => e.p.task === t.id && !e.fails.length && isFinite(e.payback));
+  fit.sort((a, b) => a.payback - b.payback);
+  return fit[0];
+}
+function bountyBasis(t) { return laborCost(t) * .6 * S.answers.obstacles; } // target robot takes 60% of the task
+
+// ---------- Render helpers ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 2600); }
+function go(step) { S.step = step; render(); window.scrollTo({ top: 0 }); }
+
+// Step 1
+function screenIntake() {
+  return `
+  <div class="screen-head">
+    <span class="label">Step 1 of 5</span>
+    <h1>Tell us how your crews spend the week</h1>
+    <p class="muted">Write it the way you'd explain it to a new hire, or leave a voice note. No specs needed. We'll ask follow-ups next.</p>
+  </div>
+  <div class="grid2">
+    <div class="panel stack">
+      <div class="field">
+        <label for="f-type">Type of business</label>
+        <select id="f-type">${Object.entries(COMPANY).map(([k, c]) => `<option value="${k}" ${k === S.type ? "selected" : ""}>${c.label}</option>`).join("")}</select>
+      </div>
+      <div class="field">
+        <label for="f-name">Company name</label>
+        <input id="f-name" type="text" value="${esc(S.name)}">
+      </div>
+      <div class="field">
+        <label for="f-desc">What does a normal week look like?</label>
+        <textarea id="f-desc">${esc(S.describe)}</textarea>
+      </div>
+      <div class="voice">
+        <button class="mic" id="mic" aria-label="Record a voice note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <div><b>Rather talk it through?</b><p class="muted" style="font-size:.85rem">Record a quick voice note and we'll type it up. In this prototype the button fills in a sample transcript.</p></div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="panel stack">
+        <h3>A few numbers</h3>
+        <div class="fields3">
+          <div class="field"><label for="f-crews">${S.type === "lawn" ? "Crews" : "Techs"}</label><input id="f-crews" type="number" min="1" value="${S.crews}"></div>
+          ${S.type === "lawn" ? `<div class="field"><label for="f-per">People per crew</label><input id="f-per" type="number" min="1" value="${S.perCrew}"></div>` : ""}
+          <div class="field"><label for="f-wage">Hourly cost ($)</label><input id="f-wage" type="number" min="1" value="${S.wage}"><span class="hint">Wage plus taxes and insurance</span></div>
+          <div class="field"><label for="f-region">Region</label><select id="f-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+        </div>
+      </div>
+      <div class="panel stack">
+        <h3>Who can see you</h3>
+        <label class="radio-card"><input type="radio" name="vis" value="shared" ${S.visibility === "shared" ? "checked" : ""}><span><b>Join the shared program</b><br><span class="muted" style="font-size:.88rem">Other companies with the same need can see your name and contact, and you can pool money into bounties together.</span></span></label>
+        <label class="radio-card"><input type="radio" name="vis" value="anon" ${S.visibility === "anon" ? "checked" : ""}><span><b>Stay anonymous</b><br><span class="muted" style="font-size:.88rem">You still get ROI estimates and robot recommendations, but you can't join shared bounties.</span></span></label>
+      </div>
+    </div>
+  </div>
+  <div class="actions"><button class="btn primary" id="next">Continue to follow-ups</button></div>`;
+}
+function bindIntake() {
+  $("#f-type").onchange = e => { S.type = e.target.value; const c = COMPANY[S.type]; S.name = c.name; S.describe = c.describe; S.bounty = null; S.posted = false; render(); };
+  $("#f-name").oninput = e => S.name = e.target.value;
+  $("#f-desc").oninput = e => S.describe = e.target.value;
+  $("#f-crews").oninput = e => S.crews = Math.max(1, +e.target.value || 1);
+  if ($("#f-per")) $("#f-per").oninput = e => S.perCrew = Math.max(1, +e.target.value || 1);
+  $("#f-wage").oninput = e => S.wage = Math.max(1, +e.target.value || 1);
+  $("#f-region").onchange = e => S.region = e.target.value;
+  document.querySelectorAll('input[name="vis"]').forEach(r => r.onchange = e => S.visibility = e.target.value);
+  $("#mic").onclick = () => { S.describe = COMPANY[S.type].voice; $("#f-desc").value = S.describe; toast("Voice note transcribed"); };
+  $("#next").onclick = () => go(1);
+}
+
+// Step 2
+function screenFollowups() {
+  const shown = QUESTIONS.slice(0, Math.min(S.answered + 1, QUESTIONS.length));
+  const chat = [`<div class="msg ai"><div class="who">Robot Bounty AI</div>Thanks, ${esc(S.name)}. From what you wrote I see ${tasks().length} jobs worth looking at: ${tasks().map(t => t.name.toLowerCase()).join(", ")}. A few quick questions so the numbers fit your sites.</div>`];
+  shown.forEach((q, i) => {
+    chat.push(`<div class="msg ai"><div class="who">Question ${i + 1} of ${QUESTIONS.length}</div>${q.q}<div class="row" style="margin-top:10px">${q.opts.map(([l, v]) => `<button class="chip" data-q="${i}" data-v="${v}" aria-pressed="${i < S.answered && S.answers[q.key] === v}">${l}</button>`).join("")}</div></div>`);
+    if (i < S.answered) chat.push(`<div class="msg me">${q.opts.find(o => o[1] === S.answers[q.key])[0]}</div>`);
+  });
+  if (S.answered >= QUESTIONS.length) chat.push(`<div class="msg ai"><div class="who">Robot Bounty AI</div>Got it. I've updated your assumptions. Next I'll show which jobs are worth automating and what they'd pay back.</div>`);
+  return `
+  <div class="screen-head">
+    <span class="label">Step 2 of 5</span>
+    <h1>A few follow-up questions</h1>
+    <p class="muted">The AI fills in what the description left out. Every answer changes a number on the right, so you can see why it's asking.</p>
+  </div>
+  <div class="grid2">
+    <div class="chat">${chat.join("")}</div>
+    <div class="panel stack">
+      <h3>What we're assuming</h3>
+      <div class="assump">
+        <div><span>Workers on the job</span><span class="num">${people()}</span></div>
+        <div><span>Hourly cost</span><span class="num">${money(S.wage)}</span></div>
+        <div><span>Steepest slope a robot must handle</span><span class="num">${S.answers.slope}°</span></div>
+        <div><span>Site complexity factor</span><span class="num">${S.answers.obstacles.toFixed(2)}</span></div>
+        <div><span>Working weeks per year</span><span class="num">${S.answers.weeks}</span></div>
+        <div><span>Region</span><span>${S.region}</span></div>
+      </div>
+      <p class="muted" style="font-size:.82rem">The AI only reads your answers. The ROI math in the next step is a fixed formula you can check.</p>
+    </div>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length ? "disabled" : ""}>See automation opportunities</button></div>`;
+}
+function bindFollowups() {
+  document.querySelectorAll(".chip[data-q]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.q; S.answers[QUESTIONS[i].key] = +b.dataset.v; S.answered = Math.max(S.answered, i + 1); render();
+  });
+  $("#back").onclick = () => go(0);
+  $("#next").onclick = () => go(2);
+}
+
+// Step 3
+function screenOpps() {
+  const rows = tasks().map(t => ({ t, cost: laborCost(t), best: bestForTask(t) })).sort((a, b) => (b.best ? b.best.net : 0) - (a.best ? a.best.net : 0));
+  const maxCost = Math.max(...rows.map(r => r.cost));
+  return `
+  <div class="screen-head">
+    <span class="label">Step 3 of 5</span>
+    <h1>Where a robot could take work off your crews</h1>
+    <p class="muted">Payback = robot cost ÷ (yearly labor saved − yearly running cost). Ranges show what happens if our savings estimate is 20% off either way.</p>
+  </div>
+  <div class="opps">
+    ${rows.map(({ t, cost, best }) => `
+    <div class="panel opp">
+      <div class="stack" style="gap:8px">
+        <div class="row"><h2>${t.name}</h2>${best ? `<span class="pill good">Robots available</span>` : `<span class="pill warn">No robot fits yet · bounty candidate</span>`}</div>
+        <p class="muted">${t.note} Your team spends about <span class="num">${t.hours}</span> hrs per ${S.type === "lawn" ? "crew member" : "tech"} each week on it.</p>
+        <div class="bar" aria-hidden="true"><span style="width:${(cost / maxCost * 100).toFixed(0)}%"></span></div>
+      </div>
+      <div class="opp-stats">
+        <div><div class="label">Labor cost / yr</div><div class="v">${money(cost)}</div></div>
+        <div><div class="label">Best net saving</div><div class="v">${best ? money(best.net) : "—"}</div></div>
+        <div><div class="label">Payback</div><div class="v">${best ? months(best.payback) : "—"}</div>${best ? `<div class="muted num" style="font-size:.75rem">${months(best.hi)}–${months(best.lo)}</div>` : ""}</div>
+      </div>
+      <div class="row" style="grid-column:1/-1;justify-content:flex-end">
+        ${best ? `<button class="btn small" data-find="${t.id}">See robots for this</button>` : ""}
+        <button class="btn small ${best ? "" : "hivis"}" data-bounty="${t.id}">Request a bounty</button>
+      </div>
+    </div>`).join("")}
+  </div>
+  <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next">Search all robots</button></div>`;
+}
+function bindOpps() {
+  document.querySelectorAll("[data-find]").forEach(b => b.onclick = () => { S.filters.task = b.dataset.find; go(3); });
+  document.querySelectorAll("[data-bounty]").forEach(b => b.onclick = () => startBounty(b.dataset.bounty, null));
+  $("#back").onclick = () => go(1);
+  $("#next").onclick = () => { S.filters.task = "all"; go(3); };
+}
+
+// Step 4
+function productCard(e, rank) {
+  const { p } = e;
+  const fit = !e.fails.length;
+  const shown = S.contacts[p.id];
+  const why = rank != null && fit ? reason(e) : "";
+  return `
+  <article class="panel prod">
+    <div class="prod-top">
+      <div class="row" style="gap:12px">${rank != null && fit ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${p.name}</h3><span class="muted" style="font-size:.85rem">${p.maker} · ${taskById(p.task).name}</span></div></div>
+      <div class="row" style="gap:6px"><span class="pill plain">TRL ${p.trl}</span>${fit ? `<span class="pill good">Fits your sites</span>` : `<span class="pill bad">Ruled out</span>`}</div>
+    </div>
+    <div class="prod-figs">
+      <div><span class="label">Price / unit</span><span class="v">${money(p.price)}</span></div>
+      <div><span class="label">Units (1 per ${S.type === "lawn" ? "crew" : "tech"})</span><span class="v">${e.units}</span></div>
+      <div><span class="label">Net saving / yr</span><span class="v">${money(e.net)}</span></div>
+      <div><span class="label">Payback</span><span class="v">${months(e.payback)}</span></div>
+    </div>
+    ${why ? `<div class="why"><b>Why it's a fit:</b> ${why}</div>` : ""}
+    ${!fit ? `<div class="ruled">${e.fails.join(". ")}.</div>` : ""}
+    ${shown ? `<div class="contact">sales@${p.name.toLowerCase().replace(/[^a-z]/g, "")}.example · (555) 010-${String(PRODUCTS.indexOf(p) + 11).padStart(4, "0")}</div>` : ""}
+    <div class="row" style="justify-content:space-between">
+      <button class="link" data-gap="${p.id}">Not quite right? Request a bounty</button>
+      ${fit ? `<button class="btn small primary" data-contact="${p.id}" ${shown ? "disabled" : ""}>${shown ? "Contact shown" : "Contact vendor"}</button>` : ""}
+    </div>
+  </article>`;
+}
+function reason(e) {
+  const unit = S.type === "lawn" ? "crews" : "techs";
+  return `pays back in about ${months(e.payback).replace(" mo", " months")} for your ${S.crews} ${unit}. It covers about ${Math.round(e.p.share * 100)}% of ${e.t.name.toLowerCase()}, handles your ${S.answers.slope}° slopes, and is serviced in the ${S.region}.`;
+}
+function screenSearch() {
+  const f = S.filters;
+  const all = productsForMe().filter(e => f.task === "all" || e.p.task === f.task);
+  let body;
+  if (S.view === "ai") {
+    const fit = all.filter(e => !e.fails.length && isFinite(e.payback)).sort((a, b) => a.payback - b.payback);
+    const out = all.filter(e => e.fails.length);
+    body = (fit.length ? fit.map((e, i) => productCard(e, i + 1)).join("") : `<div class="empty">No robot on the market fits your sites for this job yet. That's what bounties are for.<div style="margin-top:12px"><button class="btn hivis" data-bounty-task="${f.task === "all" ? tasks()[0].id : f.task}">Request a bounty</button></div></div>`)
+      + (out.length ? `<h3 style="margin-top:12px">Ruled out for your sites</h3>` + out.map(e => productCard(e, null)).join("") : "");
+  } else {
+    const list = all.filter(e => e.p.price <= f.maxPrice && (e.payback * 12) <= f.maxPayback).sort((a, b) => a.p.price - b.p.price);
+    body = list.length ? list.map(e => productCard(e, null)).join("") : `<div class="empty">Nothing matches these filters. Try raising the price or payback limit.</div>`;
+  }
+  return `
+  <div class="screen-head">
+    <span class="label">Step 4 of 5</span>
+    <h1>Robots that could do this today</h1>
+    <p class="muted">Browse with filters, or let the AI rank what fits your sites and explain why. If nothing's right, request a bounty from any result.</p>
+  </div>
+  <div class="search">
+    <aside class="panel stack filters" aria-label="Filters">
+      <div class="seg" role="group" aria-label="View"><button data-view="ai" aria-pressed="${S.view === "ai"}">Best for you</button><button data-view="all" aria-pressed="${S.view === "all"}">All results</button></div>
+      <div class="field"><label for="flt-task">Job</label><select id="flt-task"><option value="all">All jobs</option>${tasks().map(t => `<option value="${t.id}" ${f.task === t.id ? "selected" : ""}>${t.name}</option>`).join("")}</select></div>
+      <div class="field" ${S.view === "ai" ? "hidden" : ""}><label for="flt-price">Max price per unit: <span class="num">${money(f.maxPrice)}</span></label><input type="range" id="flt-price" min="4000" max="35000" step="500" value="${f.maxPrice}"></div>
+      <div class="field" ${S.view === "ai" ? "hidden" : ""}><label for="flt-pay">Max payback: <span class="num">${f.maxPayback} mo</span></label><input type="range" id="flt-pay" min="6" max="60" step="3" value="${f.maxPayback}"></div>
+      <div class="field"><label for="flt-region">Region</label><select id="flt-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+      <p class="muted" style="font-size:.8rem">Listings, prices and contacts are made-up samples for this prototype.</p>
+    </aside>
+    <section class="results" aria-live="polite">${body}</section>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back</button></div>`;
+}
+function bindSearch() {
+  document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => { S.view = b.dataset.view; render(); });
+  $("#flt-task").onchange = e => { S.filters.task = e.target.value; render(); };
+  $("#flt-region").onchange = e => { S.region = e.target.value; render(); };
+  const fp = $("#flt-price"), fy = $("#flt-pay");
+  if (fp) { fp.oninput = e => { fp.previousElementSibling.querySelector(".num").textContent = money(+e.target.value); }; fp.onchange = e => { S.filters.maxPrice = +e.target.value; render(); }; }
+  if (fy) { fy.oninput = e => { fy.previousElementSibling.querySelector(".num").textContent = e.target.value + " mo"; }; fy.onchange = e => { S.filters.maxPayback = +e.target.value; render(); }; }
+  document.querySelectorAll("[data-contact]").forEach(b => b.onclick = () => { S.contacts[b.dataset.contact] = true; render(); toast("Vendor contact shown"); });
+  document.querySelectorAll("[data-gap]").forEach(b => b.onclick = () => { const p = PRODUCTS.find(x => x.id === b.dataset.gap); startBounty(p.task, p); });
+  document.querySelectorAll("[data-bounty-task]").forEach(b => b.onclick = () => startBounty(b.dataset.bountyTask, null));
+  $("#back").onclick = () => go(2);
+}
+
+// Step 5
+function startBounty(taskId, product) {
+  S.bounty = { taskId, product: product ? product.name : null };
+  S.posted = false; S.invited = false;
+  S.gaps = new Set();
+  if (product) {
+    const e = evalProduct(product);
+    if (e.fails.some(f => f.startsWith("Handles slopes"))) S.gaps.add("Can't handle slopes");
+    if (e.fails.some(f => f.startsWith("Not sold"))) S.gaps.add("Not sold in my region");
+    if (!S.gaps.size) S.gaps.add("Too expensive");
+  } else S.gaps.add("Doesn't do the whole job");
+  go(4);
+}
+function bountyTitle() {
+  const t = taskById(S.bounty.taskId);
+  const bits = [];
+  if (S.gaps.has("Can't handle slopes")) bits.push(`for ${S.answers.slope}° slopes`);
+  if (S.gaps.has("Too expensive")) bits.push("under $15k");
+  return `${t.robot} ${bits.join(", ")}`.trim();
+}
+function specLines() {
+  const t = taskById(S.bounty.taskId);
+  const L = [`Takes over at least 60% of ${t.name.toLowerCase()} on ${S.type === "lawn" ? "residential and small commercial lawns" : "residential and light commercial properties"}`];
+  if (S.gaps.has("Can't handle slopes")) L.push(`Works on slopes up to ${S.answers.slope}°`);
+  if (S.gaps.has("Too expensive")) L.push("Target unit price under $15,000");
+  if (S.gaps.has("Not sold in my region")) L.push(`Sold and serviced in the ${S.region}`);
+  if (S.gaps.has("Doesn't do the whole job")) L.push("Handles the full job without a person following it");
+  if (S.gaps.has("Too slow for my route")) L.push("Keeps pace with a crew's daily route");
+  if (S.answers.obstacles < 1) L.push("Navigates around beds, fences and yard clutter");
+  if (S.gapNote.trim()) L.push(esc(S.gapNote.trim()));
+  return L;
+}
+const OTHERS = [
+  { name: "Mesa Verde Landscaping", size: "8 crews", amt: 31400 },
+  { name: "Anonymous company", size: "2 crews", amt: 7600, anon: true },
+  { name: "Sunbelt Grounds Management", size: "12 crews", amt: 46900 },
+];
+function screenBounty() {
+  if (!S.bounty) return `
+    <div class="screen-head"><span class="label">Step 5 of 5</span><h1>No bounty yet</h1><p class="muted">Pick "Request a bounty" on an opportunity or a search result to start one.</p></div>
+    <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="tosearch">Back to robots</button></div>`;
+  const t = taskById(S.bounty.taskId);
+  const basis = bountyBasis(t);
+  const pledge = basis * S.pledgePct / 100;
+  if (!S.posted) {
+    const anon = S.visibility === "anon";
+    return `
+    <div class="screen-head">
+      <span class="label">Step 5 of 5 · Request a bounty</span>
+      <h1>Tell developers what you actually need</h1>
+      <p class="muted">${S.bounty.product ? `Starting from <b>${esc(S.bounty.product)}</b>. ` : ""}Say what's missing. We turn it into a spec developers can build against.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel stack">
+        <h3>What's missing?</h3>
+        <div class="row">${GAPS.map(g => `<button class="chip" data-g="${esc(g)}" aria-pressed="${S.gaps.has(g)}">${g}</button>`).join("")}</div>
+        <div class="field"><label for="gap-note">Anything else? (optional)</label><input id="gap-note" type="text" placeholder="e.g. Has to fit in the trailer with the mowers" value="${esc(S.gapNote)}"></div>
+        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul></div>
+      </div>
+      <div class="panel stack">
+        <h3>Your pledge</h3>
+        <p class="muted" style="font-size:.9rem">A robot that does this would save you about <b class="num">${money(basis)}</b> a year. We suggest pledging 20–40% of one year's savings, so the robot still pays for itself.</p>
+        <div class="pledge-big">${money(pledge)}</div>
+        <div class="field"><label for="pledge">Pledge: <span class="num">${S.pledgePct}%</span> of first-year savings</label><input type="range" id="pledge" min="20" max="40" step="1" value="${S.pledgePct}"></div>
+        <div class="callout"><b>You're only charged if it works out</b><span style="font-size:.88rem">Pledges are all-or-nothing. Nobody pays unless the bounty reaches its goal and a developer delivers a robot that meets the spec.</span></div>
+        ${anon ? `<div class="notice">You chose to stay anonymous, so you can't pledge to shared bounties. <button class="link" id="optin">Join the shared program</button></div>` : ""}
+        <button class="btn hivis" id="post" ${anon ? "disabled" : ""}>Post bounty and pledge ${money(pledge)}</button>
+      </div>
+    </div>
+    <div class="actions"><button class="btn" id="back">Back to robots</button></div>`;
+  }
+  const others = OTHERS.reduce((s, o) => s + o.amt, 0) + (claimedMine() ? S.extra : 0);
+  const goal = claimedMine() ? S.claim.price : 150000;
+  const raised = others + pledge;
+  return `
+  <div class="screen-head"><span class="label">Bounty page · ${S.confirmed && claimedMine() ? "delivered" : claimedMine() ? "claimed" : "open"}</span></div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="panel bounty-hero">
+        <h1>${esc(bountyTitle())}</h1>
+        <div class="progress" role="img" aria-label="${money(raised)} pledged of ${money(goal)} goal"><span class="others" style="width:${others / goal * 100}%"></span><span class="mine" style="width:${pledge / goal * 100}%"></span></div>
+        <div class="bounty-stats">
+          <div><span class="label">Pledged</span><div class="v">${money(raised)}</div></div>
+          <div><span class="label">${claimedMine() ? "Developer's price" : "Goal"}</span><div class="v">${money(goal)}</div></div>
+          <div><span class="label">Backers</span><div class="v">${OTHERS.length + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
+          <div><span class="label">Closes</span><div class="v">Jan 31</div></div>
+        </div>
+        <p class="muted" style="font-size:.85rem">${claimedMine() ? `All-or-nothing: backers are charged only once pledges reach ${money(goal)} and ${esc(S.dev.team)} delivers.` : "All-or-nothing: if the goal isn't reached by Jan 31, 2027, nobody is charged."}</p>
+      </div>
+      <div class="panel stack">
+        <h3>Spec</h3>
+        <ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul>
+      </div>
+      <div class="panel stack">
+        <h3>Developer updates</h3>
+        ${devUpdatesHtml()}
+      </div>
+    </div>
+    <div class="stack">
+      <div class="callout"><b>3 companies near you need this too</b><span style="font-size:.88rem">Similar requests from lawn and grounds companies in the ${S.region}. More backers means a bigger bounty and a better shot at getting it built.</span><div style="margin-top:6px"><button class="btn small" id="invite" ${S.invited ? "disabled" : ""}>${S.invited ? "Invites sent" : "Invite them to back it"}</button></div></div>
+      <div class="panel stack">
+        <h3>Backers</h3>
+        <p class="muted" style="font-size:.85rem">Each company pledges in proportion to its own savings, so bigger operators put in more.</p>
+        <div class="backers">
+          <div class="backer"><div><b>${esc(S.name)}</b> <span class="pill warn">You</span><div class="muted" style="font-size:.82rem">${S.crews} ${S.type === "lawn" ? "crews" : "techs"} · ${S.pledgePct}% of first-year savings</div></div><span class="num">${money(pledge)}</span></div>
+          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
+          ${OTHERS.map(o => `<div class="backer"><div><b>${o.name}</b><div class="muted" style="font-size:.82rem">${o.size}${o.anon ? " · name hidden by choice" : ""}</div></div><span class="num">${money(o.amt)}</span></div>`).join("")}
+        </div>
+        <p class="muted" style="font-size:.78rem">Other backers are sample data.</p>
+      </div>
+    </div>
+  </div>
+  <div class="actions"><button class="btn" id="edit">Edit my pledge</button><button class="btn" id="restart">Start over</button></div>`;
+}
+function bindBounty() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("#tosearch", () => go(3));
+  on("#back", () => go(3));
+  document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; S.gaps.has(g) ? S.gaps.delete(g) : S.gaps.add(g); render(); });
+  const note = $("#gap-note"); if (note) note.onchange = e => { S.gapNote = e.target.value; render(); };
+  const pl = $("#pledge");
+  if (pl) {
+    const basis = bountyBasis(taskById(S.bounty.taskId));
+    pl.oninput = e => { S.pledgePct = +e.target.value; pl.previousElementSibling.querySelector(".num").textContent = S.pledgePct + "%"; $(".pledge-big").textContent = money(basis * S.pledgePct / 100); $("#post").textContent = "Post bounty and pledge " + money(basis * S.pledgePct / 100); };
+  }
+  on("#optin", () => { S.visibility = "shared"; render(); toast("You joined the shared program"); });
+  on("#post", () => { S.posted = true; render(); window.scrollTo({ top: 0 }); toast("Bounty posted"); });
+  on("#invite", () => { S.invited = true; render(); toast("Invites sent to 3 companies"); });
+  on("#edit", () => { S.posted = false; render(); });
+  on("#restart", () => { S.answered = 0; S.bounty = null; S.posted = false; S.contacts = {}; go(0); });
+}
+
+// ---------- Developer side ----------
+const SKILLS = ["Outdoor wheeled bases", "Slope traction", "Spraying payloads", "Confined-space crawlers", "Computer vision", "Arm manipulation"];
+const REGIONS = ["West", "South", "Midwest", "Northeast"];
+const TASK_SKILLS = {
+  mow: ["Outdoor wheeled bases", "Slope traction"], spray: ["Outdoor wheeled bases", "Spraying payloads"], trim: ["Arm manipulation", "Computer vision"],
+  perim: ["Outdoor wheeled bases", "Spraying payloads"], crawl: ["Confined-space crawlers", "Computer vision"], bait: ["Outdoor wheeled bases", "Computer vision"],
+};
+const CATEGORY = { mow: "Mowing", spray: "Spraying", trim: "Trimming", perim: "Spraying", crawl: "Inspection", bait: "Inspection" };
+const TRL = { 4: "Lab prototype", 5: "Tested in a realistic setting", 6: "Prototype tested in the field", 7: "Pilot running with a customer", 8: "Product ready to sell", 9: "Product sold and in use" };
+const DEV_STEPS = ["Team profile", "Bounty board", "Claim", "Build & deliver"];
+const SAMPLE_BOUNTIES = [
+  { id: "b2", title: "Bait station checking robot for commercial sites", industry: "Pest control", cat: "Inspection", region: "South", pledged: 42300, goal: 90000, backers: 6, closes: "Dec 15",
+    skills: ["Outdoor wheeled bases", "Computer vision"], specs: ["Walks a route around commercial buildings and photographs every bait station", "Flags stations that need a refill or show rodent activity", "Runs a 2-hour route on one charge"] },
+  { id: "b3", title: "Crawlspace inspection robot under $5k", industry: "Pest control", cat: "Inspection", region: "Midwest", pledged: 88200, goal: 80000, backers: 9, closes: "Nov 30",
+    skills: ["Confined-space crawlers", "Computer vision"], specs: ["Fits through a 14-inch crawlspace opening", "Streams video and flags moisture, droppings and wood damage", "Unit price under $5,000"] },
+  { id: "b4", title: "Edging and trimming robot that works near beds", industry: "Lawn care", cat: "Trimming", region: "Northeast", pledged: 23600, goal: 120000, backers: 3, closes: "Feb 28",
+    skills: ["Arm manipulation", "Computer vision"], specs: ["Edges along beds, walks and driveways without damaging plants", "Takes over at least 50% of a crew's trimming time"] },
+  { id: "b5", title: "Hillside fertilizer spraying robot", industry: "Lawn care", cat: "Spraying", region: "West", pledged: 64000, goal: 100000, backers: 5, closes: "Jan 15",
+    skills: ["Outdoor wheeled bases", "Slope traction", "Spraying payloads"], specs: ["Sprays granular and liquid fertilizer on slopes up to 25°", "Carries at least 15 gallons"], reservedBy: "Ridgeway Autonomy", reservedUntil: "Nov 5" },
+];
+Object.assign(S, {
+  role: "client", dstep: 0,
+  dev: { team: "Bayline Robotics", size: 4, trl: 6, skills: new Set(["Outdoor wheeled bases", "Slope traction", "Computer vision"]), regions: new Set(["West", "South"]) },
+  dview: "ai", dfilt: { cat: "all", region: "all", minPledged: 0, minFunded: 0, showReserved: true },
+  sel: null, claim: null, extra: 0, delivered: false, confirmed: false,
+});
+
+function claimedMine() { return S.claim && S.claim.bountyId === "mine"; }
+function clientPledge() { return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500; }
+function mineBounty() {
+  const live = !!(S.posted && S.bounty);
+  const taskId = live ? S.bounty.taskId : "mow";
+  const skills = [...TASK_SKILLS[taskId]];
+  if (live && S.gaps.has("Can't handle slopes") && !skills.includes("Slope traction")) skills.push("Slope traction");
+  return {
+    id: "mine", live, skills, closes: "Jan 31", backers: 4,
+    title: live ? bountyTitle() : "Autonomous mower for 20° slopes",
+    industry: live ? COMPANY[S.type].label : "Lawn care", cat: CATEGORY[taskId], region: live ? S.region : "West",
+    pledged: OTHERS.reduce((s, o) => s + o.amt, 0) + clientPledge(), goal: 150000,
+    specs: live ? specLines() : ["Takes over at least 60% of mowing open turf on residential and small commercial lawns", "Works on slopes up to 20°", "Navigates around beds, fences and yard clutter"],
+  };
+}
+function allBounties() { return [mineBounty(), ...SAMPLE_BOUNTIES]; }
+function bountyById(id) { return allBounties().find(b => b.id === id); }
+const isMyClaim = b => S.claim && S.claim.bountyId === b.id;
+const raisedOf = b => b.pledged + (isMyClaim(b) ? S.extra : 0);
+const targetOf = b => isMyClaim(b) ? S.claim.price : b.goal;
+const backersOf = b => b.backers + (isMyClaim(b) && S.extra ? 2 : 0);
+const reservedByOther = b => b.reservedBy && !isMyClaim(b);
+function match(b) {
+  const have = b.skills.filter(s => S.dev.skills.has(s));
+  const missing = b.skills.filter(s => !S.dev.skills.has(s));
+  const inRegion = S.dev.regions.has(b.region);
+  const funded = raisedOf(b) / targetOf(b);
+  return { have, missing, inRegion, funded, score: .6 * have.length / b.skills.length + .2 * (inRegion ? 1 : 0) + .2 * Math.min(funded, 1) };
+}
+function devReason(b, m) {
+  const lc = a => a.map(s => s.toLowerCase()).join(", ");
+  let r = `You've built ${m.have.length} of the ${b.skills.length} capabilities it needs${m.have.length ? ` (${lc(m.have)})` : ""}`;
+  if (m.missing.length) r += `; you'd still need ${lc(m.missing)}`;
+  return r + `. ${m.inRegion ? "It's in a region you serve" : "It's outside the regions you serve"}, and it's ${Math.round(m.funded * 100)}% funded by ${backersOf(b)} companies.`;
+}
+function goDev(step) { S.dstep = step; render(); window.scrollTo({ top: 0 }); }
+
+// Dev step 1: profile
+function screenProfile() {
+  const d = S.dev;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 1 of 4</span>
+    <h1>Tell us what your team can build</h1>
+    <p class="muted">We match you to bounties with this. In the full product the AI can also read your website or GitHub to fill it in.</p>
+  </div>
+  <div class="grid2">
+    <div class="panel stack">
+      <div class="fields3">
+        <div class="field" style="grid-column:1/-1"><label for="d-team">Team name</label><input id="d-team" type="text" value="${esc(d.team)}"></div>
+        <div class="field"><label for="d-size">Engineers</label><input id="d-size" type="number" min="1" value="${d.size}"></div>
+        <div class="field" style="grid-column:span 2"><label for="d-trl">Most mature thing you've built</label><select id="d-trl">${Object.entries(TRL).map(([k, v]) => `<option value="${k}" ${+k === d.trl ? "selected" : ""}>TRL ${k}: ${v}</option>`).join("")}</select></div>
+      </div>
+      <div class="field"><span class="label">What you've already built</span><div class="row">${SKILLS.map(s => `<button class="chip" data-skill="${s}" aria-pressed="${d.skills.has(s)}">${s}</button>`).join("")}</div></div>
+      <div class="field"><span class="label">Regions you can support</span><div class="row">${REGIONS.map(r => `<button class="chip" data-reg="${r}" aria-pressed="${d.regions.has(r)}">${r}</button>`).join("")}</div></div>
+    </div>
+    <div class="panel stack">
+      <span class="label">What backers see about you</span>
+      <h2>${esc(d.team)}</h2>
+      <p class="muted">${d.size} engineers · TRL ${d.trl}: ${TRL[d.trl].toLowerCase()}</p>
+      <div class="tags">${[...d.skills].map(s => `<span class="tag have">${s}</span>`).join("") || `<span class="muted">No capabilities picked yet</span>`}</div>
+      <p class="muted" style="font-size:.88rem">Supports: ${[...d.regions].join(", ") || "no regions yet"}</p>
+    </div>
+  </div>
+  <div class="actions"><button class="btn primary" id="next">See matching bounties</button></div>`;
+}
+function bindProfile() {
+  $("#d-team").oninput = e => S.dev.team = e.target.value;
+  $("#d-team").onchange = () => render();
+  $("#d-size").onchange = e => { S.dev.size = Math.max(1, +e.target.value || 1); render(); };
+  $("#d-trl").onchange = e => { S.dev.trl = +e.target.value; render(); };
+  document.querySelectorAll("[data-skill]").forEach(b => b.onclick = () => { const s = b.dataset.skill; S.dev.skills.has(s) ? S.dev.skills.delete(s) : S.dev.skills.add(s); render(); });
+  document.querySelectorAll("[data-reg]").forEach(b => b.onclick = () => { const r = b.dataset.reg; S.dev.regions.has(r) ? S.dev.regions.delete(r) : S.dev.regions.add(r); render(); });
+  $("#next").onclick = () => goDev(1);
+}
+
+// Dev step 2: board
+function bountyCard(b, rank) {
+  const m = match(b), raised = raisedOf(b), target = targetOf(b), pct = Math.round(raised / target * 100);
+  const other = reservedByOther(b), mine = isMyClaim(b);
+  return `
+  <article class="panel prod">
+    <div class="prod-top">
+      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${b.industry} · ${b.cat} · ${b.region}${b.id === "mine" ? (b.live ? " · posted from the client side" : " · sample") : ""}</span></div></div>
+      <div class="row" style="gap:6px">${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
+    </div>
+    <div class="bar" aria-hidden="true"><span style="width:${Math.min(pct, 100)}%"></span></div>
+    <div class="prod-figs">
+      <div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div>
+      <div><span class="label">${mine ? "Your price" : "Goal"}</span><span class="v">${money(target)}</span></div>
+      <div><span class="label">Backers</span><span class="v">${backersOf(b)}</span></div>
+      <div><span class="label">Closes</span><span class="v">${b.closes}</span></div>
+    </div>
+    <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
+    ${rank != null ? `<div class="why"><b>Why it fits your team:</b> ${devReason(b, m)}</div>` : ""}
+    ${other ? `<div class="ruled">${esc(b.reservedBy)} claimed this. It reopens on ${b.reservedUntil} if they don't post a first milestone.</div>` : ""}
+    <div class="row" style="justify-content:flex-end">
+      ${mine ? `<button class="btn small primary" data-open="1">Open my claim</button>` : `<button class="btn small primary" data-sel="${b.id}" ${other ? "disabled" : ""}>View and claim</button>`}
+    </div>
+  </article>`;
+}
+function screenBoard() {
+  const f = S.dfilt;
+  const list = allBounties().filter(b => (f.cat === "all" || b.cat === f.cat) && (f.region === "all" || b.region === f.region));
+  let body;
+  if (S.dview === "ai") {
+    const open = list.filter(b => !reservedByOther(b)).map(b => [b, match(b)]).sort((a, c) => c[1].score - a[1].score);
+    const taken = list.filter(reservedByOther);
+    body = (open.length ? open.map(([b], i) => bountyCard(b, i + 1)).join("") : `<div class="empty">No open bounties match these filters.</div>`)
+      + (taken.length ? `<h3 style="margin-top:12px">Reserved by other teams</h3>` + taken.map(b => bountyCard(b, null)).join("") : "");
+  } else {
+    const shown = list.filter(b => raisedOf(b) >= f.minPledged && raisedOf(b) / targetOf(b) * 100 >= f.minFunded && (f.showReserved || !reservedByOther(b))).sort((a, c) => raisedOf(c) - raisedOf(a));
+    body = shown.length ? shown.map(b => bountyCard(b, null)).join("") : `<div class="empty">Nothing matches these filters. Try lowering the pledged or funded minimum.</div>`;
+  }
+  const tip = !mineBounty().live ? `<p class="muted" style="font-size:.8rem">Tip: post a bounty on the Client side and it shows up here.</p>` : "";
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 2 of 4</span>
+    <h1>Bounties with money behind them</h1>
+    <p class="muted">Every bounty here comes from real operators who've pledged. Browse with filters, or let the AI rank what your team is closest to building.</p>
+  </div>
+  <div class="search">
+    <aside class="panel stack filters" aria-label="Filters">
+      <div class="seg" role="group" aria-label="View"><button data-dview="ai" aria-pressed="${S.dview === "ai"}">Best for your team</button><button data-dview="all" aria-pressed="${S.dview === "all"}">All bounties</button></div>
+      <div class="field"><label for="df-cat">Job type</label><select id="df-cat"><option value="all">All jobs</option>${["Mowing", "Spraying", "Trimming", "Inspection"].map(c => `<option ${f.cat === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="field"><label for="df-region">Region</label><select id="df-region"><option value="all">All regions</option>${REGIONS.map(r => `<option ${f.region === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+      <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-pledged">Min pledged: <span class="num">${money(f.minPledged)}</span></label><input type="range" id="df-pledged" min="0" max="150000" step="5000" value="${f.minPledged}"></div>
+      <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-funded">Min funded: <span class="num">${f.minFunded}%</span></label><input type="range" id="df-funded" min="0" max="100" step="5" value="${f.minFunded}"></div>
+      <label class="check" ${S.dview === "ai" ? "hidden" : ""}><input type="checkbox" id="df-res" ${f.showReserved ? "checked" : ""}>Show bounties other teams reserved</label>
+      <p class="muted" style="font-size:.8rem">Bounties, backers and amounts are sample data.</p>
+      ${tip}
+    </aside>
+    <section class="results" aria-live="polite">${body}</section>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back to profile</button></div>`;
+}
+function bindBoard() {
+  document.querySelectorAll("[data-dview]").forEach(b => b.onclick = () => { S.dview = b.dataset.dview; render(); });
+  $("#df-cat").onchange = e => { S.dfilt.cat = e.target.value; render(); };
+  $("#df-region").onchange = e => { S.dfilt.region = e.target.value; render(); };
+  const fp = $("#df-pledged"), ff = $("#df-funded");
+  fp.oninput = e => { fp.previousElementSibling.querySelector(".num").textContent = money(+e.target.value); };
+  fp.onchange = e => { S.dfilt.minPledged = +e.target.value; render(); };
+  ff.oninput = e => { ff.previousElementSibling.querySelector(".num").textContent = e.target.value + "%"; };
+  ff.onchange = e => { S.dfilt.minFunded = +e.target.value; render(); };
+  $("#df-res").onchange = e => { S.dfilt.showReserved = e.target.checked; render(); };
+  document.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => { S.sel = b.dataset.sel; goDev(2); });
+  document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => goDev(3));
+  $("#back").onclick = () => goDev(0);
+}
+
+// Dev step 3: claim
+function claimStatus(price, raised) {
+  return price <= raised
+    ? `<div class="status good"><b>Funded &amp; claimed</b><span>Pledges of ${money(raised)} already cover your price. Backers are charged when you deliver.</span></div>`
+    : `<div class="status warn"><b>Claimed, ${money(price - raised)} to go</b><span>Backers see your price on the bounty page, which helps pull in more companies. Nobody is charged until pledges reach ${money(price)} and you deliver.</span></div>`;
+}
+function screenClaim() {
+  const b = S.sel && bountyById(S.sel);
+  if (!b) return `<div class="screen-head"><span class="label">Developer · Step 3 of 4</span><h1>Pick a bounty first</h1><p class="muted">Choose "View and claim" on the bounty board.</p></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="toboard">Go to bounty board</button></div>`;
+  const m = match(b), raised = raisedOf(b);
+  const price = S.draftPrice ?? Math.round(Math.min(b.goal, raised * 1.18) / 1000) * 1000;
+  S.draftPrice = price;
+  const ms = S.draftMs ?? ["Working prototype on a test site", "Field trial with two backers' crews", "Production units delivered to backers"];
+  S.draftMs = ms;
+  const other = S.claim && S.claim.bountyId !== b.id ? bountyById(S.claim.bountyId) : null;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 3 of 4 · Claim</span>
+    <h1>${esc(b.title)}</h1>
+    <p class="muted">${b.industry} · ${b.region} · ${backersOf(b)} backers · closes ${b.closes}</p>
+  </div>
+  <div class="grid2">
+    <div class="stack">
+      <div class="panel stack">
+        <h3>Spec from the backers</h3>
+        <ul class="spec">${b.specs.map(l => `<li>${l}</li>`).join("")}</ul>
+        <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
+      </div>
+      <div class="panel stack">
+        <h3>Money behind it</h3>
+        <div class="bar" aria-hidden="true"><span style="width:${Math.min(raised / b.goal * 100, 100)}%"></span></div>
+        <div class="prod-figs"><div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div><div><span class="label">Backers' goal</span><span class="v">${money(b.goal)}</span></div></div>
+        <div class="why"><b>Fit:</b> ${devReason(b, m)}</div>
+      </div>
+    </div>
+    <div class="panel stack">
+      <h3>Your proposal</h3>
+      <div class="fields3">
+        <div class="field"><label for="c-price">Your price ($)</label><input id="c-price" type="number" min="1000" step="1000" value="${price}"></div>
+        <div class="field"><label for="c-weeks">Weeks to deliver</label><input id="c-weeks" type="number" min="1" value="${S.draftWeeks ?? 12}"></div>
+      </div>
+      <div class="field"><label for="c-approach">Approach</label><textarea id="c-approach">${esc(S.draftApproach ?? `Adapt our existing robot platform${m.have.length ? ` (${m.have.map(s => s.toLowerCase()).join(", ")})` : ""} to this spec${m.missing.length ? ` and add ${m.missing.map(s => s.toLowerCase()).join(" and ")}` : ""}. Field-test with two backers' crews before shipping.`)}</textarea></div>
+      <div class="field"><span class="label">Milestones (backers see each update)</span>${ms.map((t, i) => `<input type="text" data-ms="${i}" aria-label="Milestone ${i + 1}" value="${esc(t)}">`).join("")}</div>
+      <div id="c-status">${claimStatus(price, raised)}</div>
+      <p class="muted" style="font-size:.85rem">Claiming reserves this bounty for your team for 14 days, until Nov 7. Post your first milestone update by then or it reopens to other teams.</p>
+      ${other ? `<div class="notice">You already hold a claim on "${esc(other.title)}". Claiming this one releases it.</div>` : ""}
+      <button class="btn hivis" id="claim">Claim for ${money(price)}</button>
+    </div>
+  </div>
+  <div class="actions"><button class="btn" id="back">Back to board</button></div>`;
+}
+function bindClaim() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("#toboard", () => goDev(1));
+  on("#back", () => goDev(1));
+  if (!$("#claim")) return;
+  const b = bountyById(S.sel);
+  $("#c-price").oninput = e => { S.draftPrice = Math.max(1000, +e.target.value || 0); $("#c-status").innerHTML = claimStatus(S.draftPrice, raisedOf(b)); $("#claim").textContent = "Claim for " + money(S.draftPrice); };
+  $("#c-weeks").oninput = e => S.draftWeeks = Math.max(1, +e.target.value || 1);
+  $("#c-approach").oninput = e => S.draftApproach = e.target.value;
+  document.querySelectorAll("[data-ms]").forEach(i => i.oninput = e => S.draftMs[+i.dataset.ms] = e.target.value);
+  $("#claim").onclick = () => {
+    if (S.claim && S.claim.bountyId !== b.id) toast("Released your earlier claim");
+    S.claim = { bountyId: b.id, price: S.draftPrice, weeks: S.draftWeeks ?? 12, approach: $("#c-approach").value,
+      milestones: S.draftMs.map(t => ({ title: t, done: false, update: "" })) };
+    S.extra = 0; S.delivered = false; S.confirmed = false;
+    S.draftPrice = S.draftWeeks = S.draftApproach = S.draftMs = undefined;
+    goDev(3); toast("Bounty claimed. Reserved for 14 days");
+  };
+}
+
+// Dev step 4: build & deliver
+const SAMPLE_UPDATES = [
+  "Prototype ran a full test lot. Holding its line on a 22° slope, battery lasted 3.5 hours.",
+  "Two backers' crews ran it on real routes for a week. It handled 68% of mowing time; we're fixing a snag near flower beds.",
+  "Production units built and shipped. Each backer gets setup help from our team on site.",
+];
+function msDate(i) { return `Week ${Math.round(S.claim.weeks * (i + 1) / S.claim.milestones.length)}`; }
+function screenDeliver() {
+  if (!S.claim) return `<div class="screen-head"><span class="label">Developer · Step 4 of 4</span><h1>No claim yet</h1><p class="muted">Claim a bounty from the board to start building.</p></div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="toboard">Go to bounty board</button></div>`;
+  const c = S.claim, b = bountyById(c.bountyId), raised = raisedOf(b), funded = raised >= c.price;
+  const next = c.milestones.findIndex(m => !m.done);
+  const started = c.milestones.some(m => m.done);
+  let final;
+  if (S.confirmed) final = `<div class="status good"><b>Paid out</b><span>Backers confirmed delivery. ${money(c.price)} was charged across ${backersOf(b)} backers and paid to ${esc(S.dev.team)}.</span></div>`;
+  else if (S.delivered && !funded) final = `<div class="status warn"><b>Delivered, waiting on pledges</b><span>Pledges need to reach your price before anyone is charged.</span></div>`;
+  else if (S.delivered) final = `<div class="status warn"><b>Delivered, waiting for backers to confirm</b><span>Each backer checks the robot meets the spec.</span></div><button class="btn primary" id="confirm">Simulate backers confirming</button>`;
+  else final = `<button class="btn hivis" id="deliver" ${next !== -1 ? "disabled" : ""}>Mark robot delivered</button>${next !== -1 ? `<p class="muted" style="font-size:.85rem">Finish every milestone first.</p>` : ""}`;
+  return `
+  <div class="screen-head">
+    <span class="label">Developer · Step 4 of 4 · Build &amp; deliver</span>
+    <h1>${esc(b.title)}</h1>
+    <div class="row"><span class="pill ${started ? "good" : "warn"}">${started ? "Claim locked in" : "Reserved for you until Nov 7"}</span><span class="pill plain">${esc(S.dev.team)} · ${money(c.price)} · ${c.weeks} weeks</span></div>
+  </div>
+  <div class="grid2">
+    <div class="panel stack">
+      <h3>Milestones</h3>
+      <p class="muted" style="font-size:.88rem">Each update you post shows on the bounty page every backer sees.</p>
+      <div>${c.milestones.map((m, i) => `
+        <div class="ms ${m.done ? "done" : i === next ? "next" : ""}">
+          <span class="dot">${m.done ? "✓" : i + 1}</span>
+          <div class="stack" style="gap:6px"><b>${esc(m.title)}</b>
+          ${m.done ? `<span class="muted" style="font-size:.88rem">${esc(m.update)} · ${msDate(i)}</span>` : i === next ? `<textarea id="u-text" aria-label="Update for ${esc(m.title)}" style="min-height:70px">${esc(SAMPLE_UPDATES[i] || "")}</textarea><div><button class="btn small primary" id="post-u">Post update</button></div>` : ""}</div>
+        </div>`).join("")}</div>
+    </div>
+    <div class="stack">
+      <div class="panel stack">
+        <h3>Funding</h3>
+        <div class="bar" aria-hidden="true"><span style="width:${Math.min(raised / c.price * 100, 100)}%"></span></div>
+        <div class="prod-figs"><div><span class="label">Pledged</span><span class="v">${money(raised)}</span></div><div><span class="label">Your price</span><span class="v">${money(c.price)}</span></div><div><span class="label">Backers</span><span class="v">${backersOf(b)}</span></div></div>
+        ${claimStatus(c.price, raised)}
+        ${!funded ? `<button class="btn" id="more">Simulate 2 new backers (+${money(c.price - raised)})</button>` : ""}
+      </div>
+      <div class="panel stack"><h3>Delivery</h3>${final}</div>
+      ${b.id === "mine" && b.live ? `<button class="link" id="asclient">See the bounty page as a backer</button>` : ""}
+    </div>
+  </div>`;
+}
+function bindDeliver() {
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  on("#toboard", () => goDev(1));
+  on("#post-u", () => { const c = S.claim, i = c.milestones.findIndex(m => !m.done); c.milestones[i].done = true; c.milestones[i].update = $("#u-text").value; render(); toast("Update posted to backers"); });
+  on("#more", () => { const b = bountyById(S.claim.bountyId); S.extra += S.claim.price - raisedOf(b); render(); toast("2 new backers joined"); });
+  on("#deliver", () => { S.delivered = true; render(); });
+  on("#confirm", () => { S.confirmed = true; render(); toast("Backers confirmed. Payout sent"); });
+  on("#asclient", () => { S.role = "client"; go(4); });
+}
+
+function devUpdatesHtml() {
+  if (!claimedMine()) return `<div class="empty" style="padding:18px">No developer has taken this on yet. Robotics teams see the spec and the pooled total, and post updates here once they start.</div>`;
+  const c = S.claim, done = c.milestones.filter(m => m.done);
+  const state = S.confirmed ? `<span class="pill good">Delivered &amp; paid</span>` : S.delivered ? `<span class="pill warn">Delivered · confirm it meets the spec</span>` : `<span class="pill warn">Claimed · building</span>`;
+  return `<div class="row"><b>${esc(S.dev.team)}</b>${state}</div>
+    <p class="muted" style="font-size:.88rem">Will build it for <span class="num">${money(c.price)}</span> in ${c.weeks} weeks. ${esc(c.approach)}</p>
+    <div>${done.length ? done.map((m, i) => `<div class="update"><b>${esc(m.title)}</b><span>${esc(m.update)}</span><span class="muted" style="font-size:.8rem">${msDate(i)}</span></div>`).join("") : `<p class="muted" style="font-size:.88rem">No milestone updates yet.</p>`}</div>`;
+}
+
+// ---------- Main ----------
+const SCREENS = [[screenIntake, bindIntake], [screenFollowups, bindFollowups], [screenOpps, bindOpps], [screenSearch, bindSearch], [screenBounty, bindBounty]];
+const DEV_SCREENS = [[screenProfile, bindProfile], [screenBoard, bindBoard], [screenClaim, bindClaim], [screenDeliver, bindDeliver]];
+function renderRole() {
+  document.querySelectorAll("#role button").forEach(b => { b.setAttribute("aria-pressed", b.dataset.role === S.role); b.onclick = () => { S.role = b.dataset.role; render(); window.scrollTo({ top: 0 }); }; });
+}
+function render() {
+  renderRole();
+  const dev = S.role === "dev";
+  const names = dev ? DEV_STEPS : STEP_NAMES, cur = dev ? S.dstep : S.step;
+  $("#steps").innerHTML = names.map((n, i) =>
+    `<li><button data-step="${i}" ${i === cur ? 'aria-current="step"' : ""} class="${i < cur ? "done" : ""}"><span class="n">${i + 1}</span>${n}</button></li>`).join("");
+  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => dev ? goDev(+b.dataset.step) : go(+b.dataset.step));
+  const [html, bind] = (dev ? DEV_SCREENS : SCREENS)[cur];
+  $("#app").innerHTML = `<div class="screen">${html()}</div>`;
+  bind();
+}
+render();
+</script>
+
+</body></html>

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": null,
+  "outputDirectory": ".",
+  "framework": null,
+  "rewrites": [
+    { "source": "/", "destination": "/pages/index.html" },
+    { "source": "/find-solution", "destination": "/pages/find-solution.html" },
+    { "source": "/engineers", "destination": "/pages/engineers.html" },
+    { "source": "/messages", "destination": "/pages/messages.html" },
+    { "source": "/login", "destination": "/pages/login.html" },
+    { "source": "/signup", "destination": "/pages/signup.html" },
+    { "source": "/message-vendor", "destination": "/pages/message-vendor.html" },
+    { "source": "/engineer-claims", "destination": "/pages/engineer-claims.html" },
+    { "source": "/client-bounty-journey", "destination": "/pages/client-bounty-journey.html" },
+    { "source": "/robot-bounty-client-flow", "destination": "/pages/robot-bounty-client-flow.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" }
+      ]
+    }
+  ]
+}
