@@ -203,6 +203,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 <main class="gutter" id="app"></main>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="../js/rivet-config.js"></script>
 <script src="../js/rivet-api.js"></script>
 <script>
 // ---------- Data (all sample / illustrative) ----------
@@ -390,7 +391,7 @@ function saveStatus(st, fp, savedText) {
   return "";
 }
 function intakeStatus() {
-  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
+  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet (${esc(RivetApi.backend)}) \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
 }
 function answersStatus() {
   return saveStatus(S.answersSave, answersFp(), S.submit.id && S.answered > 0 && "Answers saved");
@@ -500,9 +501,10 @@ async function refreshAi(force) {
   try {
     if (S.submit.id) {
       const st = await RivetApi.specStatus(S.submit.id, S.submit.token);
-      Object.assign(a, { available: st.available, job: st.job, spec: st.spec, stale: st.stale });
+      Object.assign(a, { available: st.available, unavailableMessage: st.unavailableMessage, job: st.job, spec: st.spec, stale: st.stale });
     } else {
-      a.available = (await RivetApi.aiStatus()).available;
+      const st = await RivetApi.aiStatus();
+      Object.assign(a, { available: st.available, unavailableMessage: st.message });
     }
     if (!a.busy && !aiActive()) a.error = "";
   } catch (e) {
@@ -544,16 +546,16 @@ async function generateAiSpec() {
   } catch (e) {
     a.busy = false;
     if (RivetApi.isDraftMissing(e)) resetDraft();
-    if (/unavailable/i.test(e?.data ?? "")) a.available = false;
-    a.error = RivetApi.friendlyError(e);
+    a.error = RivetApi.friendlyError(e); // e.g. no key, or a daily AI limit (server-enforced)
     render();
+    refreshAi(true); // pick up the server's current availability
   }
 }
 function aiPanel() {
   const a = S.ai, j = a.job, busy = a.busy || aiActive(), small = `style="font-size:.85rem"`;
   const notice = (t) => `<div class="notice" role="alert">${esc(t)}</div>`;
   let state = "";
-  if (a.available === false) state = notice("AI drafting is unavailable in this demo: no Anthropic API key is configured on the backend. Nothing is sent to an AI service.");
+  if (a.available === false && !a.error) state = notice(a.unavailableMessage || "AI drafting is unavailable right now.");
   else if (a.available === null) state = `<p class="muted" ${small}>Checking whether AI drafting is available\u2026</p>`;
   if (j?.status === "queued") state += `<p class="muted" ${small} role="status">Queued\u2026</p>`;
   if (j?.status === "running") state += `<p class="muted" ${small} role="status">Claude is drafting your requirements\u2026</p>`;

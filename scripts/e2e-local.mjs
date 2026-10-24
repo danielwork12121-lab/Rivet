@@ -1,9 +1,11 @@
-// Live check against a RUNNING local Convex backend (npx convex dev). Not part of
-// `npm test`. Uses fictional data only; each run leaves a few rows in the dev database.
+// Live API checks against a running Convex backend chosen explicitly:
+//   RIVET_TARGET=local npm run e2e:local   or   RIVET_TARGET=cloud npm run e2e:local
+// Not part of `npm test`. Never starts a paid AI call. Uses fictional data only; each run leaves a few rows in the dev database.
 import { ConvexHttpClient } from "convex/browser";
 import "../js/rivet-api.js"; // classic browser script; attaches globalThis.RivetApi
+import { resolveTarget } from "./targets.mjs";
 
-const url = process.env.CONVEX_URL ?? "http://127.0.0.1:3210";
+const { url } = resolveTarget();
 const api = globalThis.RivetApi;
 let failed = 0;
 const check = (name, ok, extra = "") => {
@@ -107,7 +109,9 @@ check("agent:latestSpec rejects a wrong token", api.isDraftMissing(agentWrong));
 const agentNoToken = await raw.query("agent:latestSpec", { requestId: id }).catch((e) => e);
 check("agent:latestSpec without a token is rejected", agentNoToken instanceof Error);
 const aiStatus = await raw.query("agent:aiStatus", {});
-check("agent:aiStatus reports availability without exposing any key", typeof aiStatus.available === "boolean" && Object.keys(aiStatus).length === 1, JSON.stringify(aiStatus));
+check("agent:aiStatus reports availability (and a reason when unavailable) without exposing any key",
+  typeof aiStatus.available === "boolean" && Object.keys(aiStatus).every((k) => ["available", "reason", "message"].includes(k)) &&
+  !/sk-ant|api[_-]?key=/i.test(JSON.stringify(aiStatus)), JSON.stringify(aiStatus));
 if (!aiStatus.available) {
   const refused = await raw.mutation("agent:generateSpec", { requestId: id, clientToken: token }).catch((e) => e);
   check("without an API key, generateSpec is refused with a clear unavailable message", /AI drafting is unavailable/.test(refused?.data ?? ""), String(refused?.data ?? refused));

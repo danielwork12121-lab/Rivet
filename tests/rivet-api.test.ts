@@ -268,14 +268,23 @@ describe("draft storage", () => {
     expect(api().loadDraft()).toBeNull();
   });
 
-  it("discards the legacy id-only key and malformed values", () => {
+  it("keeps one draft per backend: the key names the backend (local by default)", () => {
+    const store = memoryStorage();
+    api().saveDraft("abc", "tok-12345678");
+    expect(api().draftKey).toBe("rivet.intake.draft.local");
+    expect(JSON.parse(store.get("rivet.intake.draft.local")!)).toEqual({ id: "abc", token: "tok-12345678" });
+  });
+
+  it("discards the legacy id-only key, the un-namespaced draft, and malformed values", () => {
     const store = memoryStorage();
     store.set("rivet.intake.requestId", "old-id");
+    store.set("rivet.intake.draft", JSON.stringify({ id: "old", token: "old-token" }));
     expect(api().loadDraft()).toBeNull();
     expect(store.has("rivet.intake.requestId")).toBe(false);
-    store.set("rivet.intake.draft", "{not json");
+    expect(store.has("rivet.intake.draft")).toBe(false);
+    store.set("rivet.intake.draft.local", "{not json");
     expect(api().loadDraft()).toBeNull();
-    store.set("rivet.intake.draft", JSON.stringify({ id: "x" }));
+    store.set("rivet.intake.draft.local", JSON.stringify({ id: "x" }));
     expect(api().loadDraft()).toBeNull();
   });
 

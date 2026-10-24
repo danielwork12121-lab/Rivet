@@ -1,16 +1,20 @@
 // Rivet frontend <-> Convex glue. Classic script (no import/export) so it works
 // from file:// as well as http://. Exposes `RivetApi` on the global object.
 //
-// Backend URL: set `window.RIVET_CONVEX_URL` before this script to override.
-// The default is the local dev deployment. Fictional demo data only: there are no
+// Backend: js/rivet-config.js sets `window.RIVET_BACKEND` ("local" | "cloud") and
+// `window.RIVET_CONVEX_URL` before this script. Without it, the local dev backend is used. Fictional demo data only: there are no
 // accounts. A draft is protected only by its client token, kept in localStorage.
 (function (root) {
   "use strict";
 
   var CONVEX_ESM = "https://esm.sh/convex@1.48.0/browser"; // pinned, matches package.json
   var DEFAULT_URL = "http://127.0.0.1:3210";
-  var DRAFT_KEY = "rivet.intake.draft"; // {"id": "...", "token": "..."}
-  var LEGACY_KEY = "rivet.intake.requestId"; // id only; unusable now that reads need the token
+  var BACKEND = root.RIVET_BACKEND || "local";
+  // One saved draft per backend, so a cloud draft is never sent to a local backend.
+  var DRAFT_KEY = "rivet.intake.draft." + BACKEND; // {"id": "...", "token": "..."}
+  // Older keys: an id-only key (unusable now that reads need the token) and an
+  // un-namespaced draft that can't be tied to a backend.
+  var LEGACY_KEYS = ["rivet.intake.requestId", "rivet.intake.draft"];
   var TIMEOUT_MS = 15000;
   var DRAFT_NOT_FOUND = "Draft not found"; // backend error text for unknown id or wrong token
 
@@ -246,7 +250,7 @@
   // localStorage can throw (private mode, blocked storage): never let that break the page.
   function loadDraft() {
     try {
-      root.localStorage.removeItem(LEGACY_KEY);
+      LEGACY_KEYS.forEach(function (k) { root.localStorage.removeItem(k); });
       var d = JSON.parse(root.localStorage.getItem(DRAFT_KEY) || "null");
       return d && typeof d.id === "string" && typeof d.token === "string" ? d : null;
     } catch (e) { return null; }
@@ -282,6 +286,8 @@
     loadDraft: loadDraft,
     saveDraft: saveDraft,
     clearDraft: clearDraft,
+    backend: BACKEND,
+    draftKey: DRAFT_KEY,
     _setClient: function (c) { injected = c; }, // tests only
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

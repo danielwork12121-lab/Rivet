@@ -33,6 +33,12 @@ for (const page of pages) {
     // Only blocks a browser runs as classic scripts. Modules have their own scope, and
     // other types (JSON, templates, bundler data) are never executed.
     const type = attrs.match(/type=["']?([^"'\s>]+)/)?.[1]?.toLowerCase();
+    // JSON data blocks (incl. the site's exported bundles) must parse, or the page's
+    // own loader fails: a stray raw newline once froze find-solution on "Loading...".
+    if (type && (type.includes("json") || type.startsWith("__bundler/"))) {
+      try { JSON.parse(m[2]); } catch (e) { console.log(`FAIL  ${page} <script type="${type}">: invalid JSON: ${e.message}`); failed++; }
+      continue;
+    }
     if (type && type !== "text/javascript" && type !== "application/javascript") continue;
     const src = attrs.match(/src=["']([^"']+)["']/)?.[1];
     if (src && /^https?:/.test(src)) continue;

@@ -1,7 +1,10 @@
-// Real-browser checks for Robot Bounty Client Flow.html against the LOCAL Convex backend.
+// Real-browser checks for pages/robot-bounty-client-flow.html against an explicitly chosen
+// Convex backend (the page is opened with ?backend=<target>, so it uses the same one):
 //
-//   npx convex dev            # terminal 1, keep running
-//   npm run e2e:browser       # terminal 2
+//   npx convex dev                              # terminal 1, keep running
+//   RIVET_TARGET=local npm run e2e:browser      # or RIVET_TARGET=cloud
+//
+// Never presses the AI button while AI is available: no paid calls.
 //
 // No extra dependencies: serves the repo on 127.0.0.1 with node:http, drives the system
 // Chrome (or CHROME_PATH) over the DevTools protocol with Node's built-in WebSocket, and
@@ -13,10 +16,13 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
+import { resolveTarget } from "./targets.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const CONVEX_URL = process.env.CONVEX_URL ?? "http://127.0.0.1:3210";
-const PAGE_PATH = "/Robot%20Bounty%20Client%20Flow.html";
+const TARGET = resolveTarget();
+const CONVEX_URL = TARGET.url;
+const PAGE_PATH = `/pages/robot-bounty-client-flow.html?backend=${TARGET.name}`;
+const DRAFT_KEY = JSON.stringify(`rivet.intake.draft.${TARGET.name}`); // as a JS string literal for page code
 const RUN = Date.now().toString(36);
 
 let failed = 0;
@@ -231,7 +237,7 @@ async function main() {
     await tab.ev(click("[data-bounty]"));
     check("opportunities -> request a bounty", await tab.waitFor(`${onStep(4)} && !!document.querySelector("#post")`));
     const note = `Fits in the trailer <img src=x onerror="window.__xss=1"> & more ${RUN}`;
-    const draftId = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`)).id;
+    const draftId = JSON.parse(await tab.ev(`localStorage.getItem(${DRAFT_KEY})`)).id;
     const bountyTitleText = await tab.ev("bountyTitle()");
     await tab.ev(clearToast);
     // Like a person: type the note, then go straight for the Post button with the mouse
@@ -308,7 +314,8 @@ async function main() {
     // 4. Refresh restores the saved intake
     await tab.reload();
     check("after a refresh the intake is restored", await tab.waitFor(`document.querySelector("#f-name")?.value === ${JSON.stringify(company)}`));
-    check("restored intake shows the saved confirmation", await tab.waitFor(`document.body.innerText.includes("Saved to Rivet")`));
+    check("restored intake shows the saved confirmation, naming the backend in use",
+      await tab.waitFor(`document.body.innerText.includes(${JSON.stringify(`Saved to Rivet (${TARGET.name})`)})`));
     check("after a refresh the edited value is shown", await tab.ev(`document.querySelector("#f-wage").value === "31"`));
     check("after a refresh the posted bounty is restored", await tab.waitFor(`S.posted && S.bountySave.id === ${JSON.stringify(bRows[0]._id)} && S.gapNote === ${JSON.stringify(note)}`));
     check("after a refresh all follow-up answers are restored", await tab.waitFor(`S.answered === 3 && S.answers.slope === 15 && S.answers.obstacles === 1 && S.answers.weeks === 26`));
@@ -347,12 +354,12 @@ async function main() {
     check("a failed intake update shows an error and stays on step 1", await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && ${onStep(0)}`));
     check("...with no success message and the stored record unchanged",
       !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].profile.hourlyLaborCost === 31 && rowsFor(company).length === 1);
-    const realDraft = JSON.parse(await tab.ev(`localStorage.getItem("rivet.intake.draft")`));
+    const realDraft = JSON.parse(await tab.ev(`localStorage.getItem(${DRAFT_KEY})`));
     await tab.close();
 
     // A different person (separate browser context, empty storage) sees the bounty as a Developer
     tab = await open(null, true);
-    check("a separate browser session starts with no draft", await tab.ev(`localStorage.getItem("rivet.intake.draft") === null`));
+    check("a separate browser session starts with no draft", await tab.ev(`localStorage.getItem(${DRAFT_KEY}) === null`));
     await tab.ev(`document.querySelector('#role [data-role="dev"]').click()`);
     await tab.waitFor(`S.role === "dev"`);
     await tab.ev(click("#next"));
@@ -371,9 +378,9 @@ async function main() {
     await tab.close();
 
     // Wrong token: the draft is not shown and is forgotten
-    tab = await open(`${FRESH} localStorage.setItem("rivet.intake.draft", JSON.stringify({ id: ${JSON.stringify(realDraft.id)}, token: "not-the-right-token" }));`);
+    tab = await open(`${FRESH} localStorage.setItem(${DRAFT_KEY}, JSON.stringify({ id: ${JSON.stringify(realDraft.id)}, token: "not-the-right-token" }));`);
     check("a stored draft with a wrong token is rejected and forgotten",
-      await tab.waitFor(`localStorage.getItem("rivet.intake.draft") === null`));
+      await tab.waitFor(`localStorage.getItem(${DRAFT_KEY}) === null`));
     check("...and none of its data is shown", await tab.ev(`document.querySelector("#f-name").value !== ${JSON.stringify(company)} && !document.body.innerText.includes("Saved to Rivet")`));
     await tab.close();
 
@@ -395,19 +402,27 @@ async function main() {
       JSON.stringify(partial?.followUps));
     await tab.close();
 
-    // 5b. AI requirement draft panel (no API key on the local backend)
+    // 5b. AI requirement draft panel. Never presses the button while AI is available.
     const companyAi = `E2E-TEST AI ${RUN}`;
     tab = await open(FRESH);
     await tab.ev(setVal("#f-name", companyAi));
     await tab.ev(click("#next"));
     await tab.waitFor(onStep(1));
     const aiReq = rowsFor(companyAi)[0];
-    check("AI panel shows a clear unavailable state with the button disabled (no key configured)",
-      await tab.waitFor(`S.ai.available === false && document.querySelector("#ai-draft")?.disabled && document.querySelector("#ai-panel .notice")?.textContent.includes("unavailable")`));
-    await tab.ev(`document.querySelector("#ai-draft").disabled = false; document.querySelector("#ai-draft").click();`); // force it
-    await sleep(1500);
-    check("forcing the button still starts no AI job (the backend refuses without a key)",
-      aiJobsFor(aiReq._id).length === 0 && (await tab.ev(`/unavailable/.test(document.querySelector("#ai-panel").textContent)`)));
+    await tab.waitFor(`S.ai.available !== null`);
+    const aiAvailable = await tab.ev("S.ai.available");
+    check("opening the follow-ups step starts no AI run (status is only read)", aiJobsFor(aiReq._id).length === 0);
+    if (aiAvailable) {
+      check("AI is available on this backend: the button is offered, enabled, and was not pressed",
+        await tab.ev(`!document.querySelector("#ai-draft").disabled && /Draft requirements with AI/.test(document.querySelector("#ai-draft").textContent)`));
+    } else {
+      check("AI panel shows a clear unavailable state with the button disabled",
+        await tab.waitFor(`document.querySelector("#ai-draft")?.disabled && !!document.querySelector("#ai-panel .notice")?.textContent.trim()`));
+      await tab.ev(`document.querySelector("#ai-draft").disabled = false; document.querySelector("#ai-draft").click();`); // force it
+      await sleep(1500);
+      check("forcing the button still starts no AI job (the backend refuses)",
+        aiJobsFor(aiReq._id).length === 0 && !!(await tab.ev(`document.querySelector("#ai-panel .notice")?.textContent`)));
+    }
     // Render a stored spec: a TEST FIXTURE inserted through the internal CLI, never shown in a demo.
     const evilAi = `<img src=x onerror="window.__xss=1"> fixture summary ${RUN}`;
     convexRun("agent:saveSpec", {
@@ -431,7 +446,7 @@ async function main() {
     check("after an answer changes, the AI draft is marked out of date",
       await tab.waitFor(`S.ai.stale === true && document.querySelector("#ai-spec .notice")?.textContent.includes("out of date")`));
     // Button states, rendered from injected page state (no real run is possible without a key).
-    await tab.ev(`(() => { Object.assign(S.ai, { available: true, job: { status: "queued" }, at: Date.now() }); window.__genCalls = 0; const g = RivetApi.generateSpec; RivetApi.generateSpec = (...x) => { window.__genCalls++; return g(...x); }; render(); })()`);
+    await tab.ev(`(() => { Object.assign(S.ai, { available: true, job: { status: "queued" }, at: Date.now() }); window.__genCalls = 0; RivetApi.generateSpec = () => { window.__genCalls++; return Promise.reject(new Error("test stub: no real call")); }; render(); })()`);
     check("[render] while a run is queued the button reads Drafting and is disabled",
       await tab.ev(`document.querySelector("#ai-draft").disabled && /Drafting/.test(document.querySelector("#ai-draft").textContent)`));
     await tab.ev(`generateAiSpec(); generateAiSpec();`);
@@ -458,7 +473,7 @@ async function main() {
     await tab.ev(click("#next"));
     check("unreachable backend shows a connection error", await tab.waitFor(noticeHas("Can't reach the Rivet server")));
     check("...stays on step 1, button usable, nothing marked saved",
-      await tab.ev(`${onStep(0)} && !document.querySelector("#next").disabled && localStorage.getItem("rivet.intake.requestId") === null`));
+      await tab.ev(`${onStep(0)} && !document.querySelector("#next").disabled && RivetApi.backend === "custom" && RivetApi.loadDraft() === null`));
     await tab.close();
 
     // 8. Markup typed by a user stays inert after a round trip
