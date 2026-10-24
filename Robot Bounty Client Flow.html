@@ -279,6 +279,8 @@ const S = {
   bountySave: { status: "idle", id: null, pledged: 0, error: "" }, // this operator's posted bounty (pledged = saved amount)
   board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
   catalog: { source: "built-in" }, // "convex" once the sample catalog loads from the backend
+  // AI requirement draft (step 2). Filled from agent:specStatus; available is null until checked.
+  ai: { available: null, job: null, spec: null, stale: false, at: 0, loading: false, busy: false, polling: false, error: "" },
 };
 
 // ---------- Math (deterministic) ----------
@@ -397,6 +399,7 @@ function answersStatus() {
 function resetDraft() {
   Object.assign(S.submit, { id: null, token: "", fp: "" });
   S.answersSave.fp = "";
+  Object.assign(S.ai, { job: null, spec: null, stale: false, at: 0 });
   RivetApi.clearDraft();
 }
 async function submitIntake(target) {
@@ -481,6 +484,95 @@ async function hydrateSaved() {
     if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
     // otherwise the backend is unreachable: keep the blank form and the stored draft
   }
+}
+// ---- AI requirement draft (step 2) ----
+// Reading status is free. Only the button calls generateSpec, which starts one paid
+// AI run (the backend reuses a run already in progress and refuses without a key).
+const AI_POLL_MS = 2000, AI_POLL_MAX_MS = 3 * 60 * 1000;
+const aiActive = () => S.ai.job?.status === "queued" || S.ai.job?.status === "running";
+async function refreshAi(force) {
+  const a = S.ai;
+  if (a.loading || (!force && Date.now() - a.at < 3000)) return;
+  a.loading = true;
+  try {
+    if (S.submit.id) {
+      const st = await RivetApi.specStatus(S.submit.id, S.submit.token);
+      Object.assign(a, { available: st.available, job: st.job, spec: st.spec, stale: st.stale });
+    } else {
+      a.available = (await RivetApi.aiStatus()).available;
+    }
+    if (!a.busy && !aiActive()) a.error = "";
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    a.error = RivetApi.friendlyError(e);
+  }
+  a.loading = false; a.at = Date.now();
+  if (aiActive()) pollAi();
+  if (S.role === "client" && S.step === 1) render();
+}
+function pollAi() {
+  const a = S.ai;
+  if (a.polling) return;
+  a.polling = true;
+  const started = Date.now();
+  const tick = async () => {
+    await refreshAi(true);
+    if (aiActive() && Date.now() - started < AI_POLL_MAX_MS) { setTimeout(tick, AI_POLL_MS); return; }
+    a.polling = false;
+    if (aiActive()) { a.error = "Still working after 3 minutes. Reopen this step to check again."; if (S.step === 1) render(); }
+  };
+  setTimeout(tick, AI_POLL_MS);
+}
+async function generateAiSpec() {
+  const a = S.ai;
+  if (a.busy || aiActive()) return; // repeated clicks
+  if (!S.submit.id) { a.error = "Go back to step 1 and press Continue to save your request first."; render(); return; }
+  a.busy = true; a.error = ""; render();
+  try {
+    // The AI reads the saved request, so save answers picked since the last save first.
+    const f = RivetApi.followUpsFromState(S, QUESTIONS), fp = JSON.stringify(f);
+    if (f.answers.length && S.answersSave.fp !== fp) {
+      await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+      Object.assign(S.answersSave, { status: "saved", fp });
+    }
+    await RivetApi.generateSpec(S.submit.id, S.submit.token);
+    a.busy = false;
+    await refreshAi(true);
+  } catch (e) {
+    a.busy = false;
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    if (/unavailable/i.test(e?.data ?? "")) a.available = false;
+    a.error = RivetApi.friendlyError(e);
+    render();
+  }
+}
+function aiPanel() {
+  const a = S.ai, j = a.job, busy = a.busy || aiActive(), small = `style="font-size:.85rem"`;
+  const notice = (t) => `<div class="notice" role="alert">${esc(t)}</div>`;
+  let state = "";
+  if (a.available === false) state = notice("AI drafting is unavailable in this demo: no Anthropic API key is configured on the backend. Nothing is sent to an AI service.");
+  else if (a.available === null) state = `<p class="muted" ${small}>Checking whether AI drafting is available\u2026</p>`;
+  if (j?.status === "queued") state += `<p class="muted" ${small} role="status">Queued\u2026</p>`;
+  if (j?.status === "running") state += `<p class="muted" ${small} role="status">Claude is drafting your requirements\u2026</p>`;
+  if (j?.status === "failed" && !a.error) state += notice(j.error || "The AI run failed.");
+  if (a.error) state += notice(a.error);
+  const sp = a.spec;
+  const specHtml = !sp ? "" : `
+    <div class="stack" style="gap:6px" id="ai-spec">
+      <span class="label">AI-generated draft \u00b7 not verified</span>
+      ${a.stale ? notice("Your request changed after this draft was made, so it may be out of date. Draft again to update it.") : ""}
+      <p ${small}>${esc(sp.summary)}</p>
+      <ul class="spec">${sp.requirements.map((r) => `<li>${esc(r.description)}${r.value !== undefined ? ` (${esc(String(r.value))}${r.unit ? " " + esc(r.unit) : ""})` : ""} <span class="muted">\u00b7 ${esc(r.kind)}, ${r.mandatory ? "must-have" : "nice-to-have"}</span></li>`).join("")}</ul>
+      ${sp.followUpQuestions?.length ? `<span class="label">Questions the AI still has</span><ul class="spec">${sp.followUpQuestions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>` : ""}
+      <p class="muted" style="font-size:.78rem">Model: ${esc(sp.model)} \u00b7 confidence ${Math.round(sp.confidence * 100)}% (the model's own estimate)</p>
+    </div>`;
+  return `
+    <div class="panel stack" id="ai-panel">
+      <h3>AI requirement draft <span class="pill plain">Optional</span></h3>
+      <p class="muted" ${small}>Turns your saved description and answers into a structured requirement list. It makes a paid AI call, and only when you press the button.</p>
+      ${state}${specHtml}
+      <div><button class="btn" id="ai-draft" ${a.available !== true || busy ? "disabled" : ""}>${busy ? "Drafting\u2026" : sp ? "Draft again with AI" : "Draft requirements with AI"}</button></div>
+    </div>`;
 }
 // Catalog: Convex is the canonical source. The PRODUCTS array above stays as an
 // offline fallback copy (kept identical by tests/catalog.test.ts).
@@ -581,6 +673,7 @@ function screenFollowups() {
   </div>
   <div class="grid2">
     <div class="chat">${chat.join("")}</div>
+    <div class="stack"><!-- RIVET-BACKEND: column wrapper so the AI panel can sit below -->
     <div class="panel stack">
       <h3>What we're assuming</h3>
       <div class="assump">
@@ -593,6 +686,8 @@ function screenFollowups() {
       </div>
       <p class="muted" style="font-size:.82rem">The AI only reads your answers. The ROI math in the next step is a fixed formula you can check.</p>
     </div>
+    ${aiPanel()}
+    </div>
   </div>
   <div class="actions">${answersStatus()}<button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length || S.answersSave.status === "saving" ? "disabled" : ""}>${S.answersSave.status === "saving" ? "Saving\u2026" : "See automation opportunities"}</button></div>`;
 }
@@ -602,6 +697,8 @@ function bindFollowups() {
   });
   $("#back").onclick = () => go(0);
   $("#next").onclick = () => submitFollowUps(2); // RIVET-BACKEND: save answers first
+  const ai = $("#ai-draft"); if (ai) ai.onclick = generateAiSpec; // RIVET-BACKEND: the only AI trigger
+  refreshAi(); // RIVET-BACKEND: status only, no AI call
 }
 
 // Step 3

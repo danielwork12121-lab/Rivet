@@ -224,6 +224,10 @@
       { id: id, clientToken: token, answers: followUps.answers, complete: followUps.complete });
   }
   function listRobots() { return call("query", "robots:search", {}); }
+  // AI: status reads are free; generateSpec starts a paid call (backend refuses without a key).
+  function aiStatus() { return call("query", "agent:aiStatus", {}); }
+  function specStatus(id, token) { return call("query", "agent:specStatus", { requestId: id, clientToken: token }); }
+  function generateSpec(id, token) { return call("mutation", "agent:generateSpec", { requestId: id, clientToken: token }); }
   function getDraft(id, token) { return call("query", "requests:getDraft", { id: id, clientToken: token }); }
   function postBounty(id, token, bounty) {
     return call("mutation", "bounties:post", Object.assign({ requestId: id, clientToken: token }, bounty));
@@ -270,6 +274,9 @@
     toBoardBounty: toBoardBounty,
     robotsToProducts: robotsToProducts,
     listRobots: listRobots,
+    aiStatus: aiStatus,
+    specStatus: specStatus,
+    generateSpec: generateSpec,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadDraft: loadDraft,

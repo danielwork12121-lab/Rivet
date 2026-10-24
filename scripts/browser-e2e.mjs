@@ -157,6 +157,15 @@ function bountiesFor(requestId) {
   return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).filter((b) => b.requestId === requestId);
 }
 
+function aiJobsFor(requestId) {
+  const out = execFileSync("npx", ["convex", "data", "aiJobs", "--limit", "10000", "--format", "jsonLines"],
+    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l)).filter((j) => j.requestId === requestId);
+}
+// Internal functions via the CLI (admin access to the local dev deployment only).
+const convexRun = (fn, args) =>
+  execFileSync("npx", ["convex", "run", fn, JSON.stringify(args)], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
 // ---- page helpers -------------------------------------------------------------------
 // Start a tab with empty storage. Runs once per tab (guarded by sessionStorage, which
 // survives reloads), so a later reload still sees what the page saved.
@@ -170,7 +179,7 @@ const clearToast = `document.querySelector("#toast").textContent = ""`;
 const toastSaysSaved = `/saved/i.test(document.querySelector("#toast").textContent)`;
 // Make every Convex call from the page fail as if the network dropped.
 const breakNetwork = `RivetApi._setClient({ mutation: () => Promise.reject(new TypeError("Failed to fetch")), query: () => Promise.reject(new TypeError("Failed to fetch")) })`;
-const noticeHas = (text) => `(document.querySelector(".notice")?.textContent ?? "").includes(${JSON.stringify(text)})`;
+const noticeHas = (text) => `[...document.querySelectorAll(".notice")].some((n) => n.textContent.includes(${JSON.stringify(text)}))`;
 
 // ---- scenarios ----------------------------------------------------------------------
 async function main() {
@@ -375,6 +384,53 @@ async function main() {
     check("only the one answered question is stored, never the defaults",
       partial?.followUps?.length === 1 && partial.followUps[0].key === "slope" && partial.followUps[0].answerLabel === "A lot of them" && partial.followUpsComplete === false,
       JSON.stringify(partial?.followUps));
+    await tab.close();
+
+    // 5b. AI requirement draft panel (no API key on the local backend)
+    const companyAi = `E2E-TEST AI ${RUN}`;
+    tab = await open(FRESH);
+    await tab.ev(setVal("#f-name", companyAi));
+    await tab.ev(click("#next"));
+    await tab.waitFor(onStep(1));
+    const aiReq = rowsFor(companyAi)[0];
+    check("AI panel shows a clear unavailable state with the button disabled (no key configured)",
+      await tab.waitFor(`S.ai.available === false && document.querySelector("#ai-draft")?.disabled && document.querySelector("#ai-panel .notice")?.textContent.includes("unavailable")`));
+    await tab.ev(`document.querySelector("#ai-draft").disabled = false; document.querySelector("#ai-draft").click();`); // force it
+    await sleep(1500);
+    check("forcing the button still starts no AI job (the backend refuses without a key)",
+      aiJobsFor(aiReq._id).length === 0 && (await tab.ev(`/unavailable/.test(document.querySelector("#ai-panel").textContent)`)));
+    // Render a stored spec: a TEST FIXTURE inserted through the internal CLI, never shown in a demo.
+    const evilAi = `<img src=x onerror="window.__xss=1"> fixture summary ${RUN}`;
+    convexRun("agent:saveSpec", {
+      requestId: aiReq._id, model: "E2E-TEST fixture (not a model)", summary: evilAi, tasks: ["mow"], environmentFactors: [],
+      requirements: [{ kind: "performance", description: "Fixture: mows open turf", value: 20, unit: "degrees", mandatory: true }],
+      confidence: 0.6, followUpQuestions: ["Fixture question from the AI?"], requestVersion: aiReq.updatedAt ?? aiReq._creationTime,
+    });
+    await tab.ev("refreshAi(true)");
+    check("a stored AI spec is shown as an unverified AI draft with its own questions",
+      await tab.waitFor(`document.querySelector("#ai-spec")?.textContent.includes("not verified") && document.querySelector("#ai-spec").textContent.includes("Questions the AI still has") && document.querySelector("#ai-spec").textContent.includes("Fixture question from the AI?")`));
+    check("AI text is escaped (markup shown as text, never run)",
+      await tab.ev(`window.__xss === undefined && !document.querySelector("#ai-spec img") && document.querySelector("#ai-spec").textContent.includes("<img src=x")`));
+    check("AI questions are kept apart from the fixed follow-up questions", await tab.ev(`!document.querySelector(".chat").textContent.includes("Fixture question from the AI?")`));
+    check("a fresh spec is not marked stale", await tab.ev(`!S.ai.stale && !document.querySelector("#ai-spec").textContent.includes("out of date")`));
+    await tab.ev(`document.querySelector('.chip[data-q="0"]').click()`);
+    await tab.ev(stepper(2)); // leaving step 2 forward saves the answer, which changes the request
+    await tab.waitFor(onStep(2));
+    await tab.ev(stepper(1));
+    await tab.waitFor(onStep(1));
+    await tab.ev("refreshAi(true)");
+    check("after an answer changes, the AI draft is marked out of date",
+      await tab.waitFor(`S.ai.stale === true && document.querySelector("#ai-spec .notice")?.textContent.includes("out of date")`));
+    // Button states, rendered from injected page state (no real run is possible without a key).
+    await tab.ev(`(() => { Object.assign(S.ai, { available: true, job: { status: "queued" }, at: Date.now() }); window.__genCalls = 0; const g = RivetApi.generateSpec; RivetApi.generateSpec = (...x) => { window.__genCalls++; return g(...x); }; render(); })()`);
+    check("[render] while a run is queued the button reads Drafting and is disabled",
+      await tab.ev(`document.querySelector("#ai-draft").disabled && /Drafting/.test(document.querySelector("#ai-draft").textContent)`));
+    await tab.ev(`generateAiSpec(); generateAiSpec();`);
+    check("[render] clicks during a run start nothing", (await tab.ev("window.__genCalls")) === 0);
+    await tab.ev(`(() => { Object.assign(S.ai, { job: { status: "failed", error: "The AI could not produce a draft this time. You can try again." }, error: "", at: Date.now() }); render(); })()`);
+    check("[render] a failed run shows its message and allows a retry",
+      await tab.ev(`document.querySelector("#ai-panel .notice")?.textContent.includes("You can try again") && !document.querySelector("#ai-draft").disabled`));
+    check("no script errors in the AI scenario", tab.errors.length === 0, tab.errors.join(" | "));
     await tab.close();
 
     // 6. Empty description: error, no save, no success
