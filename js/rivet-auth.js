@@ -7,13 +7,17 @@
 // What a signed-in person may do is decided by Convex (convex/lib/auth.ts),
 // never by this file.
 //
-// Uses Clerk's documented resource API (client.signIn / client.signUp). Clerk
-// marks it "legacy" in favour of SignInFuture, which plain JS can't reach yet
-// without internals; moving later only touches this file.
+// Uses Clerk's Future API (SignInFuture / SignUpFuture) through the __internal_future
+// handle on client.signIn / client.signUp, because it is the one that resolves Clerk
+// Protect bot challenges. If Clerk exposes it publicly later, only this file changes.
 (function (root) {
   "use strict";
 
   var CLERK_JS_PATH = "/npm/@clerk/clerk-js@6/dist/clerk.browser.js"; // major pin, as Clerk recommends
+  // Clerk's UI bundle. Our forms replace Clerk's prebuilt screens, but clerk-js still
+  // needs it to show bot-protection ("Protect") challenges, which sign-up can require
+  // (otherwise sign-up ends with the missing requirement "protect_check").
+  var CLERK_UI_PATH = "/npm/@clerk/ui@1/dist/ui.browser.js";
   var LOAD_TIMEOUT_MS = 20000;
 
   // A publishable key is "pk_(test|live)_" + base64("<frontend api host>$").
@@ -33,17 +37,28 @@
       if (root.Clerk && typeof root.Clerk.load === "function") return resolve(root.Clerk);
       var key = root.RIVET_CLERK_PUBLISHABLE_KEY, host = frontendApi(key);
       if (!host) return reject(new Error("Sign-in is not configured (missing Clerk publishable key)."));
-      var s = root.document.createElement("script");
-      s.src = "https://" + host + CLERK_JS_PATH;
-      s.async = true;
-      s.crossOrigin = "anonymous";
-      s.setAttribute("data-clerk-publishable-key", key);
       var timer = setTimeout(function () { reject(new Error("Sign-in took too long to load. Check your connection and reload.")); }, LOAD_TIMEOUT_MS);
-      s.onload = function () { clearTimeout(timer); root.Clerk ? resolve(root.Clerk) : reject(new Error("Sign-in failed to start.")); };
-      s.onerror = function () { clearTimeout(timer); reject(new Error("Couldn't load sign-in. Check your connection and reload.")); };
-      (root.document.head || root.document.documentElement).appendChild(s);
+      var add = function (path, withKey) {
+        return new Promise(function (ok, bad) {
+          var s = root.document.createElement("script");
+          s.src = "https://" + host + path;
+          s.async = true;
+          s.crossOrigin = "anonymous";
+          if (withKey) s.setAttribute("data-clerk-publishable-key", key);
+          s.onload = ok;
+          s.onerror = function () { bad(new Error("Couldn't load sign-in. Check your connection and reload.")); };
+          (root.document.head || root.document.documentElement).appendChild(s);
+        });
+      };
+      // The UI bundle first, then clerk-js (same order as Clerk's own snippet).
+      add(CLERK_UI_PATH, false).catch(function () { /* optional: only needed for Protect challenges */ })
+        .then(function () { return add(CLERK_JS_PATH, true); })
+        .then(function () { clearTimeout(timer); root.Clerk ? resolve(root.Clerk) : reject(new Error("Sign-in failed to start.")); }, function (e) { clearTimeout(timer); reject(e); });
     })
-      .then(function (clerk) { return Promise.resolve(clerk.load()).then(function () { return clerk; }); })
+      .then(function (clerk) {
+        var ui = root.__internal_ClerkUICtor;
+        return Promise.resolve(clerk.load(ui ? { ui: { ClerkUI: ui } } : undefined)).then(function () { return clerk; });
+      })
       .catch(function (e) { loading = null; throw e; });
     return loading;
   }
@@ -106,9 +121,12 @@
   }
 
   // ---- errors --------------------------------------------------------------------------
-  // Clerk API errors carry errors[].longMessage; those are written for end users.
+  // Clerk's methods return { error } instead of throwing; must() turns that into a throw.
+  // Errors carry a code (and, for API errors, errors[].longMessage written for end users).
+  function must(res) { if (res && res.error) throw res.error; return res; }
+  function firstError(err) { return (err && err.errors && err.errors[0]) || (err && err.code ? err : null); }
   function friendly(err) {
-    var e = err && err.errors && err.errors[0];
+    var e = firstError(err);
     if (e) {
       if (e.code === "form_code_incorrect") return "That code isn't right. Check the email and try again.";
       if (e.code === "verification_expired") return "That code has expired. Send a new one.";
@@ -119,61 +137,69 @@
     return (err && err.message) || "Something went wrong. Please try again.";
   }
   function fail(msg) { var e = new Error(msg); e.rivetAuth = true; return e; }
+  function rethrow(err) { throw err && err.rivetAuth ? err : fail(friendly(err)); }
+
+  // Clerk's Future API (the replacement for the "legacy" client.signIn / client.signUp
+  // methods). Only it resolves Clerk Protect bot challenges, in a modal from the UI bundle
+  // loaded above; the legacy methods leave sign-up stuck on "protect_check". It is
+  // exposed to plain JS as __internal_future, the same handle Clerk's own hooks use.
+  function signInF(clerk) { return clerk.client.signIn.__internal_future; }
+  function signUpF(clerk) { return clerk.client.signUp.__internal_future; }
+  var stay = function () {}; // we redirect ourselves; don't let finalize() navigate
 
   // ---- sign in ------------------------------------------------------------------------
   // Each step resolves with { status: "complete" } (now signed in) or
   // { status: "needs_code" } (Clerk emailed a code: call verifySignInCode).
-  function finish(clerk, attempt) {
-    return Promise.resolve(clerk.setActive({ session: attempt.createdSessionId })).then(function () {
-      return { status: "complete" };
-    });
-  }
-  // A new device (Clerk's Device Trust) or email-code 2FA: send the code.
-  function sendSecondFactorCode(clerk, attempt) {
-    var factor = (attempt.supportedSecondFactors || []).find(function (f) { return f.strategy === "email_code"; });
-    if (!factor) throw fail("This account needs a sign-in method this page doesn't support yet.");
-    return Promise.resolve(clerk.client.signIn.prepareSecondFactor({ strategy: "email_code", emailAddressId: factor.emailAddressId }))
-      .then(function () { return { status: "needs_code" }; });
-  }
-  function afterSignInStep(clerk, attempt) {
-    if (attempt.status === "complete") return finish(clerk, attempt);
-    if (attempt.status === "needs_second_factor" || attempt.status === "needs_client_trust") return sendSecondFactorCode(clerk, attempt);
-    if (attempt.status === "needs_new_password") return { status: "needs_new_password" };
+  function afterSignInStep(clerk, si) {
+    if (si.status === "complete") {
+      return Promise.resolve(si.finalize({ navigate: stay })).then(function (r) { must(r); return { status: "complete" }; });
+    }
+    // A new device (Clerk's Device Trust) or email-code 2FA: send the code.
+    if (si.status === "needs_second_factor" || si.status === "needs_client_trust") {
+      var factor = (si.supportedSecondFactors || []).find(function (f) { return f.strategy === "email_code"; });
+      if (!factor) throw fail("This account needs a sign-in method this page doesn't support yet.");
+      return Promise.resolve(si.mfa.sendEmailCode()).then(function (r) { must(r); return { status: "needs_code" }; });
+    }
+    if (si.status === "needs_new_password") return { status: "needs_new_password" };
     throw fail("Sign-in couldn't be completed. Please try again.");
   }
 
   function signIn(email, password) {
     return ready().then(function (clerk) {
       if (clerk.user) return { status: "complete" };
-      return clerk.client.signIn.create({ identifier: String(email).trim(), password: String(password) })
-        .then(function (attempt) { return afterSignInStep(clerk, attempt); });
+      var si = signInF(clerk);
+      return Promise.resolve(si.password({ identifier: String(email).trim(), password: String(password) }))
+        .then(function (r) { must(r); return afterSignInStep(clerk, si); });
     }).catch(rethrow);
   }
   function verifySignInCode(code) {
     return ready().then(function (clerk) {
-      return clerk.client.signIn.attemptSecondFactor({ strategy: "email_code", code: String(code).trim() })
-        .then(function (attempt) { return afterSignInStep(clerk, attempt); });
+      var si = signInF(clerk);
+      return Promise.resolve(si.mfa.verifyEmailCode({ code: String(code).trim() }))
+        .then(function (r) { must(r); return afterSignInStep(clerk, si); });
     }).catch(rethrow);
   }
   function resendSignInCode() {
-    return ready().then(function (clerk) { return sendSecondFactorCode(clerk, clerk.client.signIn); }).catch(rethrow);
+    return ready().then(function (clerk) { return signInF(clerk).mfa.sendEmailCode(); })
+      .then(function (r) { must(r); return { status: "needs_code" }; }).catch(rethrow);
   }
 
   // ---- sign up -------------------------------------------------------------------------
   // signUp sends an email code; verifySignUp completes the account and signs in.
   function signUp(fields) {
     return ready().then(function (clerk) {
+      var su = signUpF(clerk);
       var names = String(fields.name || "").trim().split(/\s+/);
       var params = { emailAddress: String(fields.email).trim(), password: String(fields.password) };
       if (names[0]) params.firstName = names[0];
       if (names.length > 1) params.lastName = names.slice(1).join(" ");
-      return clerk.client.signUp.create(params)
-        .then(function () { return clerk.client.signUp.prepareEmailAddressVerification({ strategy: "email_code" }); })
-        .then(function () { return { status: "needs_code" }; });
+      return Promise.resolve(su.password(params))
+        .then(function (r) { must(r); return su.verifications.sendEmailCode(); })
+        .then(function (r) { must(r); return { status: "needs_code" }; });
     }).catch(function (err) {
       // Some instances don't collect names: retry once without them.
-      var e = err && err.errors && err.errors[0];
-      if (e && e.code === "form_param_unknown" && /name/i.test(String(e.meta && e.meta.paramName))) {
+      var e = firstError(err);
+      if (e && e.code === "form_param_unknown" && /name/i.test(String((e.meta && e.meta.paramName) || e.message || "")) && fields.name) {
         return signUp({ email: fields.email, password: fields.password });
       }
       return rethrow(err);
@@ -181,16 +207,22 @@
   }
   function verifySignUp(code) {
     return ready().then(function (clerk) {
-      return clerk.client.signUp.attemptEmailAddressVerification({ code: String(code).trim() }).then(function (attempt) {
-        if (attempt.status === "complete") return finish(clerk, attempt);
-        throw fail("Your account needs more details than this page asks for. Please contact Rivet.");
-      });
+      var su = signUpF(clerk);
+      // With the UI bundle loaded, a Protect challenge (if the instance uses one) is
+      // resolved in a modal before this returns.
+      return Promise.resolve(su.verifications.verifyEmailCode({ code: String(code).trim() })).then(function (r) {
+        must(r);
+        if (su.status !== "complete") {
+          throw fail("Your account needs more details than this page asks for"
+            + ((su.missingFields && su.missingFields.length) ? " (" + su.missingFields.join(", ") + ")" : "") + ". Please contact Rivet.");
+        }
+        return su.finalize({ navigate: stay });
+      }).then(function (r) { must(r); return { status: "complete" }; });
     }).catch(rethrow);
   }
   function resendSignUpCode() {
-    return ready().then(function (clerk) {
-      return clerk.client.signUp.prepareEmailAddressVerification({ strategy: "email_code" });
-    }).then(function () { return { status: "needs_code" }; }).catch(rethrow);
+    return ready().then(function (clerk) { return signUpF(clerk).verifications.sendEmailCode(); })
+      .then(function (r) { must(r); return { status: "needs_code" }; }).catch(rethrow);
   }
 
   // ---- account recovery ---------------------------------------------------------------
@@ -198,9 +230,12 @@
   // find out who has one (the page says "If <email> has a Rivet account, we emailed it a code").
   function startPasswordReset(email) {
     return ready().then(function (clerk) {
-      return clerk.client.signIn.create({ strategy: "reset_password_email_code", identifier: String(email).trim() });
-    }).then(function () { return { status: "needs_code" }; }, function (err) {
-      var e = err && err.errors && err.errors[0];
+      var si = signInF(clerk);
+      return Promise.resolve(si.create({ identifier: String(email).trim() }))
+        .then(function (r) { must(r); return si.resetPasswordEmailCode.sendCode(); })
+        .then(function (r) { must(r); return { status: "needs_code" }; });
+    }).catch(function (err) {
+      var e = firstError(err);
       if (e && e.code === "form_identifier_not_found") return { status: "needs_code" };
       return rethrow(err);
     });
@@ -208,17 +243,21 @@
   // Verifies the emailed code and sets the new password; signs in on success.
   function completePasswordReset(code, password) {
     return ready().then(function (clerk) {
-      return clerk.client.signIn.attemptFirstFactor({
-        strategy: "reset_password_email_code", code: String(code).trim(), password: String(password),
-      }).then(function (attempt) { return afterSignInStep(clerk, attempt); });
+      var si = signInF(clerk);
+      return Promise.resolve(si.resetPasswordEmailCode.verifyCode({ code: String(code).trim() }))
+        .then(function (r) { must(r); return si.resetPasswordEmailCode.submitPassword({ password: String(password) }); })
+        .then(function (r) { must(r); return afterSignInStep(clerk, si); });
     }).catch(rethrow);
   }
 
+  // Clerk's signOut() navigates away afterwards (by default to the site root). Send it
+  // to our login page, which says "You've been signed out" (?reason=signed_out).
   function signOut() {
-    return ready().then(function (clerk) { return clerk.signOut(); });
+    return ready().then(function (clerk) {
+      var to = new root.URL(pageUrl("login") + "?reason=signed_out", root.location.href).href;
+      return clerk.signOut({ redirectUrl: to });
+    });
   }
-
-  function rethrow(err) { throw err && err.rivetAuth ? err : fail(friendly(err)); }
 
   // ---- page helpers ---------------------------------------------------------------------
   // A page in pages/, reachable both as /pages/x.html and from a clean URL (/x).

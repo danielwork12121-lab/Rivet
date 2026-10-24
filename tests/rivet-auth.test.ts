@@ -9,6 +9,10 @@ const auth = () => g.RivetAuth;
 const jwt = (claims: object) =>
   ["e30", Buffer.from(JSON.stringify(claims)).toString("base64url"), "sig"].join(".");
 
+const OK = { error: null };
+const E = (code: string, extra: object = {}) => ({ error: Object.assign(new Error(code), { code, errors: [{ code, longMessage: `Clerk says ${code}`, ...extra }] }) });
+
+// Clerk's Future API as js/rivet-auth.js uses it (client.signIn / client.signUp .__internal_future).
 function fakeClerk() {
   const listeners: Array<() => void> = [];
   const clerk: any = {
@@ -21,15 +25,22 @@ function fakeClerk() {
       listeners.forEach((l) => l());
     }),
     signOut: vi.fn(async () => { clerk.user = null; clerk.session = null; listeners.forEach((l) => l()); }),
-    client: {
-      signIn: {
-        create: vi.fn(), prepareSecondFactor: vi.fn().mockResolvedValue({}), attemptSecondFactor: vi.fn(),
-        attemptFirstFactor: vi.fn(), supportedSecondFactors: [{ strategy: "email_code", emailAddressId: "idn_1" }],
-      },
-      signUp: { create: vi.fn().mockResolvedValue({}), prepareEmailAddressVerification: vi.fn().mockResolvedValue({}), attemptEmailAddressVerification: vi.fn() },
-    },
     _emit: () => listeners.forEach((l) => l()),
   };
+  const finalizeFor = (id: string) => vi.fn(async () => { await clerk.setActive({ session: id }); return OK; });
+  const signIn: any = {
+    status: null, supportedSecondFactors: [{ strategy: "email_code", emailAddressId: "idn_1" }],
+    password: vi.fn(), create: vi.fn(), finalize: finalizeFor("sess_si"),
+    mfa: { sendEmailCode: vi.fn().mockResolvedValue(OK), verifyEmailCode: vi.fn() },
+    resetPasswordEmailCode: { sendCode: vi.fn().mockResolvedValue(OK), verifyCode: vi.fn(), submitPassword: vi.fn() },
+  };
+  const signUp: any = {
+    status: null, missingFields: [] as string[],
+    password: vi.fn().mockResolvedValue(OK), finalize: finalizeFor("sess_su"),
+    verifications: { sendEmailCode: vi.fn().mockResolvedValue(OK), verifyEmailCode: vi.fn() },
+  };
+  clerk.client = { signIn: { __internal_future: signIn }, signUp: { __internal_future: signUp } };
+  clerk.si = signIn; clerk.su = signUp;
   return clerk;
 }
 
@@ -83,41 +94,43 @@ describe("tokens for Convex", () => {
 
 describe("sign in", () => {
   it("email + password completes and activates the session", async () => {
-    clerk.client.signIn.create.mockResolvedValue({ status: "complete", createdSessionId: "sess_1" });
+    clerk.si.password.mockImplementation(async () => { clerk.si.status = "complete"; return OK; });
     expect(await auth().signIn(" ana@example.test ", "pw-12345678")).toEqual({ status: "complete" });
-    expect(clerk.client.signIn.create).toHaveBeenCalledWith({ identifier: "ana@example.test", password: "pw-12345678" });
-    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_1" });
+    expect(clerk.si.password).toHaveBeenCalledWith({ identifier: "ana@example.test", password: "pw-12345678" });
+    expect(clerk.si.finalize).toHaveBeenCalled();
+    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_si" });
   });
 
   it.each([["needs_client_trust"], ["needs_second_factor"]])("%s sends an email code, then the code completes", async (status) => {
-    clerk.client.signIn.create.mockResolvedValue({ status, supportedSecondFactors: [{ strategy: "email_code", emailAddressId: "idn_1" }] });
+    clerk.si.password.mockImplementation(async () => { clerk.si.status = status; return OK; });
     expect(await auth().signIn("ana@example.test", "pw")).toEqual({ status: "needs_code" });
-    expect(clerk.client.signIn.prepareSecondFactor).toHaveBeenCalledWith({ strategy: "email_code", emailAddressId: "idn_1" });
+    expect(clerk.si.mfa.sendEmailCode).toHaveBeenCalled();
     expect(clerk.setActive).not.toHaveBeenCalled();
-    clerk.client.signIn.attemptSecondFactor.mockResolvedValue({ status: "complete", createdSessionId: "sess_2" });
+    clerk.si.mfa.verifyEmailCode.mockImplementation(async () => { clerk.si.status = "complete"; return OK; });
     expect(await auth().verifySignInCode(" 123456 ")).toEqual({ status: "complete" });
-    expect(clerk.client.signIn.attemptSecondFactor).toHaveBeenCalledWith({ strategy: "email_code", code: "123456" });
-    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_2" });
+    expect(clerk.si.mfa.verifyEmailCode).toHaveBeenCalledWith({ code: "123456" });
+    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_si" });
   });
 
   it("a second factor we can't handle is a clear error, not a silent hang", async () => {
-    clerk.client.signIn.create.mockResolvedValue({ status: "needs_second_factor", supportedSecondFactors: [{ strategy: "totp" }] });
+    clerk.si.supportedSecondFactors = [{ strategy: "totp" }];
+    clerk.si.password.mockImplementation(async () => { clerk.si.status = "needs_second_factor"; return OK; });
     await expect(auth().signIn("a@example.test", "pw")).rejects.toThrow(/doesn't support/);
   });
 
   it("maps Clerk's errors to plain messages", async () => {
-    clerk.client.signIn.create.mockRejectedValue({ errors: [{ code: "form_password_incorrect", longMessage: "Password is incorrect. Try again." }] });
+    clerk.si.password.mockResolvedValue(E("form_password_incorrect"));
     await expect(auth().signIn("a@example.test", "bad")).rejects.toThrow("That email and password don't match an account.");
-    clerk.client.signIn.attemptSecondFactor.mockRejectedValue({ errors: [{ code: "form_code_incorrect" }] });
+    clerk.si.mfa.verifyEmailCode.mockResolvedValue(E("form_code_incorrect"));
     await expect(auth().verifySignInCode("000000")).rejects.toThrow(/code isn't right/);
-    clerk.client.signIn.create.mockRejectedValue({ errors: [{ code: "something_new", longMessage: "Clerk says why." }] });
-    await expect(auth().signIn("a@example.test", "pw")).rejects.toThrow("Clerk says why.");
+    clerk.si.password.mockResolvedValue(E("something_new"));
+    await expect(auth().signIn("a@example.test", "pw")).rejects.toThrow("Clerk says something_new");
   });
 
   it("is a no-op when already signed in", async () => {
     clerk.user = { id: "user_1" }; clerk.session = { id: "s" };
     expect(await auth().signIn("a@example.test", "pw")).toEqual({ status: "complete" });
-    expect(clerk.client.signIn.create).not.toHaveBeenCalled();
+    expect(clerk.si.password).not.toHaveBeenCalled();
   });
 });
 
@@ -125,40 +138,41 @@ describe("sign up and email verification", () => {
   it("creates the sign-up, sends a code, and the code signs in", async () => {
     expect(await auth().signUp({ name: "Ana  María López", email: " ana@example.test ", password: "pw-12345678" }))
       .toEqual({ status: "needs_code" });
-    expect(clerk.client.signUp.create).toHaveBeenCalledWith({
+    expect(clerk.su.password).toHaveBeenCalledWith({
       emailAddress: "ana@example.test", password: "pw-12345678", firstName: "Ana", lastName: "María López",
     });
-    expect(clerk.client.signUp.prepareEmailAddressVerification).toHaveBeenCalledWith({ strategy: "email_code" });
-    clerk.client.signUp.attemptEmailAddressVerification.mockResolvedValue({ status: "complete", createdSessionId: "sess_new" });
+    expect(clerk.su.verifications.sendEmailCode).toHaveBeenCalled();
+    clerk.su.verifications.verifyEmailCode.mockImplementation(async () => { clerk.su.status = "complete"; return OK; });
     expect(await auth().verifySignUp("424242")).toEqual({ status: "complete" });
-    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_new" });
+    expect(clerk.su.verifications.verifyEmailCode).toHaveBeenCalledWith({ code: "424242" });
+    expect(clerk.setActive).toHaveBeenCalledWith({ session: "sess_su" });
   });
 
   it("retries without names when the instance doesn't collect them", async () => {
-    clerk.client.signUp.create
-      .mockRejectedValueOnce({ errors: [{ code: "form_param_unknown", meta: { paramName: "first_name" } }] })
-      .mockResolvedValueOnce({});
+    clerk.su.password.mockResolvedValueOnce(E("form_param_unknown", { meta: { paramName: "first_name" } })).mockResolvedValueOnce(OK);
     await auth().signUp({ name: "Ana", email: "a@example.test", password: "pw-12345678" });
-    expect(clerk.client.signUp.create).toHaveBeenLastCalledWith({ emailAddress: "a@example.test", password: "pw-12345678" });
+    expect(clerk.su.password).toHaveBeenLastCalledWith({ emailAddress: "a@example.test", password: "pw-12345678" });
   });
 
-  it("an incomplete sign-up after the code is an error, never a fake success", async () => {
-    clerk.client.signUp.attemptEmailAddressVerification.mockResolvedValue({ status: "missing_requirements" });
-    await expect(auth().verifySignUp("424242")).rejects.toThrow(/needs more details/);
+  it("an incomplete sign-up after the code is an error naming what's missing, never a fake success", async () => {
+    clerk.su.verifications.verifyEmailCode.mockImplementation(async () => { clerk.su.status = "missing_requirements"; clerk.su.missingFields = ["protect_check"]; return OK; });
+    await expect(auth().verifySignUp("424242")).rejects.toThrow(/needs more details.*protect_check/);
     expect(clerk.setActive).not.toHaveBeenCalled();
   });
 });
 
 describe("account recovery", () => {
   it("sends a reset code, then code + new password signs in", async () => {
-    clerk.client.signIn.create.mockResolvedValue({ status: "needs_first_factor" });
+    clerk.si.create.mockImplementation(async () => { clerk.si.status = "needs_first_factor"; return OK; });
     expect(await auth().startPasswordReset(" ana@example.test ")).toEqual({ status: "needs_code" });
-    expect(clerk.client.signIn.create).toHaveBeenCalledWith({ strategy: "reset_password_email_code", identifier: "ana@example.test" });
-    clerk.client.signIn.attemptFirstFactor.mockResolvedValue({ status: "complete", createdSessionId: "sess_r" });
+    expect(clerk.si.create).toHaveBeenCalledWith({ identifier: "ana@example.test" });
+    expect(clerk.si.resetPasswordEmailCode.sendCode).toHaveBeenCalled();
+    clerk.si.resetPasswordEmailCode.verifyCode.mockImplementation(async () => { clerk.si.status = "needs_new_password"; return OK; });
+    clerk.si.resetPasswordEmailCode.submitPassword.mockImplementation(async () => { clerk.si.status = "complete"; return OK; });
     expect(await auth().completePasswordReset("111111", "new-pw-123456")).toEqual({ status: "complete" });
-    expect(clerk.client.signIn.attemptFirstFactor).toHaveBeenCalledWith({
-      strategy: "reset_password_email_code", code: "111111", password: "new-pw-123456",
-    });
+    expect(clerk.si.resetPasswordEmailCode.verifyCode).toHaveBeenCalledWith({ code: "111111" });
+    expect(clerk.si.resetPasswordEmailCode.submitPassword).toHaveBeenCalledWith({ password: "new-pw-123456" });
+    expect(clerk.setActive).toHaveBeenCalled();
   });
 });
 
@@ -211,7 +225,8 @@ describe("rivet-api auth glue", () => {
 
 describe("account recovery privacy", () => {
   it("an unknown email gets the same answer as a known one", async () => {
-    clerk.client.signIn.create.mockRejectedValue({ errors: [{ code: "form_identifier_not_found", longMessage: "Couldn't find your account." }] });
+    clerk.si.create.mockResolvedValue(E("form_identifier_not_found"));
     expect(await auth().startPasswordReset("nobody@example.test")).toEqual({ status: "needs_code" });
+    expect(clerk.si.resetPasswordEmailCode.sendCode).not.toHaveBeenCalled();
   });
 });

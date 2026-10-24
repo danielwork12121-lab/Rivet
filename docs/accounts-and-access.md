@@ -110,6 +110,25 @@ wiring and Convex's checks. They do **not** prove real Clerk behaviour: sign-up,
 the new-device (Device Trust) code, password reset and real session expiry still need checking
 against the Clerk Development instance.
 
+## Testing against real Clerk
+
+`npm run e2e:clerk` (run as `HEADED=1 npm run e2e:clerk`) drives the real pages in Chrome with
+real clerk-js and the Clerk Development instance, against an isolated Convex Cloud dev deployment
+named in `.env.local` (it refuses `coordinated-canary-9` and anything that isn't a cloud dev
+deployment). It creates two fictional users with `+clerk_test` emails (Clerk accepts the fixed
+code `424242` for those and sends no mail) and makes no AI calls. Delete the `rivet.e2e.*`
+users in the Clerk Dashboard afterwards.
+
+- It needs a normal (windowed) Chrome. This instance has **Clerk Protect** on; its bot check
+  ("Verifying your request") never finishes in headless Chrome, so sign-up stalls there.
+- Sign-in and sign-up use Clerk's **Future API** (`__internal_future`) and load the **`@clerk/ui`**
+  bundle, because only that path resolves Protect challenges. With the older `client.signUp`
+  methods, sign-up ends in the missing requirement `protect_check`.
+- Real session tokens last 60 seconds, have `aud: "convex"`, and carry **no email or name**
+  unless you add them under Sessions → Customize session token in the Clerk Dashboard. Without
+  that, `users:list` shows only the Clerk user id (plus the name and organization the person
+  typed), so approve Developers by checking that id in the Clerk Dashboard.
+
 ## Known behaviour
 
 - With convex 1.48, a WebSocket client kept acting as the previous user after

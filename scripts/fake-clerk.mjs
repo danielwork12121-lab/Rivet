@@ -1,6 +1,6 @@
 // LOCAL TESTING ONLY. A scripted stand-in for clerk-js, injected into pages by the
 // browser test suites before any page script runs. It implements just the clerk-js
-// calls js/rivet-auth.js makes (sign-up + email code, sign-in + new-device code,
+// calls js/rivet-auth.js makes, in Clerk's Future API shape (sign-up + email code, sign-in + new-device code,
 // password reset, sessions, tokens). Session tokens come from the local test issuer
 // (scripts/local-auth-issuer.mjs), so a local Convex backend really verifies them.
 // Passing tests prove our pages and Convex's checks, NOT Clerk's own behaviour.
@@ -21,8 +21,10 @@ export function fakeClerkScript(issuer) {
   const listeners = [];
   const emit = () => listeners.slice().forEach((f) => { try { f({}); } catch (e) {} });
   const err = (code) => Object.assign(new Error(code), { errors: [{ code, longMessage: "Fake Clerk: " + code }] });
-  let signUpDraft = null, signInDraft = null;
-  const done = (sub, email) => ({ status: "complete", createdSessionId: "sess_" + sub });
+  const E = (code) => ({ error: Object.assign(new Error(code), { code, errors: [{ code, longMessage: "Fake Clerk: " + code }] }) });
+  const OK = { error: null };
+  const su = { status: null, draft: null, missing: [] };
+  const si = { status: null, email: null, u: null };
   const clerk = {
     calls: [],
     load: async () => {},
@@ -36,45 +38,65 @@ export function fakeClerkScript(issuer) {
     },
     addListener: (f) => { listeners.push(f); return () => listeners.splice(listeners.indexOf(f), 1); },
     setActive: async ({ session }) => { const p = clerk._pending; put("e2e.clerk.session", { sid: session, sub: p.sub, email: p.email }); emit(); },
-    signOut: async () => { localStorage.removeItem("e2e.clerk.session"); emit(); },
-    client: {
-      signUp: {
-        create: async (p) => { clerk.calls.push("signUp.create"); if (users()[p.emailAddress]) throw err("form_identifier_exists"); signUpDraft = p; return {}; },
-        prepareEmailAddressVerification: async () => { clerk.calls.push("signUp.prepare"); return {}; },
-        attemptEmailAddressVerification: async ({ code }) => {
-          if (code !== CODE) throw err("form_code_incorrect");
-          const sub = "user_e2e_" + Math.random().toString(36).slice(2, 10);
-          const all = users(); all[signUpDraft.emailAddress] = { sub, pw: signUpDraft.password }; put("e2e.clerk.users", all);
-          clerk._pending = { sub, email: signUpDraft.emailAddress };
-          return done(sub, signUpDraft.emailAddress);
-        },
-      },
-      signIn: {
-        supportedSecondFactors: [{ strategy: "email_code", emailAddressId: "idn_e2e" }],
-        create: async (p) => {
-          clerk.calls.push("signIn.create:" + (p.strategy || "password"));
-          const u = users()[p.identifier];
-          signInDraft = { email: p.identifier, u };
-          if (p.strategy === "reset_password_email_code") return { status: "needs_first_factor" };
-          if (!u || u.pw !== p.password) throw err("form_password_incorrect");
-          clerk._pending = { sub: u.sub, email: p.identifier };
-          if (u.newDevice) return { status: "needs_client_trust", supportedSecondFactors: [{ strategy: "email_code", emailAddressId: "idn_e2e" }] };
-          return done(u.sub, p.identifier);
-        },
-        prepareSecondFactor: async () => { clerk.calls.push("signIn.prepareSecondFactor"); return {}; },
-        attemptSecondFactor: async ({ code }) => {
-          if (code !== CODE) throw err("form_code_incorrect");
-          const all = users(); all[signInDraft.email].newDevice = false; put("e2e.clerk.users", all);
-          return done(signInDraft.u.sub, signInDraft.email);
-        },
-        attemptFirstFactor: async ({ code, password }) => {
-          if (code !== CODE) throw err("form_code_incorrect");
-          const all = users(); all[signInDraft.email].pw = password; put("e2e.clerk.users", all);
-          clerk._pending = { sub: signInDraft.u.sub, email: signInDraft.email };
-          return done(signInDraft.u.sub, signInDraft.email);
-        },
+    // Like real Clerk, navigate to redirectUrl afterwards.
+    signOut: async (o) => { localStorage.removeItem("e2e.clerk.session"); emit(); if (o && o.redirectUrl) location.href = o.redirectUrl; },
+    client: { signIn: {}, signUp: {} },
+  };
+  const finalize = async () => { await clerk.setActive({ session: "sess_" + clerk._pending.sub }); return OK; };
+  // The Future API, as js/rivet-auth.js uses it (clerk.client.signUp.__internal_future).
+  clerk.client.signUp.__internal_future = {
+    get status() { return su.status; },
+    get missingFields() { return su.missing; },
+    password: async (p) => {
+      clerk.calls.push("signUp.password");
+      if (users()[p.emailAddress]) return E("form_identifier_exists");
+      su.draft = p; su.status = "missing_requirements"; return OK;
+    },
+    verifications: {
+      sendEmailCode: async () => { clerk.calls.push("signUp.sendEmailCode"); return OK; },
+      verifyEmailCode: async ({ code }) => {
+        if (code !== CODE) return E("form_code_incorrect");
+        const sub = "user_e2e_" + Math.random().toString(36).slice(2, 10);
+        const all = users(); all[su.draft.emailAddress] = { sub, pw: su.draft.password }; put("e2e.clerk.users", all);
+        clerk._pending = { sub, email: su.draft.emailAddress }; su.status = "complete"; return OK;
       },
     },
+    finalize,
+  };
+  clerk.client.signIn.__internal_future = {
+    get status() { return si.status; },
+    get supportedSecondFactors() { return [{ strategy: "email_code", emailAddressId: "idn_e2e" }]; },
+    password: async ({ identifier, password }) => {
+      clerk.calls.push("signIn.password");
+      const u = users()[identifier];
+      si.email = identifier; si.u = u;
+      if (!u || u.pw !== password) return E("form_password_incorrect");
+      clerk._pending = { sub: u.sub, email: identifier };
+      si.status = u.newDevice ? "needs_client_trust" : "complete"; return OK;
+    },
+    mfa: {
+      sendEmailCode: async () => { clerk.calls.push("signIn.mfa.sendEmailCode"); return OK; },
+      verifyEmailCode: async ({ code }) => {
+        if (code !== CODE) return E("form_code_incorrect");
+        const all = users(); all[si.email].newDevice = false; put("e2e.clerk.users", all);
+        si.status = "complete"; return OK;
+      },
+    },
+    create: async ({ identifier }) => {
+      clerk.calls.push("signIn.create");
+      si.email = identifier; si.u = users()[identifier];
+      if (!si.u) return E("form_identifier_not_found");
+      si.status = "needs_first_factor"; return OK;
+    },
+    resetPasswordEmailCode: {
+      sendCode: async () => { clerk.calls.push("signIn.reset.sendCode"); return OK; },
+      verifyCode: async ({ code }) => { if (code !== CODE) return E("form_code_incorrect"); si.status = "needs_new_password"; return OK; },
+      submitPassword: async ({ password }) => {
+        const all = users(); all[si.email].pw = password; put("e2e.clerk.users", all);
+        clerk._pending = { sub: si.u.sub, email: si.email }; si.status = "complete"; return OK;
+      },
+    },
+    finalize,
   };
   window.Clerk = clerk;
   window.__e2eExpire = () => clerk.signOut();

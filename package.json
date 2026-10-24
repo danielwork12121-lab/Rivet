@@ -12,6 +12,7 @@
     "e2e:browser": "node scripts/browser-e2e.mjs",
     "e2e:auth": "node scripts/e2e-auth-local.mjs",
     "e2e:auth:browser": "node scripts/browser-auth-e2e.mjs",
+    "e2e:clerk": "node scripts/browser-clerk-real.mjs",
     "check:frontend": "node scripts/check-frontend.mjs",
     "test-data:list": "convex run maintenance:testData '{\"action\":\"list\"}'"
   },
