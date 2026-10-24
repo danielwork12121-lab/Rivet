@@ -118,17 +118,37 @@ export default defineSchema({
     ),
   }).index("by_request", ["requestId"]),
 
-  // A bounty written from "what's missing" in the existing robots.
+  // Every bounty, whoever wrote it. One row per (request, task) once posted.
+  // - status "draft":  private to the request's owner, e.g. an AI-written brief
+  //                    (agent:requestBounty). Never shown on the public board.
+  // - status "posted": confirmed by the operator (bounties:post). Developers see
+  //                    a public projection without company or request details.
+  // Money fields are illustrative demo figures in USD, not commitments.
   bounties: defineTable({
     requestId: v.id("operatorRequests"),
+    status: v.union(v.literal("draft"), v.literal("posted")),
+    source: v.union(v.literal("ai"), v.literal("client")),
     title: v.string(),
-    summary: v.string(),
-    mustHaves: v.array(v.string()),
-    niceToHaves: v.array(v.string()),
-    acceptanceTest: v.string(),
-    goal: v.number(), // USD, from suggestBounty(), not from the AI
-    pledged: v.number(),
-  }).index("by_request", ["requestId"]),
+    // AI-written brief (source "ai")
+    summary: v.optional(v.string()),
+    mustHaves: v.optional(v.array(v.string())),
+    niceToHaves: v.optional(v.array(v.string())),
+    acceptanceTest: v.optional(v.string()),
+    // The operator's own picks and words (source "client"), stored raw: escape when rendering
+    taskKey: v.optional(v.string()), // the page's task id, e.g. "mow"
+    gaps: v.optional(v.array(v.string())), // chip labels exactly as shown
+    note: v.optional(v.string()),
+    specLines: v.optional(v.array(v.string())), // the spec exactly as the operator saw it
+    industry: v.optional(v.string()),
+    region: v.optional(v.string()), // copied from the request profile when posted
+    goal: v.number(), // USD, illustrative target
+    pledged: v.number(), // USD, illustrative
+    pledgePercent: v.optional(v.number()), // % of modelled first-year savings
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_request_task", ["requestId", "taskKey"])
+    .index("by_status", ["status"]),
 
   // One row per Claude call: your cost tracker and test history.
   agentRuns: defineTable({

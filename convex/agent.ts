@@ -179,10 +179,12 @@ export const latestBounty = query({
   args: owner,
   handler: async (ctx, { requestId, clientToken }) => {
     await loadOwnedDraft(ctx, requestId, clientToken);
+    // The latest AI-written draft; posted bounties are read via bounties:getMine.
     return ctx.db
       .query("bounties")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .order("desc")
+      .filter((q) => q.eq(q.field("source"), "ai"))
       .first();
   },
 });
@@ -198,7 +200,8 @@ export const saveBounty = internalMutation({
     goal: v.number(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.insert("bounties", { ...args, pledged: 0 });
+    // An AI brief is a private draft until the operator posts a bounty themselves.
+    await ctx.db.insert("bounties", { ...args, pledged: 0, status: "draft", source: "ai" });
   },
 });
 

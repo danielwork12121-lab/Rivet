@@ -190,3 +190,63 @@ export function validateFollowUps(answers: FollowUpAnswer[]): FollowUpAnswer[] {
     return out;
   });
 }
+
+export const BOUNTY_LIMITS = {
+  title: 160,
+  specLines: 12,
+  specLine: 300,
+  gaps: 10,
+  gap: 100,
+  note: 500,
+  industry: 50,
+  money: 1_000_000_000,
+} as const;
+
+const TASK_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,29}$/;
+
+export type BountyPostInput = {
+  taskKey: string;
+  title: string;
+  specLines: string[];
+  gaps: string[];
+  note: string;
+  industry: string;
+  pledgePercent: number;
+  pledged: number;
+  goal: number;
+};
+
+/** Validates an operator's bounty; returns a trimmed copy or throws. Text stays raw. */
+export function validateBountyPost(b: BountyPostInput): BountyPostInput {
+  if (!TASK_KEY.test(b.taskKey)) {
+    throw new ConvexError("taskKey must start with a letter and use only letters, digits, '-' or '_' (max 30)");
+  }
+  if (b.specLines.length > BOUNTY_LIMITS.specLines) {
+    throw new ConvexError(`At most ${BOUNTY_LIMITS.specLines} spec lines allowed`);
+  }
+  if (b.gaps.length > BOUNTY_LIMITS.gaps) throw new ConvexError(`At most ${BOUNTY_LIMITS.gaps} gaps allowed`);
+  const note = b.note.trim();
+  if (note.length > BOUNTY_LIMITS.note) {
+    throw new ConvexError(`note must be at most ${BOUNTY_LIMITS.note} characters`);
+  }
+  if (!Number.isFinite(b.pledgePercent) || b.pledgePercent < 0 || b.pledgePercent > 100) {
+    throw new ConvexError("pledgePercent must be between 0 and 100");
+  }
+  if (!Number.isFinite(b.pledged) || b.pledged < 0 || b.pledged > BOUNTY_LIMITS.money) {
+    throw new ConvexError("pledged must be a non-negative number");
+  }
+  if (!Number.isFinite(b.goal) || b.goal <= 0 || b.goal > BOUNTY_LIMITS.money) {
+    throw new ConvexError("goal must be greater than 0");
+  }
+  return {
+    taskKey: b.taskKey,
+    title: requireText("title", b.title, BOUNTY_LIMITS.title),
+    specLines: b.specLines.map((l) => requireText("specLines item", l, BOUNTY_LIMITS.specLine)),
+    gaps: b.gaps.map((g) => requireText("gaps item", g, BOUNTY_LIMITS.gap)),
+    note,
+    industry: requireText("industry", b.industry, BOUNTY_LIMITS.industry),
+    pledgePercent: b.pledgePercent,
+    pledged: b.pledged,
+    goal: b.goal,
+  };
+}
