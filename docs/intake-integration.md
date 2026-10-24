@@ -13,6 +13,9 @@ own additions are marked `RIVET-BACKEND`.
 | Page load | `requests:getDraft` and `bounties:getMine` with the id + token from `localStorage` (`rivet.intake.draft`) |
 | Step 5 **Post bounty** | `bounties:post` (after saving the intake if it changed, e.g. "Join the shared program") |
 | Developer **Bounty board** shown | `bounties:listPosted` (at most every 3 s) |
+| Page load | `robots:search`: the page's sample products come from Convex; the built-in `PRODUCTS` copy is only an offline fallback |
+| Step 2 shown | `agent:specStatus` (or `agent:aiStatus` before step 1 is saved): status only |
+| Step 2 **Draft requirements with AI** | saves changed answers, then `agent:generateSpec`, then polls `agent:specStatus` every 2 s (max 3 min) |
 
 Moving backwards never saves. Leaving step 2 through **Back** does not save answers picked
 since the last save.
@@ -63,6 +66,13 @@ that question are not restored.
   Convex confirms. "Edit my pledge" re-posts and updates the same bounty. Refresh restores it.
 - **Developer board** loads posted bounties when shown and labels every card: *sample*,
   *saved demo submission*, or *your saved demo submission*.
+- **Sample vs saved money**: once a bounty is saved, its totals, backer count and Developer card
+  show only the saved pledge; the page's sample backers stay listed as "not counted".
+- **ROI screens** are illustrative: operator inputs combined with sample hours per task and
+  sample robot data, labelled as such. Unanswered assumptions are marked "default".
+- **AI draft**: shown as "AI-generated draft · not verified", with the model and the AI's own
+  questions (separate from the fixed follow-ups); flagged when the request changed since.
+  Without an API key the panel says AI is unavailable and nothing is sent anywhere.
 - **Not saved yet**: search filters, vendor contacts, invites, and the Developer profile, claim,
   milestones and delivery.
 
@@ -94,5 +104,18 @@ npm run check:frontend # every page's scripts compile, alone and together
 npm run e2e:local      # needs `npx convex dev`; live API checks incl. token rejection
 npm run e2e:browser    # needs `npx convex dev` and Google Chrome; full Client + Developer journey
 ```
-`e2e:local` and `e2e:browser` leave fictional rows in the local dev database, and those test
-bounties appear on the Developer board. Reset the local database before a demo.
+`e2e:local` and `e2e:browser` leave fictional rows (company names starting `E2E-TEST `) in the
+local dev database, and their bounties appear on the Developer board.
+
+## Before a demo
+```sh
+npx convex run robots:seed          # once: adds the sample catalog (never overwrites)
+npm run test-data:list              # read-only: test requests, their rows, and unmatched requests
+npx convex run maintenance:testData '{"action":"delete","confirm":"delete-test-data"}'
+```
+Delete removes only requests matching the test markers it lists, plus their bounties, specs,
+picks, clarifications and AI jobs. Unmatched requests are never touched.
+
+## AI (optional)
+Set the key on the backend only, never in files: `npx convex env set ANTHROPIC_API_KEY ...`.
+The first live call should be a deliberate, approved test (`npx convex run ai:hello`).

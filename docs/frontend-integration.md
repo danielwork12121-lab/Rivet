@@ -74,11 +74,13 @@ Every public function, and what protects it:
 | `bounties:post`, `bounties:getMine` | mutation/query | draft token |
 | `bounties:listPosted` | query | open: public projection only |
 | `agent:generateSpec`, `agent:answerQuestions`, `agent:recommend`, `agent:requestBounty` | mutation | draft token (each starts a paid Claude call) |
-| `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty` | query | draft token |
+| `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty`, `agent:specStatus` | query | draft token |
+| `agent:aiStatus` | query | open: returns only `{ available: boolean }` |
 | `robots:search`, `robots:get` | query | open (fictional catalog, no private data) |
 
 **Not public** (internal, backend/CLI only): `requests:get`, `requests:list`,
-`ai:hello`, `ai:runEvals`, and every internal agent/robots helper. Calling them from a
+`ai:hello`, `ai:runEvals`, `robots:seed`, `maintenance:testData`, and every internal
+agent/robots helper. Calling them from a
 browser fails with "Could not find public function".
 
 ### Changes from the first version of this contract
@@ -202,8 +204,29 @@ The agent from `feature/agent` is merged with these changes:
 - `ai:hello` and `ai:runEvals` are internal: run them with `npx convex run ai:hello`.
 - AI-written bounties are saved as private drafts (`status: "draft"`, `source: "ai"`).
 - Failed runs (`spec`, `recommend`, `bounty`) are logged to `agentRuns` with `ok: false`.
-  There is no per-request job status yet, so the page cannot yet tell "still running" from
-  "failed".
-- Nothing in the page triggers AI calls; each trigger must be a deliberate user action.
+- **Spec runs are jobs** (`aiJobs`): `queued` → `running` → `succeeded` | `failed`.
+  - `agent:generateSpec({ requestId, clientToken })` returns `{ jobId, reused }`. A queued or
+    running job is reused, so repeated clicks never start a second paid call (a run stuck for
+    over 10 minutes stops blocking). Without `ANTHROPIC_API_KEY` it rejects with
+    `err.data = "AI drafting is unavailable: no Anthropic API key is configured on the backend."`
+    and queues nothing.
+  - `agent:specStatus({ requestId, clientToken })` returns `{ available, job, spec, stale,
+    clarifications }`. `job.errorKind` is `"unavailable"` (missing/rejected credentials) or
+    `"model_error"`; `job.error` is safe to show. `stale` is true when the request (intake or
+    follow-up answers) changed after the AI read it. `clarifications` are answers to the AI's
+    own questions, separate from the fixed `followUps`.
+  - Specs record `jobId`, `model`, and `requestVersion` (the request's `updatedAt`, else
+    `_creationTime`, at the time the AI read it).
+- The page has exactly one AI trigger: "Draft requirements with AI" on step 2. Opening the
+  step only reads `agent:specStatus` / `agent:aiStatus`.
 - `ANTHROPIC_API_KEY` belongs in Convex env vars (`npx convex env set`), never in files.
   Without it, AI actions fail and are logged; nothing else is affected.
+
+## Robot catalog
+Convex is the canonical catalog (`robots`, all `sample: true`). `robots:seed` (internal, run
+`npx convex run robots:seed`) adds any missing sample robots and never overwrites:
+the agent's 5 sample robots and the page's 9 sample products. Page products carry
+`sampleKey` (`"p1"`..`"p9"`, the page's product id), `taskKey` (the page's task id),
+`slopeLimitDeg`, `regions`, `trl` and a `provenance` note; every number is illustrative.
+`robots:search({ task?, maxPrice? })` and `robots:get({ id })` are public reads.
+
