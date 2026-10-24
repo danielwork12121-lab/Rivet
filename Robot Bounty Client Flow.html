@@ -182,6 +182,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 <main class="gutter" id="app"></main>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="js/rivet-api.js"></script>
 <script>
 // ---------- Data (all sample / illustrative) ----------
 const COMPANY = {
@@ -229,6 +230,7 @@ const QUESTIONS = [
 
 const GAPS = ["Too expensive", "Can't handle slopes", "Not sold in my region", "Doesn't do the whole job", "Too slow for my route"];
 
+const REGIONS = ["West", "South", "Midwest", "Northeast"];
 const STEP_NAMES = ["Describe your work", "AI follow-ups", "Opportunities", "Find robots", "Bounty"];
 
 // ---------- State ----------
@@ -250,6 +252,9 @@ const S = {
   pledgePct: 30,
   posted: false,
   invited: false,
+  // Backend save state for the step 1 intake (see submitIntake). Follow-up answers,
+  // search filters and the bounty are NOT saved yet.
+  submit: { status: "idle", id: null, fp: "", attemptFp: "", token: "", error: "", errorFp: "" },
 };
 
 // ---------- Math (deterministic) ----------
@@ -292,7 +297,7 @@ function go(step) { S.step = step; render(); window.scrollTo({ top: 0 }); }
 function renderSteps() {
   $("#steps").innerHTML = STEP_NAMES.map((n, i) =>
     `<li><button data-step="${i}" ${i === S.step ? 'aria-current="step"' : ""} class="${i < S.step ? "done" : ""}"><span class="n">${i + 1}</span>${n}</button></li>`).join("");
-  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => go(+b.dataset.step));
+  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => S.step === 0 && +b.dataset.step > 0 ? submitIntake(+b.dataset.step) : go(+b.dataset.step));
 }
 
 // Step 1
@@ -329,7 +334,7 @@ function screenIntake() {
           <div class="field"><label for="f-crews">${S.type === "lawn" ? "Crews" : "Techs"}</label><input id="f-crews" type="number" min="1" value="${S.crews}"></div>
           ${S.type === "lawn" ? `<div class="field"><label for="f-per">People per crew</label><input id="f-per" type="number" min="1" value="${S.perCrew}"></div>` : ""}
           <div class="field"><label for="f-wage">Hourly cost ($)</label><input id="f-wage" type="number" min="1" value="${S.wage}"><span class="hint">Wage plus taxes and insurance</span></div>
-          <div class="field"><label for="f-region">Region</label><select id="f-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+          <div class="field"><label for="f-region">Region</label><select id="f-region">${REGIONS.map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
         </div>
       </div>
       <div class="panel stack">
@@ -339,7 +344,7 @@ function screenIntake() {
       </div>
     </div>
   </div>
-  <div class="actions"><button class="btn primary" id="next">Continue to follow-ups</button></div>`;
+  <div class="actions">${intakeStatus()}<button class="btn primary" id="next" ${S.submit.status === "saving" ? "disabled" : ""}>${S.submit.status === "saving" ? "Saving\u2026" : "Continue to follow-ups"}</button></div>`;
 }
 function bindIntake() {
   $("#f-type").onchange = e => { S.type = e.target.value; const c = COMPANY[S.type]; S.name = c.name; S.describe = c.describe; S.bounty = null; S.posted = false; render(); };
@@ -351,7 +356,51 @@ function bindIntake() {
   $("#f-region").onchange = e => S.region = e.target.value;
   document.querySelectorAll('input[name="vis"]').forEach(r => r.onchange = e => S.visibility = e.target.value);
   $("#mic").onclick = () => { S.describe = COMPANY[S.type].voice; $("#f-desc").value = S.describe; toast("Voice note transcribed"); };
-  $("#next").onclick = () => go(1);
+  $("#next").onclick = () => submitIntake(1);
+}
+
+// Save the step 1 intake to Convex before moving on. Success is only shown after
+// Convex confirms the write. See js/rivet-api.js for the field mapping.
+const fingerprint = () => JSON.stringify(RivetApi.intakeToRequest(S));
+function intakeStatus() {
+  const u = S.submit;
+  if (u.status === "error" && u.errorFp === fingerprint()) return `<div class="notice" role="alert" style="flex:1 1 220px;align-self:center">${esc(u.error)}</div>`;
+  if (u.id && u.fp === fingerprint()) return `<span class="hint" style="flex:1 1 220px;align-self:center" role="status">Saved to Rivet \u00b7 ref ${esc(u.id.slice(-6))}</span>`;
+  return "";
+}
+async function submitIntake(target) {
+  const u = S.submit;
+  if (u.status === "saving") return; // repeated clicks
+  const args = RivetApi.intakeToRequest(S), fp = JSON.stringify(args);
+  const problem = RivetApi.precheck(S);
+  if (problem) { u.status = "error"; u.error = problem; u.errorFp = fp; render(); return; }
+  if (u.id && u.fp === fp) { go(target); return; } // already saved, nothing changed
+  if (u.attemptFp !== fp) { u.token = RivetApi.newClientToken(); u.attemptFp = fp; } // same token on retry => no duplicate
+  u.status = "saving"; u.error = ""; render();
+  try {
+    const id = await RivetApi.createRequest({ ...args, clientToken: u.token });
+    u.id = id; u.fp = fp; u.status = "saved"; RivetApi.saveId(id);
+    if (fingerprint() !== fp) { render(); toast("Saved. You changed something while saving, so press Continue again."); return; }
+    toast("Request saved"); go(target);
+  } catch (e) {
+    u.status = "error"; u.error = RivetApi.friendlyError(e); u.errorFp = fp; render();
+  }
+}
+// After a refresh, reload the saved request by id and refill the form.
+async function hydrateSaved() {
+  const id = RivetApi.loadSavedId();
+  if (!id) return;
+  const startFp = fingerprint();
+  try {
+    const doc = await RivetApi.getRequest(id);
+    if (!doc) { RivetApi.clearSavedId(); return; }
+    const p = RivetApi.requestToIntake(doc);
+    if (!p || !Object.hasOwn(COMPANY, p.type) || !REGIONS.includes(p.region)) return;
+    if (S.step !== 0 || fingerprint() !== startFp) return; // user already started editing
+    Object.assign(S, p);
+    S.submit = { status: "saved", id, fp: fingerprint(), attemptFp: fingerprint(), token: doc.clientToken || "", error: "", errorFp: "" };
+    render(); toast("Restored your saved request");
+  } catch (e) { /* backend unreachable: keep the blank form; the saved id stays in storage */ }
 }
 
 // Step 2
@@ -648,6 +697,7 @@ function render() {
   bind();
 }
 render();
+hydrateSaved();
 </script>
 
 </body></html>
