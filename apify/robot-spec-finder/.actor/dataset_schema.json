@@ -1,0 +1,45 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Robots and prices",
+      "transformation": {
+        "fields": [
+          "name", "vendor", "priceAvailable", "pricingModel", "purchasePriceUsd",
+          "monthlySubscriptionUsd", "annualSubscriptionUsd", "yearlyCostToRunUsd", "priceSummary",
+          "laborReplacedPercent", "runtimeHours", "maxSlopeDegrees", "coverageSqftPerHour",
+          "payloadKg", "tankLiters", "reachMeters", "workingWidthMeters", "weightKg",
+          "url", "priceQuote", "estimates", "checkedAt"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "name": { "label": "Robot", "format": "text" },
+          "vendor": { "label": "Vendor", "format": "text" },
+          "priceAvailable": { "label": "Price public?", "format": "boolean" },
+          "pricingModel": { "label": "Pricing model", "format": "text" },
+          "purchasePriceUsd": { "label": "Purchase price ($)", "format": "number" },
+          "monthlySubscriptionUsd": { "label": "Monthly subscription ($)", "format": "number" },
+          "annualSubscriptionUsd": { "label": "Annual subscription ($)", "format": "number" },
+          "yearlyCostToRunUsd": { "label": "Yearly cost to run ($)", "format": "number" },
+          "priceSummary": { "label": "Price summary", "format": "text" },
+          "laborReplacedPercent": { "label": "Labor replaced (%)", "format": "number" },
+          "runtimeHours": { "label": "Runtime (h)", "format": "number" },
+          "maxSlopeDegrees": { "label": "Max slope (°)", "format": "number" },
+          "coverageSqftPerHour": { "label": "Coverage (sq ft/h)", "format": "number" },
+          "payloadKg": { "label": "Payload (kg)", "format": "number" },
+          "tankLiters": { "label": "Tank (L)", "format": "number" },
+          "reachMeters": { "label": "Reach (m)", "format": "number" },
+          "workingWidthMeters": { "label": "Working width (m)", "format": "number" },
+          "weightKg": { "label": "Weight (kg)", "format": "number" },
+          "url": { "label": "Source page", "format": "link" },
+          "priceQuote": { "label": "Price quote from page", "format": "text" },
+          "estimates": { "label": "Estimated values", "format": "text" },
+          "checkedAt": { "label": "Checked", "format": "date" }
+        }
+      }
+    }
+  }
+}
