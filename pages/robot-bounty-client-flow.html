@@ -203,6 +203,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 <main class="gutter" id="app"></main>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="../js/rivet-api.js"></script>
 <script>
 // ---------- Data (all sample / illustrative) ----------
 const COMPANY = {
@@ -271,6 +272,15 @@ const S = {
   pledgePct: 30,
   posted: false,
   invited: false,
+  // RIVET-BACKEND: save state. One draft request per browser: created on the first
+  // step 1 save, then updated in place. Steps 3-5 and the Developer side are NOT saved yet.
+  submit: { status: "idle", id: null, token: "", fp: "", error: "", errorFp: "" },
+  answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
+  bountySave: { status: "idle", id: null, pledged: 0, error: "" }, // this operator's posted bounty (pledged = saved amount)
+  board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
+  catalog: { source: "built-in" }, // "convex" once the sample catalog loads from the backend
+  // AI requirement draft (step 2). Filled from agent:specStatus; available is null until checked.
+  ai: { available: null, job: null, spec: null, stale: false, at: 0, loading: false, busy: false, polling: false, error: "" },
 };
 
 // ---------- Math (deterministic) ----------
@@ -291,7 +301,7 @@ function evalProduct(p) {
   const fails = [];
   if (p.slope < S.answers.slope) fails.push(`Handles slopes up to ${p.slope}°, your sites need about ${S.answers.slope}°`);
   if (!p.regions.includes(S.region)) fails.push(`Not sold or serviced in the ${S.region}`);
-  if (payback > 5) fails.push(isFinite(payback) ? `Takes about ${Math.round(payback)} years to pay back for a company your size` : "Running costs are higher than the labor it saves");
+  if (payback > 5) fails.push(isFinite(payback) ? `Takes about ${Math.round(payback)} years to pay back for a company your size (this demo rules out anything over 5 years)` : "Running costs are higher than the labor it saves");
   const lo = net * 0.8 > 0 ? upfront / (net * 0.8) : Infinity;
   const hi = upfront / (net * 1.2);
   return { p, t, units, upfront, savings, opex, net, payback, fails, lo, hi };
@@ -344,7 +354,7 @@ function screenIntake() {
           <div class="field"><label for="f-crews">${S.type === "lawn" ? "Crews" : "Techs"}</label><input id="f-crews" type="number" min="1" value="${S.crews}"></div>
           ${S.type === "lawn" ? `<div class="field"><label for="f-per">People per crew</label><input id="f-per" type="number" min="1" value="${S.perCrew}"></div>` : ""}
           <div class="field"><label for="f-wage">Hourly cost ($)</label><input id="f-wage" type="number" min="1" value="${S.wage}"><span class="hint">Wage plus taxes and insurance</span></div>
-          <div class="field"><label for="f-region">Region</label><select id="f-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+          <div class="field"><label for="f-region">Region</label><select id="f-region">${REGIONS.map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
         </div>
       </div>
       <div class="panel stack">
@@ -354,7 +364,7 @@ function screenIntake() {
       </div>
     </div>
   </div>
-  <div class="actions"><button class="btn primary" id="next">Continue to follow-ups</button></div>`;
+  <div class="actions">${intakeStatus()}<button class="btn primary" id="next" ${S.submit.status === "saving" ? "disabled" : ""}>${S.submit.status === "saving" ? "Saving\u2026" : "Continue to follow-ups"}</button></div>`;
 }
 function bindIntake() {
   $("#f-type").onchange = e => { S.type = e.target.value; const c = COMPANY[S.type]; S.name = c.name; S.describe = c.describe; S.bounty = null; S.posted = false; render(); };
@@ -366,7 +376,287 @@ function bindIntake() {
   $("#f-region").onchange = e => S.region = e.target.value;
   document.querySelectorAll('input[name="vis"]').forEach(r => r.onchange = e => S.visibility = e.target.value);
   $("#mic").onclick = () => { S.describe = COMPANY[S.type].voice; $("#f-desc").value = S.describe; toast("Voice note transcribed"); };
-  $("#next").onclick = () => go(1);
+  $("#next").onclick = () => submitIntake(1);
+}
+
+// RIVET-BACKEND: save to Convex before moving on. Success is only shown after Convex
+// confirms the write. Field mapping and network calls live in js/rivet-api.js.
+const fingerprint = () => JSON.stringify(RivetApi.intakeToRequest(S));
+const answersFp = () => JSON.stringify(RivetApi.followUpsFromState(S, QUESTIONS));
+const statusSlot = "flex:1 1 220px;align-self:center";
+function saveStatus(st, fp, savedText) {
+  if (st.status === "error" && st.errorFp === fp) return `<div class="notice" role="alert" style="${statusSlot}">${esc(st.error)}</div>`;
+  if (savedText && st.fp === fp) return `<span class="hint" style="${statusSlot}" role="status">${savedText}</span>`;
+  return "";
+}
+function intakeStatus() {
+  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
+}
+function answersStatus() {
+  return saveStatus(S.answersSave, answersFp(), S.submit.id && S.answered > 0 && "Answers saved");
+}
+// The saved draft is gone (e.g. local database reset): forget it so the next save creates a new one.
+function resetDraft() {
+  Object.assign(S.submit, { id: null, token: "", fp: "" });
+  S.answersSave.fp = "";
+  Object.assign(S.ai, { job: null, spec: null, stale: false, at: 0 });
+  RivetApi.clearDraft();
+}
+async function submitIntake(target) {
+  const u = S.submit;
+  if (u.status === "saving") return; // repeated clicks
+  const args = RivetApi.intakeToRequest(S), fp = JSON.stringify(args);
+  const problem = RivetApi.precheck(S);
+  if (problem) { Object.assign(u, { status: "error", error: problem, errorFp: fp }); render(); return; }
+  if (u.id && u.fp === fp) { go(target); return; } // already saved, nothing changed
+  if (!u.token) u.token = RivetApi.newClientToken(); // one per draft: a retried create returns the same id
+  const creating = !u.id;
+  u.status = "saving"; u.error = ""; render();
+  try {
+    if (creating) {
+      u.id = await RivetApi.createRequest({ ...args, clientToken: u.token });
+      RivetApi.saveDraft(u.id, u.token);
+    } else {
+      await RivetApi.updateIntake(u.id, u.token, args);
+    }
+    u.fp = fp; u.status = "saved";
+    if (fingerprint() !== fp) { render(); toast("Saved. You changed something while saving, so press Continue again."); return; }
+    toast(creating ? "Request saved" : "Changes saved"); go(target);
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(u, { status: "error", error: RivetApi.friendlyError(e), errorFp: fp }); render();
+  }
+}
+async function submitFollowUps(target) {
+  const a = S.answersSave;
+  if (a.status === "saving") return; // repeated clicks
+  const f = RivetApi.followUpsFromState(S, QUESTIONS), fp = JSON.stringify(f);
+  if (!f.answers.length || a.fp === fp) { go(target); return; } // nothing picked yet, or already saved
+  if (!S.submit.id) {
+    Object.assign(a, { status: "error", error: "Go back to step 1 and press Continue to save your request first.", errorFp: fp }); render(); return;
+  }
+  a.status = "saving"; a.error = ""; render();
+  try {
+    await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+    a.fp = fp; a.status = "saved";
+    if (answersFp() !== fp) { render(); toast("Saved. You changed an answer while saving, so press the button again."); return; }
+    toast("Answers saved"); go(target);
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(a, { status: "error", error: RivetApi.friendlyError(e), errorFp: fp }); render();
+  }
+}
+// Client stepper: moving forward out of step 1 or step 2 saves first, like their buttons.
+function navTo(step) {
+  if (S.step === 0 && step > 0) submitIntake(step);
+  else if (S.step === 1 && step > 1) submitFollowUps(step);
+  else go(step);
+}
+// After a refresh, load this browser's draft (id + token from localStorage) and refill
+// step 1 and the follow-up answers.
+async function hydrateSaved() {
+  const d = RivetApi.loadDraft();
+  if (!d) return;
+  const startFp = fingerprint(), startAnswers = answersFp();
+  try {
+    const [doc, posted] = await Promise.all([
+      RivetApi.getDraft(d.id, d.token),
+      RivetApi.getMyBounties(d.id, d.token).catch(() => null), // a bounty restore failure must not block the rest
+    ]);
+    // Keep using this draft even if we don't refill the form: later saves update it.
+    Object.assign(S.submit, { id: d.id, token: d.token });
+    const p = RivetApi.requestToIntake(doc);
+    if (!p || !Object.hasOwn(COMPANY, p.type) || !REGIONS.includes(p.region)) return;
+    if (S.role !== "client" || S.step !== 0 || fingerprint() !== startFp || answersFp() !== startAnswers) return; // user already started
+    Object.assign(S, p);
+    const f = RivetApi.followUpsToState(doc.followUps, QUESTIONS);
+    Object.assign(S.answers, f.answers);
+    S.answered = f.answered;
+    Object.assign(S.submit, { status: "saved", fp: fingerprint() });
+    Object.assign(S.answersSave, { status: "saved", fp: f.answered ? answersFp() : "" });
+    const b = RivetApi.bountyToState(posted, tasks().map((t) => t.id));
+    if (b) {
+      Object.assign(S, { bounty: b.bounty, gaps: new Set(b.gaps), gapNote: b.gapNote, pledgePct: b.pledgePct, posted: true });
+      S.bountySave = { status: "saved", id: b.id, pledged: b.pledged, error: "" };
+    }
+    render(); toast(b ? "Restored your saved request and posted bounty" : f.answered ? "Restored your saved request and answers" : "Restored your saved request");
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
+    // otherwise the backend is unreachable: keep the blank form and the stored draft
+  }
+}
+// "What we're assuming": mark values that are still the page's defaults.
+const notAnswered = (key) =>
+  QUESTIONS.findIndex((q) => q.key === key) >= S.answered ? ` <span class="muted" style="font-size:.75rem">default</span>` : "";
+// ---- AI requirement draft (step 2) ----
+// Reading status is free. Only the button calls generateSpec, which starts one paid
+// AI run (the backend reuses a run already in progress and refuses without a key).
+const AI_POLL_MS = 2000, AI_POLL_MAX_MS = 3 * 60 * 1000;
+const aiActive = () => S.ai.job?.status === "queued" || S.ai.job?.status === "running";
+async function refreshAi(force) {
+  const a = S.ai;
+  if (a.loading || (!force && Date.now() - a.at < 3000)) return;
+  a.loading = true;
+  try {
+    if (S.submit.id) {
+      const st = await RivetApi.specStatus(S.submit.id, S.submit.token);
+      Object.assign(a, { available: st.available, job: st.job, spec: st.spec, stale: st.stale });
+    } else {
+      a.available = (await RivetApi.aiStatus()).available;
+    }
+    if (!a.busy && !aiActive()) a.error = "";
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    a.error = RivetApi.friendlyError(e);
+  }
+  a.loading = false; a.at = Date.now();
+  if (aiActive()) pollAi();
+  if (S.role === "client" && S.step === 1) render();
+}
+function pollAi() {
+  const a = S.ai;
+  if (a.polling) return;
+  a.polling = true;
+  const started = Date.now();
+  const tick = async () => {
+    await refreshAi(true);
+    if (aiActive() && Date.now() - started < AI_POLL_MAX_MS) { setTimeout(tick, AI_POLL_MS); return; }
+    a.polling = false;
+    if (aiActive()) { a.error = "Still working after 3 minutes. Reopen this step to check again."; if (S.step === 1) render(); }
+  };
+  setTimeout(tick, AI_POLL_MS);
+}
+async function generateAiSpec() {
+  const a = S.ai;
+  if (a.busy || aiActive()) return; // repeated clicks
+  if (!S.submit.id) { a.error = "Go back to step 1 and press Continue to save your request first."; render(); return; }
+  a.busy = true; a.error = ""; render();
+  try {
+    // The AI reads the saved request, so save answers picked since the last save first.
+    const f = RivetApi.followUpsFromState(S, QUESTIONS), fp = JSON.stringify(f);
+    if (f.answers.length && S.answersSave.fp !== fp) {
+      await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+      Object.assign(S.answersSave, { status: "saved", fp });
+    }
+    await RivetApi.generateSpec(S.submit.id, S.submit.token);
+    a.busy = false;
+    await refreshAi(true);
+  } catch (e) {
+    a.busy = false;
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    if (/unavailable/i.test(e?.data ?? "")) a.available = false;
+    a.error = RivetApi.friendlyError(e);
+    render();
+  }
+}
+function aiPanel() {
+  const a = S.ai, j = a.job, busy = a.busy || aiActive(), small = `style="font-size:.85rem"`;
+  const notice = (t) => `<div class="notice" role="alert">${esc(t)}</div>`;
+  let state = "";
+  if (a.available === false) state = notice("AI drafting is unavailable in this demo: no Anthropic API key is configured on the backend. Nothing is sent to an AI service.");
+  else if (a.available === null) state = `<p class="muted" ${small}>Checking whether AI drafting is available\u2026</p>`;
+  if (j?.status === "queued") state += `<p class="muted" ${small} role="status">Queued\u2026</p>`;
+  if (j?.status === "running") state += `<p class="muted" ${small} role="status">Claude is drafting your requirements\u2026</p>`;
+  if (j?.status === "failed" && !a.error) state += notice(j.error || "The AI run failed.");
+  if (a.error) state += notice(a.error);
+  const sp = a.spec;
+  const specHtml = !sp ? "" : `
+    <div class="stack" style="gap:6px" id="ai-spec">
+      <span class="label">AI-generated draft \u00b7 not verified</span>
+      ${a.stale ? notice("Your request changed after this draft was made, so it may be out of date. Draft again to update it.") : ""}
+      <p ${small}>${esc(sp.summary)}</p>
+      <ul class="spec">${sp.requirements.map((r) => `<li>${esc(r.description)}${r.value !== undefined ? ` (${esc(String(r.value))}${r.unit ? " " + esc(r.unit) : ""})` : ""} <span class="muted">\u00b7 ${esc(r.kind)}, ${r.mandatory ? "must-have" : "nice-to-have"}</span></li>`).join("")}</ul>
+      ${sp.followUpQuestions?.length ? `<span class="label">Questions the AI still has</span><ul class="spec">${sp.followUpQuestions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>` : ""}
+      <p class="muted" style="font-size:.78rem">Model: ${esc(sp.model)} \u00b7 confidence ${Math.round(sp.confidence * 100)}% (the model's own estimate)</p>
+    </div>`;
+  return `
+    <div class="panel stack" id="ai-panel">
+      <h3>AI requirement draft <span class="pill plain">Optional</span></h3>
+      <p class="muted" ${small}>Turns your saved description and answers into a structured requirement list. It makes a paid AI call, and only when you press the button.</p>
+      ${state}${specHtml}
+      <div><button class="btn" id="ai-draft" ${a.available !== true || busy ? "disabled" : ""}>${busy ? "Drafting\u2026" : sp ? "Draft again with AI" : "Draft requirements with AI"}</button></div>
+    </div>`;
+}
+// Catalog: Convex is the canonical source. The PRODUCTS array above stays as an
+// offline fallback copy (kept identical by tests/catalog.test.ts).
+async function loadCatalog() {
+  try {
+    const products = RivetApi.robotsToProducts(await RivetApi.listRobots());
+    if (!products.length) return; // not seeded yet: keep the built-in copy
+    PRODUCTS.splice(0, PRODUCTS.length, ...products);
+    S.catalog.source = "convex";
+    if (S.role === "client" && S.step >= 2) render();
+  } catch (e) { /* backend unreachable: keep the built-in copy */ }
+}
+// Mirrors the sample goal the bounty page shows; stored as an illustrative figure.
+const DEMO_BOUNTY_GOAL = 150000;
+function bountyStatus() {
+  const b = S.bountySave;
+  return b.status === "error" ? `<div class="notice" role="alert">${esc(b.error)}</div>` : "";
+}
+// Client "Post bounty": saved to Convex first; the posted view and toast only after it confirms.
+async function postBounty() {
+  const b = S.bountySave;
+  if (b.status === "saving") return; // repeated clicks
+  if (!S.submit.id) {
+    Object.assign(b, { status: "error", error: "Go back to step 1 and press Continue to save your request first." }); render(); return;
+  }
+  b.status = "saving"; b.error = ""; render();
+  try {
+    if (S.submit.fp !== fingerprint()) { // e.g. "Join the shared program" was picked on this screen
+      await RivetApi.updateIntake(S.submit.id, S.submit.token, RivetApi.intakeToRequest(S));
+      Object.assign(S.submit, { status: "saved", fp: fingerprint() });
+    }
+    const t = taskById(S.bounty.taskId);
+    const pledged = Math.round(bountyBasis(t) * S.pledgePct / 100);
+    b.id = await RivetApi.postBounty(S.submit.id, S.submit.token, {
+      taskKey: t.id, title: bountyTitle(), specLines: specLines(), gaps: [...S.gaps], note: S.gapNote.trim(),
+      industry: COMPANY[S.type].label, pledgePercent: S.pledgePct, pledged, goal: DEMO_BOUNTY_GOAL,
+    });
+    b.pledged = pledged;
+    b.status = "saved"; S.posted = true; S.board.at = 0; // board refetches next time
+    render(); window.scrollTo({ top: 0 }); toast("Bounty posted");
+  } catch (e) {
+    if (RivetApi.isDraftMissing(e)) resetDraft();
+    Object.assign(b, { status: "error", error: RivetApi.friendlyError(e) }); render();
+  }
+}
+// Developer board: saved demo bounties from Convex, fetched when the board is shown.
+function savedBoardBounties() {
+  return S.board.items
+    .filter((p) => p._id !== S.bountySave.id) // the operator's own bounty is already shown as "mine"
+    .map((p) => RivetApi.toBoardBounty(p, TASK_SKILLS, CATEGORY))
+    .filter(Boolean);
+}
+async function loadBoard() {
+  const bd = S.board;
+  if (bd.loading || Date.now() - bd.at < 3000) return;
+  bd.loading = true;
+  try { bd.items = await RivetApi.listPostedBounties(); bd.error = ""; }
+  catch (e) { bd.error = RivetApi.friendlyError(e); }
+  bd.loading = false; bd.at = Date.now();
+  if (S.role === "dev" && S.dstep === 1) render();
+}
+function boardStatus() {
+  const bd = S.board, small = `style="font-size:.8rem"`;
+  if (bd.error) return `<div class="notice" ${small} role="alert">Couldn't load saved bounties, so only samples are shown. ${esc(bd.error)}</div>`;
+  if (bd.loading && !bd.at) return `<p class="muted" ${small}>Loading saved bounties\u2026</p>`;
+  const n = savedBoardBounties().length;
+  return n ? `<p class="muted" ${small}>${n} saved demo submission${n === 1 ? "" : "s"} from other operators.</p>` : "";
+}
+// Once this operator's bounty is saved, its totals count only persisted pledges;
+// the page's sample backers are still listed, but not added in.
+const sampleBackersTotal = () => (S.bountySave.id ? 0 : OTHERS.reduce((s, o) => s + o.amt, 0));
+const sampleBackerCount = () => (S.bountySave.id ? 0 : OTHERS.length);
+function originPill(b) {
+  return b.saved || (b.id === "mine" && b.live && S.bountySave.id)
+    ? `<span class="pill good">Saved demo</span>` : `<span class="pill plain">Sample</span>`;
+}
+// Card label so sample data and real saved demo submissions are never confused.
+function originLabel(b) {
+  if (b.saved) return " \u00b7 saved demo submission";
+  if (b.id === "mine") return b.live ? (S.bountySave.id ? " \u00b7 your saved demo submission" : " \u00b7 posted from the client side") : " \u00b7 sample";
+  return " \u00b7 sample";
 }
 
 // Step 2
@@ -386,27 +676,32 @@ function screenFollowups() {
   </div>
   <div class="grid2">
     <div class="chat">${chat.join("")}</div>
+    <div class="stack"><!-- RIVET-BACKEND: column wrapper so the AI panel can sit below -->
     <div class="panel stack">
       <h3>What we're assuming</h3>
       <div class="assump">
         <div><span>Workers on the job</span><span class="num">${people()}</span></div>
         <div><span>Hourly cost</span><span class="num">${money(S.wage)}</span></div>
-        <div><span>Steepest slope a robot must handle</span><span class="num">${S.answers.slope}°</span></div>
-        <div><span>Site complexity factor</span><span class="num">${S.answers.obstacles.toFixed(2)}</span></div>
-        <div><span>Working weeks per year</span><span class="num">${S.answers.weeks}</span></div>
+        <div><span>Steepest slope a robot must handle</span><span class="num">${S.answers.slope}°${notAnswered("slope")}</span></div>
+        <div><span>Site complexity factor</span><span class="num">${S.answers.obstacles.toFixed(2)}${notAnswered("obstacles")}</span></div>
+        <div><span>Working weeks per year</span><span class="num">${S.answers.weeks}${notAnswered("weeks")}</span></div>
         <div><span>Region</span><span>${S.region}</span></div>
       </div>
       <p class="muted" style="font-size:.82rem">The AI only reads your answers. The ROI math in the next step is a fixed formula you can check.</p>
     </div>
+    ${aiPanel()}
+    </div>
   </div>
-  <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length ? "disabled" : ""}>See automation opportunities</button></div>`;
+  <div class="actions">${answersStatus()}<button class="btn" id="back">Back</button><button class="btn primary" id="next" ${S.answered < QUESTIONS.length || S.answersSave.status === "saving" ? "disabled" : ""}>${S.answersSave.status === "saving" ? "Saving\u2026" : "See automation opportunities"}</button></div>`;
 }
 function bindFollowups() {
   document.querySelectorAll(".chip[data-q]").forEach(b => b.onclick = () => {
     const i = +b.dataset.q; S.answers[QUESTIONS[i].key] = +b.dataset.v; S.answered = Math.max(S.answered, i + 1); render();
   });
   $("#back").onclick = () => go(0);
-  $("#next").onclick = () => go(2);
+  $("#next").onclick = () => submitFollowUps(2); // RIVET-BACKEND: save answers first
+  const ai = $("#ai-draft"); if (ai) ai.onclick = generateAiSpec; // RIVET-BACKEND: the only AI trigger
+  refreshAi(); // RIVET-BACKEND: status only, no AI call
 }
 
 // Step 3
@@ -418,18 +713,19 @@ function screenOpps() {
     <span class="label">Step 3 of 5</span>
     <h1>Where a robot could take work off your crews</h1>
     <p class="muted">Payback = robot cost ÷ (yearly labor saved − yearly running cost). Ranges show what happens if our savings estimate is 20% off either way.</p>
+    <p class="muted" style="font-size:.85rem" id="roi-basis">Illustrative estimates, not quotes or verified feasibility: they combine your crew size, hourly cost and answers with <b>sample</b> hours per task and <b>sample</b> robot prices, running costs and automation shares.</p>
   </div>
   <div class="opps">
     ${rows.map(({ t, cost, best }) => `
     <div class="panel opp">
       <div class="stack" style="gap:8px">
         <div class="row"><h2>${t.name}</h2>${best ? `<span class="pill good">Robots available</span>` : `<span class="pill warn">No robot fits yet · bounty candidate</span>`}</div>
-        <p class="muted">${t.note} Your team spends about <span class="num">${t.hours}</span> hrs per ${S.type === "lawn" ? "crew member" : "tech"} each week on it.</p>
+        <p class="muted">${t.note} Sample assumption: about <span class="num">${t.hours}</span> hrs per ${S.type === "lawn" ? "crew member" : "tech"} each week (you haven't told us this yet).</p>
         <div class="bar" aria-hidden="true"><span style="width:${(cost / maxCost * 100).toFixed(0)}%"></span></div>
       </div>
       <div class="opp-stats">
-        <div><div class="label">Labor cost / yr</div><div class="v">${money(cost)}</div></div>
-        <div><div class="label">Best net saving</div><div class="v">${best ? money(best.net) : "—"}</div></div>
+        <div><div class="label">Labor cost / yr (est.)</div><div class="v">${money(cost)}</div></div>
+        <div><div class="label">Best net saving (est.)</div><div class="v">${best ? money(best.net) : "—"}</div></div>
         <div><div class="label">Payback</div><div class="v">${best ? months(best.payback) : "—"}</div>${best ? `<div class="muted num" style="font-size:.75rem">${months(best.hi)}–${months(best.lo)}</div>` : ""}</div>
       </div>
       <div class="row" style="grid-column:1/-1;justify-content:flex-end">
@@ -460,9 +756,9 @@ function productCard(e, rank) {
       <div class="row" style="gap:6px"><span class="pill plain">TRL ${p.trl}</span>${fit ? `<span class="pill good">Fits your sites</span>` : `<span class="pill bad">Ruled out</span>`}</div>
     </div>
     <div class="prod-figs">
-      <div><span class="label">Price / unit</span><span class="v">${money(p.price)}</span></div>
+      <div><span class="label">Sample price / unit</span><span class="v">${money(p.price)}</span></div>
       <div><span class="label">Units (1 per ${S.type === "lawn" ? "crew" : "tech"})</span><span class="v">${e.units}</span></div>
-      <div><span class="label">Net saving / yr</span><span class="v">${money(e.net)}</span></div>
+      <div><span class="label">Est. net saving / yr</span><span class="v">${money(e.net)}</span></div>
       <div><span class="label">Payback</span><span class="v">${months(e.payback)}</span></div>
     </div>
     ${why ? `<div class="why"><b>Why it's a fit:</b> ${why}</div>` : ""}
@@ -476,7 +772,7 @@ function productCard(e, rank) {
 }
 function reason(e) {
   const unit = S.type === "lawn" ? "crews" : "techs";
-  return `pays back in about ${months(e.payback).replace(" mo", " months")} for your ${S.crews} ${unit}. It covers about ${Math.round(e.p.share * 100)}% of ${e.t.name.toLowerCase()}, handles your ${S.answers.slope}° slopes, and is serviced in the ${S.region}.`;
+  return `pays back in about ${months(e.payback).replace(" mo", " months")} for your ${S.crews} ${unit}. Its sample data says it covers about ${Math.round(e.p.share * 100)}% of ${e.t.name.toLowerCase()}, handles your ${S.answers.slope}° slopes, and is serviced in the ${S.region}.`;
 }
 function screenSearch() {
   const f = S.filters;
@@ -495,7 +791,7 @@ function screenSearch() {
   <div class="screen-head">
     <span class="label">Step 4 of 5</span>
     <h1>Robots that could do this today</h1>
-    <p class="muted">Browse with filters, or let the AI rank what fits your sites and explain why. If nothing's right, request a bounty from any result.</p>
+    <p class="muted">Browse with filters, or rank robots by how well they fit your sites, with the reasons shown. If nothing's right, request a bounty from any result.</p>
   </div>
   <div class="search">
     <aside class="panel stack filters" aria-label="Filters">
@@ -505,6 +801,7 @@ function screenSearch() {
       <div class="field" ${S.view === "ai" ? "hidden" : ""}><label for="flt-pay">Max payback: <span class="num">${f.maxPayback} mo</span></label><input type="range" id="flt-pay" min="6" max="60" step="3" value="${f.maxPayback}"></div>
       <div class="field"><label for="flt-region">Region</label><select id="flt-region">${["West", "South", "Midwest", "Northeast"].map(r => `<option ${r === S.region ? "selected" : ""}>${r}</option>`).join("")}</select></div>
       <p class="muted" style="font-size:.8rem">Listings, prices and contacts are made-up samples for this prototype.</p>
+      <p class="muted" style="font-size:.8rem" id="catalog-source">${S.catalog.source === "convex" ? "Loaded from Rivet's sample catalog." : "Using the page's built-in sample copy (catalog not loaded)."}</p>
     </aside>
     <section class="results" aria-live="polite">${body}</section>
   </div>
@@ -552,7 +849,7 @@ function specLines() {
   if (S.gaps.has("Doesn't do the whole job")) L.push("Handles the full job without a person following it");
   if (S.gaps.has("Too slow for my route")) L.push("Keeps pace with a crew's daily route");
   if (S.answers.obstacles < 1) L.push("Navigates around beds, fences and yard clutter");
-  if (S.gapNote.trim()) L.push(esc(S.gapNote.trim()));
+  if (S.gapNote.trim()) L.push(S.gapNote.trim()); // RIVET-BACKEND: stored raw, escaped where rendered
   return L;
 }
 const OTHERS = [
@@ -566,7 +863,7 @@ function screenBounty() {
     <div class="actions" style="justify-content:flex-start"><button class="btn primary" id="tosearch">Back to robots</button></div>`;
   const t = taskById(S.bounty.taskId);
   const basis = bountyBasis(t);
-  const pledge = basis * S.pledgePct / 100;
+  let pledge = basis * S.pledgePct / 100;
   if (!S.posted) {
     const anon = S.visibility === "anon";
     return `
@@ -580,7 +877,7 @@ function screenBounty() {
         <h3>What's missing?</h3>
         <div class="row">${GAPS.map(g => `<button class="chip" data-g="${esc(g)}" aria-pressed="${S.gaps.has(g)}">${g}</button>`).join("")}</div>
         <div class="field"><label for="gap-note">Anything else? (optional)</label><input id="gap-note" type="text" placeholder="e.g. Has to fit in the trailer with the mowers" value="${esc(S.gapNote)}"></div>
-        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul></div>
+        <div class="stack" style="gap:6px"><span class="label">Spec developers will see</span><h3>${esc(bountyTitle())}</h3><ul class="spec" id="spec-preview">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul></div>
       </div>
       <div class="panel stack">
         <h3>Your pledge</h3>
@@ -589,12 +886,14 @@ function screenBounty() {
         <div class="field"><label for="pledge">Pledge: <span class="num">${S.pledgePct}%</span> of first-year savings</label><input type="range" id="pledge" min="20" max="40" step="1" value="${S.pledgePct}"></div>
         <div class="callout"><b>You're only charged if it works out</b><span style="font-size:.88rem">Pledges are all-or-nothing. Nobody pays unless the bounty reaches its goal and a developer delivers a robot that meets the spec.</span></div>
         ${anon ? `<div class="notice">You chose to stay anonymous, so you can't pledge to shared bounties. <button class="link" id="optin">Join the shared program</button></div>` : ""}
-        <button class="btn hivis" id="post" ${anon ? "disabled" : ""}>Post bounty and pledge ${money(pledge)}</button>
+        ${bountyStatus()}
+        <button class="btn hivis" id="post" ${anon || S.bountySave.status === "saving" ? "disabled" : ""}>${S.bountySave.status === "saving" ? "Posting\u2026" : `Post bounty and pledge ${money(pledge)}`}</button>
       </div>
     </div>
     <div class="actions"><button class="btn" id="back">Back to robots</button></div>`;
   }
-  const others = OTHERS.reduce((s, o) => s + o.amt, 0) + (claimedMine() ? S.extra : 0);
+  if (S.bountySave.id) pledge = S.bountySave.pledged; // RIVET-BACKEND: show what was saved, not a recomputation
+  const others = sampleBackersTotal() + (claimedMine() ? S.extra : 0); // RIVET-BACKEND: no sample money in saved totals
   const goal = claimedMine() ? S.claim.price : 150000;
   const raised = others + pledge;
   return `
@@ -607,14 +906,14 @@ function screenBounty() {
         <div class="bounty-stats">
           <div><span class="label">Pledged</span><div class="v">${money(raised)}</div></div>
           <div><span class="label">${claimedMine() ? "Developer's price" : "Goal"}</span><div class="v">${money(goal)}</div></div>
-          <div><span class="label">Backers</span><div class="v">${OTHERS.length + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
+          <div><span class="label">Backers</span><div class="v">${sampleBackerCount() + 1 + (claimedMine() && S.extra ? 2 : 0)}</div></div>
           <div><span class="label">Closes</span><div class="v">Jan 31</div></div>
         </div>
         <p class="muted" style="font-size:.85rem">${claimedMine() ? `All-or-nothing: backers are charged only once pledges reach ${money(goal)} and ${esc(S.dev.team)} delivers.` : "All-or-nothing: if the goal isn't reached by Jan 31, 2027, nobody is charged."}</p>
       </div>
       <div class="panel stack">
         <h3>Spec</h3>
-        <ul class="spec">${specLines().map(l => `<li>${l}</li>`).join("")}</ul>
+        <ul class="spec">${specLines().map(l => `<li>${esc(l)}</li>`).join("")}</ul>
       </div>
       <div class="panel stack">
         <h3>Developer updates</h3>
@@ -622,13 +921,14 @@ function screenBounty() {
       </div>
     </div>
     <div class="stack">
-      <div class="callout"><b>3 companies near you need this too</b><span style="font-size:.88rem">Similar requests from lawn and grounds companies in the ${S.region}. More backers means a bigger bounty and a better shot at getting it built.</span><div style="margin-top:6px"><button class="btn small" id="invite" ${S.invited ? "disabled" : ""}>${S.invited ? "Invites sent" : "Invite them to back it"}</button></div></div>
+      <div class="callout"><b>3 companies near you need this too <span class="pill plain">Sample</span></b><span style="font-size:.88rem">Similar requests from lawn and grounds companies in the ${S.region}. More backers means a bigger bounty and a better shot at getting it built.</span><div style="margin-top:6px"><button class="btn small" id="invite" ${S.invited ? "disabled" : ""}>${S.invited ? "Invites sent" : "Invite them to back it"}</button></div></div>
       <div class="panel stack">
         <h3>Backers</h3>
         <p class="muted" style="font-size:.85rem">Each company pledges in proportion to its own savings, so bigger operators put in more.</p>
         <div class="backers">
           <div class="backer"><div><b>${esc(S.name)}</b> <span class="pill warn">You</span><div class="muted" style="font-size:.82rem">${S.crews} ${S.type === "lawn" ? "crews" : "techs"} · ${S.pledgePct}% of first-year savings</div></div><span class="num">${money(pledge)}</span></div>
-          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
+          ${claimedMine() && S.extra ? `<div class="backer"><div><b>2 new backers (simulated)</b><div class="muted" style="font-size:.82rem">Joined after a developer named a price</div></div><span class="num">${money(S.extra)}</span></div>` : ""}
+          ${S.bountySave.id ? `<span class="label">Sample backers \u00b7 not counted in the total</span>` : ""}
           ${OTHERS.map(o => `<div class="backer"><div><b>${o.name}</b><div class="muted" style="font-size:.82rem">${o.size}${o.anon ? " · name hidden by choice" : ""}</div></div><span class="num">${money(o.amt)}</span></div>`).join("")}
         </div>
         <p class="muted" style="font-size:.78rem">Other backers are sample data.</p>
@@ -642,14 +942,21 @@ function bindBounty() {
   on("#tosearch", () => go(3));
   on("#back", () => go(3));
   document.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { const g = b.dataset.g; S.gaps.has(g) ? S.gaps.delete(g) : S.gaps.add(g); render(); });
-  const note = $("#gap-note"); if (note) note.onchange = e => { S.gapNote = e.target.value; render(); };
+  // RIVET-BACKEND: update the spec preview in place while typing. A full render() on
+  // "change" fired on blur, i.e. on mousedown of Post, and replaced the button mid-click.
+  const note = $("#gap-note");
+  if (note) note.oninput = e => {
+    S.gapNote = e.target.value;
+    const preview = $("#spec-preview");
+    if (preview) preview.innerHTML = specLines().map(l => `<li>${esc(l)}</li>`).join("");
+  };
   const pl = $("#pledge");
   if (pl) {
     const basis = bountyBasis(taskById(S.bounty.taskId));
     pl.oninput = e => { S.pledgePct = +e.target.value; pl.previousElementSibling.querySelector(".num").textContent = S.pledgePct + "%"; $(".pledge-big").textContent = money(basis * S.pledgePct / 100); $("#post").textContent = "Post bounty and pledge " + money(basis * S.pledgePct / 100); };
   }
   on("#optin", () => { S.visibility = "shared"; render(); toast("You joined the shared program"); });
-  on("#post", () => { S.posted = true; render(); window.scrollTo({ top: 0 }); toast("Bounty posted"); });
+  on("#post", postBounty); // RIVET-BACKEND: save before showing it as posted
   on("#invite", () => { S.invited = true; render(); toast("Invites sent to 3 companies"); });
   on("#edit", () => { S.posted = false; render(); });
   on("#restart", () => { S.answered = 0; S.bounty = null; S.posted = false; S.contacts = {}; go(0); });
@@ -683,21 +990,24 @@ Object.assign(S, {
 });
 
 function claimedMine() { return S.claim && S.claim.bountyId === "mine"; }
-function clientPledge() { return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500; }
+function clientPledge() {
+  if (S.posted && S.bountySave.id) return S.bountySave.pledged; // RIVET-BACKEND: the saved amount
+  return S.posted && S.bounty ? bountyBasis(taskById(S.bounty.taskId)) * S.pledgePct / 100 : 15500;
+}
 function mineBounty() {
   const live = !!(S.posted && S.bounty);
   const taskId = live ? S.bounty.taskId : "mow";
   const skills = [...TASK_SKILLS[taskId]];
   if (live && S.gaps.has("Can't handle slopes") && !skills.includes("Slope traction")) skills.push("Slope traction");
   return {
-    id: "mine", live, skills, closes: "Jan 31", backers: 4,
+    id: "mine", live, skills, closes: "Jan 31", backers: sampleBackerCount() + 1,
     title: live ? bountyTitle() : "Autonomous mower for 20° slopes",
     industry: live ? COMPANY[S.type].label : "Lawn care", cat: CATEGORY[taskId], region: live ? S.region : "West",
-    pledged: OTHERS.reduce((s, o) => s + o.amt, 0) + clientPledge(), goal: 150000,
+    pledged: sampleBackersTotal() + clientPledge(), goal: 150000,
     specs: live ? specLines() : ["Takes over at least 60% of mowing open turf on residential and small commercial lawns", "Works on slopes up to 20°", "Navigates around beds, fences and yard clutter"],
   };
 }
-function allBounties() { return [mineBounty(), ...SAMPLE_BOUNTIES]; }
+function allBounties() { return [mineBounty(), ...savedBoardBounties(), ...SAMPLE_BOUNTIES]; } // RIVET-BACKEND: + saved bounties
 function bountyById(id) { return allBounties().find(b => b.id === id); }
 const isMyClaim = b => S.claim && S.claim.bountyId === b.id;
 const raisedOf = b => b.pledged + (isMyClaim(b) ? S.extra : 0);
@@ -765,8 +1075,8 @@ function bountyCard(b, rank) {
   return `
   <article class="panel prod">
     <div class="prod-top">
-      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${b.industry} · ${b.cat} · ${b.region}${b.id === "mine" ? (b.live ? " · posted from the client side" : " · sample") : ""}</span></div></div>
-      <div class="row" style="gap:6px">${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
+      <div class="row" style="gap:12px">${rank != null ? `<span class="rank">#${rank}</span>` : ""}<div><h3>${esc(b.title)}</h3><span class="muted" style="font-size:.85rem">${esc(b.industry)} · ${esc(b.cat)} · ${esc(b.region)}${originLabel(b)}</span></div></div>
+      <div class="row" style="gap:6px">${originPill(b)}${mine ? `<span class="pill warn">Reserved by you</span>` : other ? `<span class="pill bad">Reserved until ${b.reservedUntil}</span>` : ""}${pct >= 100 ? `<span class="pill good">Fully funded</span>` : `<span class="pill plain">${pct}% funded</span>`}</div>
     </div>
     <div class="bar" aria-hidden="true"><span style="width:${Math.min(pct, 100)}%"></span></div>
     <div class="prod-figs">
@@ -801,7 +1111,7 @@ function screenBoard() {
   <div class="screen-head">
     <span class="label">Developer · Step 2 of 4</span>
     <h1>Bounties with money behind them</h1>
-    <p class="muted">Every bounty here comes from real operators who've pledged. Browse with filters, or let the AI rank what your team is closest to building.</p>
+    <p class="muted">Cards marked Sample are made-up examples; Saved demo cards were posted by operators in this demo. All amounts are illustrative. Browse with filters, or rank bounties by how close your team is to building them.</p>
   </div>
   <div class="search">
     <aside class="panel stack filters" aria-label="Filters">
@@ -811,8 +1121,9 @@ function screenBoard() {
       <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-pledged">Min pledged: <span class="num">${money(f.minPledged)}</span></label><input type="range" id="df-pledged" min="0" max="150000" step="5000" value="${f.minPledged}"></div>
       <div class="field" ${S.dview === "ai" ? "hidden" : ""}><label for="df-funded">Min funded: <span class="num">${f.minFunded}%</span></label><input type="range" id="df-funded" min="0" max="100" step="5" value="${f.minFunded}"></div>
       <label class="check" ${S.dview === "ai" ? "hidden" : ""}><input type="checkbox" id="df-res" ${f.showReserved ? "checked" : ""}>Show bounties other teams reserved</label>
-      <p class="muted" style="font-size:.8rem">Bounties, backers and amounts are sample data.</p>
+      <p class="muted" style="font-size:.8rem">Sample cards, backers and all amounts are illustrative.</p>
       ${tip}
+      ${boardStatus()}
     </aside>
     <section class="results" aria-live="polite">${body}</section>
   </div>
@@ -831,6 +1142,7 @@ function bindBoard() {
   document.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => { S.sel = b.dataset.sel; goDev(2); });
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => goDev(3));
   $("#back").onclick = () => goDev(0);
+  loadBoard(); // RIVET-BACKEND
 }
 
 // Dev step 3: claim
@@ -852,13 +1164,13 @@ function screenClaim() {
   <div class="screen-head">
     <span class="label">Developer · Step 3 of 4 · Claim</span>
     <h1>${esc(b.title)}</h1>
-    <p class="muted">${b.industry} · ${b.region} · ${backersOf(b)} backers · closes ${b.closes}</p>
+    <p class="muted">${esc(b.industry)} · ${esc(b.region)} · ${backersOf(b)} backers · closes ${b.closes}</p>
   </div>
   <div class="grid2">
     <div class="stack">
       <div class="panel stack">
         <h3>Spec from the backers</h3>
-        <ul class="spec">${b.specs.map(l => `<li>${l}</li>`).join("")}</ul>
+        <ul class="spec">${b.specs.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
         <div class="tags">${b.skills.map(s => `<span class="tag ${S.dev.skills.has(s) ? "have" : "miss"}">${S.dev.skills.has(s) ? "✓" : "✗"} ${s}</span>`).join("")}</div>
       </div>
       <div class="panel stack">
@@ -982,12 +1294,14 @@ function render() {
   const names = dev ? DEV_STEPS : STEP_NAMES, cur = dev ? S.dstep : S.step;
   $("#steps").innerHTML = names.map((n, i) =>
     `<li><button data-step="${i}" ${i === cur ? 'aria-current="step"' : ""} class="${i < cur ? "done" : ""}"><span class="n">${i + 1}</span>${n}</button></li>`).join("");
-  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => dev ? goDev(+b.dataset.step) : go(+b.dataset.step));
+  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => dev ? goDev(+b.dataset.step) : navTo(+b.dataset.step)); // RIVET-BACKEND: save before leaving step 1
   const [html, bind] = (dev ? DEV_SCREENS : SCREENS)[cur];
   $("#app").innerHTML = `<div class="screen">${html()}</div>`;
   bind();
 }
 render();
+hydrateSaved();
+loadCatalog(); // RIVET-BACKEND
 </script>
 
 </body></html>

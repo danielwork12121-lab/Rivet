@@ -13,7 +13,18 @@ export const LIMITS = {
   constraint: 500,
   costNotes: 1000,
   maxMoney: 1_000_000_000_000,
+  companyName: 100,
+  profileText: 50,
+  headcount: 10_000,
+  maxHourlyCost: 10_000,
+  followUpCount: 10,
+  question: 500,
+  answerLabel: 200,
+  unit: 30,
 } as const;
+
+const CLIENT_TOKEN = /^[A-Za-z0-9_-]{8,100}$/;
+const ANSWER_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,49}$/;
 
 export type CostInfo = {
   currency: string;
@@ -22,12 +33,24 @@ export type CostInfo = {
   notes?: string;
 };
 
+export type ProfileInfo = {
+  companyName: string;
+  businessType: string;
+  region: string;
+  crewCount: number;
+  peoplePerCrew?: number;
+  hourlyLaborCost: number;
+  visibility: "shared" | "anonymous";
+};
+
 export type RequestInput = {
   title: string;
   description: string;
   environment: string;
   constraints: string[];
   cost?: CostInfo;
+  profile?: ProfileInfo;
+  clientToken?: string;
 };
 
 function requireText(label: string, value: string, max: number): string {
@@ -44,6 +67,35 @@ function checkMoney(label: string, value: number | undefined) {
   if (!Number.isFinite(value) || value < 0 || value > LIMITS.maxMoney) {
     throw new ConvexError(`${label} must be a non-negative number`);
   }
+}
+
+function requireCount(label: string, value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > LIMITS.headcount) {
+    throw new ConvexError(`${label} must be a whole number from 1 to ${LIMITS.headcount}`);
+  }
+}
+
+function validateProfile(p: ProfileInfo): ProfileInfo {
+  requireCount("profile.crewCount", p.crewCount);
+  if (p.peoplePerCrew !== undefined) requireCount("profile.peoplePerCrew", p.peoplePerCrew);
+  if (
+    !Number.isFinite(p.hourlyLaborCost) ||
+    p.hourlyLaborCost <= 0 ||
+    p.hourlyLaborCost > LIMITS.maxHourlyCost
+  ) {
+    throw new ConvexError(
+      `profile.hourlyLaborCost must be greater than 0 and at most ${LIMITS.maxHourlyCost}`,
+    );
+  }
+  return {
+    companyName: requireText("profile.companyName", p.companyName, LIMITS.companyName),
+    businessType: requireText("profile.businessType", p.businessType, LIMITS.profileText),
+    region: requireText("profile.region", p.region, LIMITS.profileText),
+    crewCount: p.crewCount,
+    ...(p.peoplePerCrew !== undefined && { peoplePerCrew: p.peoplePerCrew }),
+    hourlyLaborCost: p.hourlyLaborCost,
+    visibility: p.visibility,
+  };
 }
 
 /** Returns a trimmed, validated copy of the input or throws an Error. */
@@ -82,11 +134,119 @@ export function validateRequestInput(input: RequestInput): RequestInput {
     };
   }
 
+  if (input.clientToken !== undefined && !CLIENT_TOKEN.test(input.clientToken)) {
+    throw new ConvexError(
+      "clientToken must be 8-100 characters: letters, digits, '-' or '_'",
+    );
+  }
+
   return {
     title: requireText("title", input.title, LIMITS.title),
     description: requireText("description", input.description, LIMITS.description),
     environment: requireText("environment", input.environment, LIMITS.environment),
     constraints,
     ...(cost ? { cost } : {}),
+    ...(input.profile ? { profile: validateProfile(input.profile) } : {}),
+    ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
+  };
+}
+
+export type FollowUpAnswer = {
+  key: string;
+  question: string;
+  answerLabel: string;
+  assumption?: { value: number; unit?: string };
+};
+
+/** Validates a full set of follow-up answers; returns a trimmed copy or throws. */
+export function validateFollowUps(answers: FollowUpAnswer[]): FollowUpAnswer[] {
+  if (answers.length > LIMITS.followUpCount) {
+    throw new ConvexError(`At most ${LIMITS.followUpCount} follow-up answers allowed`);
+  }
+  const seen = new Set<string>();
+  return answers.map((a) => {
+    if (!ANSWER_KEY.test(a.key)) {
+      throw new ConvexError(
+        "followUps.key must start with a letter and use only letters, digits, '-' or '_' (max 50)",
+      );
+    }
+    if (seen.has(a.key)) throw new ConvexError(`followUps has a duplicate key: ${a.key}`);
+    seen.add(a.key);
+    const out: FollowUpAnswer = {
+      key: a.key,
+      question: requireText("followUps.question", a.question, LIMITS.question),
+      answerLabel: requireText("followUps.answerLabel", a.answerLabel, LIMITS.answerLabel),
+    };
+    if (a.assumption) {
+      if (!Number.isFinite(a.assumption.value)) {
+        throw new ConvexError("followUps.assumption.value must be a finite number");
+      }
+      const unit =
+        a.assumption.unit === undefined
+          ? undefined
+          : requireText("followUps.assumption.unit", a.assumption.unit, LIMITS.unit);
+      out.assumption = { value: a.assumption.value, ...(unit ? { unit } : {}) };
+    }
+    return out;
+  });
+}
+
+export const BOUNTY_LIMITS = {
+  title: 160,
+  specLines: 12,
+  specLine: 300,
+  gaps: 10,
+  gap: 100,
+  note: 500,
+  industry: 50,
+  money: 1_000_000_000,
+} as const;
+
+const TASK_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,29}$/;
+
+export type BountyPostInput = {
+  taskKey: string;
+  title: string;
+  specLines: string[];
+  gaps: string[];
+  note: string;
+  industry: string;
+  pledgePercent: number;
+  pledged: number;
+  goal: number;
+};
+
+/** Validates an operator's bounty; returns a trimmed copy or throws. Text stays raw. */
+export function validateBountyPost(b: BountyPostInput): BountyPostInput {
+  if (!TASK_KEY.test(b.taskKey)) {
+    throw new ConvexError("taskKey must start with a letter and use only letters, digits, '-' or '_' (max 30)");
+  }
+  if (b.specLines.length > BOUNTY_LIMITS.specLines) {
+    throw new ConvexError(`At most ${BOUNTY_LIMITS.specLines} spec lines allowed`);
+  }
+  if (b.gaps.length > BOUNTY_LIMITS.gaps) throw new ConvexError(`At most ${BOUNTY_LIMITS.gaps} gaps allowed`);
+  const note = b.note.trim();
+  if (note.length > BOUNTY_LIMITS.note) {
+    throw new ConvexError(`note must be at most ${BOUNTY_LIMITS.note} characters`);
+  }
+  if (!Number.isFinite(b.pledgePercent) || b.pledgePercent < 0 || b.pledgePercent > 100) {
+    throw new ConvexError("pledgePercent must be between 0 and 100");
+  }
+  if (!Number.isFinite(b.pledged) || b.pledged < 0 || b.pledged > BOUNTY_LIMITS.money) {
+    throw new ConvexError("pledged must be a non-negative number");
+  }
+  if (!Number.isFinite(b.goal) || b.goal <= 0 || b.goal > BOUNTY_LIMITS.money) {
+    throw new ConvexError("goal must be greater than 0");
+  }
+  return {
+    taskKey: b.taskKey,
+    title: requireText("title", b.title, BOUNTY_LIMITS.title),
+    specLines: b.specLines.map((l) => requireText("specLines item", l, BOUNTY_LIMITS.specLine)),
+    gaps: b.gaps.map((g) => requireText("gaps item", g, BOUNTY_LIMITS.gap)),
+    note,
+    industry: requireText("industry", b.industry, BOUNTY_LIMITS.industry),
+    pledgePercent: b.pledgePercent,
+    pledged: b.pledged,
+    goal: b.goal,
   };
 }

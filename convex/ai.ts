@@ -7,19 +7,22 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { computeRoi, suggestBounty } from "./lib/roi";
 import { PERSONAS } from "./lib/personas";
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from Convex env vars
+// Created per call so a key set later (npx convex env set) is picked up without a
+// redeploy. Reads ANTHROPIC_API_KEY from Convex env vars.
+const client = () => new Anthropic();
 const MODEL = "claude-opus-5-5";
 
 // Quick check that the key works: npx convex run ai:hello
-export const hello = action({
+// Internal so browsers can't spend the API key; `npx convex run` can still call it.
+export const hello = internalAction({
   args: {},
   handler: async () => {
-    const res = await client.messages.create({
+    const res = await client().messages.create({
       model: MODEL,
       max_tokens: 1024,
       output_config: { effort: "low" },
@@ -28,6 +31,14 @@ export const hello = action({
     return res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   },
 });
+
+// Record a failed run (e.g. missing ANTHROPIC_API_KEY) like extractSpec does,
+// then rethrow so the scheduled function is marked failed too.
+async function logFailure(ctx: ActionCtx, route: string, err: unknown) {
+  await ctx.runMutation(internal.agent.logRun, {
+    route, ms: 0, ok: false, inputTokens: 0, outputTokens: 0, note: String(err).slice(0, 500),
+  });
+}
 
 // ---------- 1. Requirement spec + follow-up questions ----------
 
@@ -61,7 +72,7 @@ type Spec = z.infer<typeof SpecSchema>;
 // Shared by the real action and the evals.
 async function callSpecModel(requestJson: string) {
   const started = Date.now();
-  const res = await client.messages.parse({
+  const res = await client().messages.parse({
     model: MODEL,
     max_tokens: 16000,
     output_config: { effort: "medium", format: zodOutputFormat(SpecSchema) },
@@ -74,13 +85,26 @@ async function callSpecModel(requestJson: string) {
   return { spec: res.parsed_output, ms: Date.now() - started, usage: res.usage };
 }
 
+// Missing or rejected credentials are "unavailable"; anything else is a model error.
+// The message stored on the job is safe to show; the raw error goes to agentRuns.
+function classify(err: unknown) {
+  const text = String(err);
+  return /authentication|api[_ ]?key|apiKey|401|403/i.test(text)
+    ? { errorKind: "unavailable" as const, error: "The AI service is unavailable: credentials are missing or were rejected." }
+    : { errorKind: "model_error" as const, error: "The AI could not produce a draft this time. You can try again." };
+}
+
 export const extractSpec = internalAction({
-  args: { requestId: v.id("operatorRequests") },
-  handler: async (ctx, { requestId }) => {
-    const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
+  args: { requestId: v.id("operatorRequests"), jobId: v.optional(v.id("aiJobs")) },
+  handler: async (ctx, { requestId, jobId }) => {
+    // Only one action may run a queued job: if it's already been picked up, stop.
+    if (jobId && !(await ctx.runMutation(internal.agent.markJobRunning, { jobId }))) return;
     try {
+      const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
+      // The version of the request this spec is based on; later edits make it stale.
+      const requestVersion = context.request.updatedAt ?? context.request._creationTime;
       const { spec, ms, usage } = await callSpecModel(JSON.stringify(context));
-      await ctx.runMutation(internal.agent.saveSpec, {
+      const specId = await ctx.runMutation(internal.agent.saveSpec, {
         requestId,
         model: MODEL,
         summary: spec.summary,
@@ -96,14 +120,18 @@ export const extractSpec = internalAction({
         })),
         confidence: Math.min(Math.max(spec.confidence, 0), 1),
         followUpQuestions: spec.followUpQuestions.slice(0, 3),
+        ...(jobId ? { jobId } : {}),
+        requestVersion,
       });
       await ctx.runMutation(internal.agent.logRun, {
         route: "spec", ms, ok: true, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
       });
+      if (jobId) await ctx.runMutation(internal.agent.finishJob, { jobId, status: "succeeded", specId });
     } catch (err) {
       await ctx.runMutation(internal.agent.logRun, {
         route: "spec", ms: 0, ok: false, inputTokens: 0, outputTokens: 0, note: String(err),
       });
+      if (jobId) await ctx.runMutation(internal.agent.finishJob, { jobId, status: "failed", ...classify(err) });
       throw err;
     }
   },
@@ -131,6 +159,7 @@ function numbersIn(text: string): string[] {
 export const recommendRobots = internalAction({
   args: { requestId: v.id("operatorRequests"), maxPrice: v.optional(v.number()) },
   handler: async (ctx, { requestId, maxPrice }) => {
+   try {
     const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
     const spec = await ctx.runQuery(internal.agent.latestSpecInternal, { requestId });
     const annualCost = context.request.cost?.currentAnnualCost;
@@ -183,7 +212,7 @@ export const recommendRobots = internalAction({
       },
     });
 
-    const final = await client.beta.messages.toolRunner({
+    const final = await client().beta.messages.toolRunner({
       model: MODEL,
       max_tokens: 16000,
       output_config: { effort: "medium" },
@@ -221,6 +250,10 @@ export const recommendRobots = internalAction({
       outputTokens: final.usage.output_tokens,
       ...(dropped.length ? { note: "dropped " + dropped.join("; ") } : {}),
     });
+   } catch (err) {
+    await logFailure(ctx, "recommend", err);
+    throw err;
+   }
   },
 });
 
@@ -242,12 +275,13 @@ const BountySchema = z.object({
 export const writeBounty = internalAction({
   args: { requestId: v.id("operatorRequests"), robotId: v.optional(v.id("robots")), gap: v.string() },
   handler: async (ctx, { requestId, robotId, gap }) => {
+   try {
     const context = await ctx.runQuery(internal.agent.requestContext, { requestId });
     const spec = await ctx.runQuery(internal.agent.latestSpecInternal, { requestId });
     const robot = robotId ? await ctx.runQuery(internal.robots.getByString, { id: robotId }) : null;
     const started = Date.now();
 
-    const res = await client.messages.parse({
+    const res = await client().messages.parse({
       model: MODEL,
       max_tokens: 16000,
       output_config: { effort: "medium", format: zodOutputFormat(BountySchema) },
@@ -265,6 +299,10 @@ export const writeBounty = internalAction({
       route: "bounty", ms: Date.now() - started, ok: true,
       inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
     });
+   } catch (err) {
+    await logFailure(ctx, "bounty", err);
+    throw err;
+   }
   },
 });
 
@@ -288,7 +326,7 @@ export const importFromApify = internalAction({
     const pages = (await (await fetch(url)).json()) as { url: string; text?: string }[];
     let added = 0;
     for (const page of pages) {
-      const res = await client.messages.parse({
+      const res = await client().messages.parse({
         model: MODEL,
         max_tokens: 4096,
         output_config: { effort: "low", format: zodOutputFormat(RobotPageSchema) },
@@ -314,8 +352,9 @@ export const importFromApify = internalAction({
 });
 
 // ---------- Evals: npx convex run ai:runEvals ----------
+// Internal for the same reason as hello.
 
-export const runEvals = action({
+export const runEvals = internalAction({
   args: {},
   handler: async () => {
     const results = [];

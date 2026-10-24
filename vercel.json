@@ -3,6 +3,11 @@
   "buildCommand": null,
   "outputDirectory": ".",
   "framework": null,
+  "git": {
+    "deploymentEnabled": {
+      "integration/agent": false
+    }
+  },
   "rewrites": [
     { "source": "/", "destination": "/pages/index.html" },
     { "source": "/find-solution", "destination": "/pages/find-solution.html" },
