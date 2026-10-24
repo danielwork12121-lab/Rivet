@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rivet — Robot finder</title>
+<style>
+  :root { --bg:#f4f5f2; --card:#fff; --ink:#1b211c; --muted:#5d6a60; --line:#d9ded8; --accent:#2f6b3f; --warn:#a4501a; --chip:#eef1ec; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding:24px 16px 64px; }
+  main { max-width: 860px; margin: 0 auto; display:grid; gap:20px; }
+  h1 { margin:0; font-size:28px; } h2 { margin:0 0 8px; font-size:19px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; display:grid; gap:12px; }
+  label { display:grid; gap:4px; font-size:14px; color:var(--muted); }
+  input, textarea { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:#fff; }
+  textarea { min-height: 90px; }
+  .row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; }
+  button { font:inherit; font-weight:600; padding:10px 16px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; justify-self:start; }
+  button:disabled { opacity:.5; cursor:default; }
+  .steps { list-style:none; margin:0; padding:0; display:grid; gap:6px; font-size:15px; }
+  .steps li::before { content:"○ "; color:var(--muted); }
+  .steps li.done::before { content:"✓ "; color:var(--accent); }
+  .steps li.now::before { content:"● "; color:var(--warn); }
+  .pick header { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; align-items:baseline; }
+  .muted { color:var(--muted); font-size:14px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font-size:13px; padding:3px 8px; border-radius:999px; background:var(--chip); }
+  .chip.meets { background:#e1f1e4; color:#1f5a2e; } .chip.misses { background:#f8e3d6; color:#8a3c0e; } .chip.unknown { background:#ececec; color:#555; }
+  .nums { display:flex; flex-wrap:wrap; gap:18px; font-variant-numeric: tabular-nums; }
+  .nums b { display:block; font-size:20px; }
+  .reason { border-left:3px solid var(--accent); padding-left:10px; }
+  .error { color:var(--warn); }
+  a { color:var(--accent); }
+  .talk { display:flex; gap:10px; align-items:flex-start; }
+  .talk textarea, .talk input { flex:1; min-width:0; }
+  .mic { background:var(--chip); color:var(--ink); border:1px solid var(--line); padding:10px 14px; white-space:nowrap; }
+  .mic.on { background:var(--warn); color:#fff; border-color:var(--warn); }
+  .toggle { display:flex; gap:8px; align-items:center; color:var(--ink); font-size:15px; }
+  .heard { font-size:14px; color:var(--muted); min-height:1.5em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Robot finder</h1>
+  <p class="muted">Describe a job. A fast model reads it, code ranks real robots (searching the web with Apify if we have none yet), and a strong model explains the picks. Fictional demo data only.</p>
+
+  <form class="card" id="form">
+    <div class="row">
+      <label>Business type <input id="type" required value="Lawn care"></label>
+      <label>Region <input id="region" required value="Bay Area"></label>
+      <label>What this job costs you a year ($, optional) <input id="cost" type="number" min="1" placeholder="e.g. 90000"></label>
+    </div>
+    <label for="describe">Describe the job you want a robot to do: type it, or tap Talk and say it</label>
+    <div class="talk">
+      <textarea id="describe" required>We mow about 40 commercial properties a week, many with steep hills up to 25 degrees. Crews spend most of the day on mowing.</textarea>
+      <button class="mic" id="mic" type="button" hidden>🎤 Talk</button>
+    </div>
+    <p class="heard" id="heard" aria-live="polite"></p>
+    <label class="toggle" id="voiceRow" hidden><input type="checkbox" id="voiceOn"> Voice mode: read answers out loud and listen for my reply</label>
+    <button id="go">Find robots</button>
+  </form>
+
+  <section class="card" id="progress" hidden>
+    <ul class="steps">
+      <li id="s-read">Reading your request (fast model)</li>
+      <li id="s-search">Checking the catalog, searching the web if needed (Apify)</li>
+      <li id="s-rank">Ranking by fit and payback (code)</li>
+      <li id="s-explain">Explaining the picks (strong model)</li>
+    </ul>
+    <p class="muted" id="status"></p>
+  </section>
+
+  <section class="card" id="ask" hidden>
+    <h2>How much does this job cost you each year?</h2>
+    <p class="muted">We need this to work out payback. Include wages for the time your crews spend on it.</p>
+    <div class="talk"><input id="askCost" type="number" min="1" placeholder="Dollars per year"><button class="mic" id="askMic" type="button" hidden>🎤 Say it</button></div>
+    <button id="askGo" type="button">Update payback</button>
+  </section>
+
+  <section class="card" id="bounty" hidden>
+    <h2>No robot fully fits. Request a bounty?</h2>
+    <p class="muted">These must-haves become the bounty's requirements:</p>
+    <ul id="gaps"></ul>
+    <a href="/robot-bounty-client-flow">Start a bounty</a>
+  </section>
+
+  <div id="picks" style="display:grid; gap:14px"></div>
+</main>
+
+<script src="../js/rivet-api.js"></script>
+<script>
+  // Set window.RIVET_CONVEX_URL before rivet-api.js to point at a cloud deployment.
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
+  let draft = null, timer = null;
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("go").disabled = true;
+    try {
+      const token = RivetApi.newClientToken();
+      const cost = Number($("cost").value);
+      const args = {
+        title: `${$("type").value} — robot finder request`.slice(0, 120),
+        description: $("describe").value,
+        environment: `${$("type").value} business, ${$("region").value}`,
+        constraints: [], clientToken: token,
+      };
+      if (cost > 0) args.cost = { currency: "USD", currentAnnualCost: cost };
+      const id = await RivetApi.createRequest(args);
+      draft = { id, token };
+      spoken.clear();
+      await RivetApi.findRobots(id, token);
+      watch();
+    } catch (err) {
+      $("progress").hidden = false;
+      $("status").innerHTML = `<span class="error">${esc(RivetApi.friendlyError ? RivetApi.friendlyError(err) : err.message)}</span>`;
+      $("go").disabled = false;
+    }
+  });
+
+  $("askGo").addEventListener("click", () => submitCost());
+  async function submitCost() {
+    const n = Number($("askCost").value);
+    if (!(n > 0) || !draft) return;
+    $("askGo").disabled = true;
+    await RivetApi.setTaskCost(draft.id, draft.token, n);
+    $("askGo").disabled = false;
+    spoken.clear();
+    watch();
+  }
+
+  // ConvexHttpClient has no live updates, so poll once a second until done.
+  function watch() {
+    clearInterval(timer);
+    $("progress").hidden = false;
+    timer = setInterval(async () => {
+      const m = await RivetApi.latestMatch(draft.id, draft.token).catch(() => null);
+      if (!m) return;
+      render(m);
+      if (m.status === "done" || m.status === "failed") { clearInterval(timer); $("go").disabled = false; }
+    }, 1000);
+  }
+
+  function step(id, state) { $(id).className = state; }
+
+  function render(m) {
+    const order = ["reading", "searching", "ranked", "done"];
+    const at = order.indexOf(m.status);
+    step("s-read", at > 0 ? "done" : "now");
+    step("s-search", m.status === "searching" ? "now" : at > 0 ? "done" : "");
+    step("s-rank", at >= 2 ? "done" : "");
+    step("s-explain", m.status === "done" ? "done" : m.status === "ranked" ? "now" : "");
+    let status = m.intent ? `Task: ${esc(m.intent.task)}.` : "";
+    if (m.status === "searching" && m.search) status += ` Searching the web: ${esc(m.search.status)}, ${m.search.sitesFound} vendor sites so far. This takes a minute or two.`;
+    if (m.msToRanked) status += ` Matches shown after ${(m.msToRanked / 1000).toFixed(1)} s.`;
+    if (m.error) status += ` <span class="error">${esc(m.error)}</span>`;
+    $("status").innerHTML = status;
+
+    $("ask").hidden = !(m.next && m.next.kind === "ask");
+    $("bounty").hidden = !(m.next && m.next.kind === "suggest_bounty");
+    if (m.next && m.next.kind === "suggest_bounty") $("gaps").innerHTML = m.next.gaps.map((g) => `<li>${esc(g)}</li>`).join("");
+
+    narrate(m);
+    $("picks").innerHTML = m.picks.map((p) => `
+      <article class="card pick">
+        <header>
+          <h2>${esc(p.name)}</h2>
+          <span class="muted">${esc(p.vendor)}${p.sample ? " · fictional sample" : ""}${p.url ? ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">source</a>` : ""}</span>
+        </header>
+        <div class="nums">
+          <span><span class="muted">Price</span><b>${p.price === null ? "On request" : money(p.price)}</b></span>
+          <span><span class="muted">Payback</span><b>${p.paybackMonths === null ? "—" : p.paybackMonths + " months"}</b></span>
+          <span><span class="muted">Net savings / yr</span><b>${p.yearlyNetSavings === null ? "—" : money(p.yearlyNetSavings)}</b></span>
+          <span><span class="muted">Pays back in 2 yrs if the job costs</span><b>${p.breakEvenAnnualCost === null ? "—" : money(p.breakEvenAnnualCost) + "+"}</b></span>
+        </div>
+        ${p.fit.length ? `<div class="chips">${p.fit.map((f) => `<span class="chip ${f.status}">${f.status}: ${esc(f.requirement)}</span>`).join("")}</div>` : ""}
+        ${p.reason ? `<p class="reason">${esc(p.reason)}</p>` : m.status === "ranked" ? `<p class="muted">Writing an explanation…</p>` : ""}
+        ${p.specs.length ? `<div class="muted">${p.specs.map((s) => `${esc(s.name)}: ${s.value} (<a href="${esc(s.sourceUrl)}" target="_blank" rel="noopener" title="${esc(s.quote)}">source</a>)`).join(" · ")}</div>` : ""}
+        ${p.assumptions.length ? `<div class="muted">Estimates: ${p.assumptions.map(esc).join("; ")}</div>` : ""}
+      </article>`).join("");
+  }
+
+  // ---------- Voice: talk instead of typing, hear the answers ----------
+  // Uses the browser's own speech recognition and speech output (Chrome, Edge,
+  // Safari). No extra keys or servers; the words go into the same boxes as typing,
+  // so the rest of the flow doesn't change. Where the browser can't do it
+  // (e.g. Firefox), the Talk buttons stay hidden and typing works as before.
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canSpeak = "speechSynthesis" in window;
+  const spoken = new Set(); // what we've already said for this match, so nothing repeats
+  let listening = null;
+
+  if (Recognition) {
+    $("mic").hidden = false;
+    $("askMic").hidden = false;
+  }
+  if (canSpeak) $("voiceRow").hidden = false;
+
+  // Listens once (stops after a pause) and hands the words to `done`.
+  function listen(button, onWords, done) {
+    if (listening) { listening.stop(); return; }
+    window.speechSynthesis?.cancel(); // don't listen to ourselves
+    const rec = new Recognition();
+    rec.lang = "en-US";
+    rec.interimResults = true; // show words as they're heard
+    let finalText = "";
+    rec.onresult = (e) => {
+      let done = "", interim = "";
+      for (const r of e.results) {
+        if (r.isFinal) done += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      finalText = done;
+      onWords((done + interim).trim());
+    };
+    rec.onerror = (e) => {
+      $("heard").textContent = e.error === "not-allowed"
+        ? "Microphone blocked. Allow it in the browser's address bar, or type instead."
+        : "Didn't catch that. Tap Talk and try again, or type.";
+    };
+    rec.onend = () => {
+      listening = null;
+      button.classList.remove("on");
+      button.textContent = button.id === "mic" ? "🎤 Talk" : "🎤 Say it";
+      if (finalText.trim()) done(finalText.trim());
+    };
+    listening = rec;
+    button.classList.add("on");
+    button.textContent = "■ Stop";
+    $("heard").textContent = "Listening…";
+    rec.start();
+  }
+
+  $("mic").addEventListener("click", () => {
+    $("voiceOn").checked = true; // someone who talks probably wants to hear answers too
+    listen($("mic"), (words) => { $("describe").value = words; $("heard").textContent = "Heard: " + words; },
+      () => $("form").requestSubmit());
+  });
+
+  $("askMic").addEventListener("click", () => listenForCost());
+  function listenForCost() {
+    listen($("askMic"), (words) => { $("heard").textContent = "Heard: " + words; }, (words) => {
+      const n = parseDollars(words);
+      if (n === null) { say("Sorry, I didn't catch a dollar amount. Try something like ninety thousand a year."); return; }
+      $("askCost").value = n;
+      submitCost();
+    });
+  }
+
+  // "$90,000", "90000", "90k", "90 thousand", "1.2 million", "ninety thousand" -> a number.
+  function parseDollars(text) {
+    const t = text.toLowerCase().replace(/,/g, "");
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(k|thousand|grand|m|million)?\b/);
+    if (m) {
+      const mult = { k: 1e3, thousand: 1e3, grand: 1e3, m: 1e6, million: 1e6 }[m[2]] || 1;
+      return Math.round(Number(m[1]) * mult);
+    }
+    const ones = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100 };
+    let total = 0, part = 0, found = false;
+    for (const w of t.split(/[\s-]+/)) {
+      if (ones[w] !== undefined) { part = w === "hundred" ? (part || 1) * 100 : part + ones[w]; found = true; }
+      else if (w === "thousand" || w === "grand") { total += (part || 1) * 1e3; part = 0; found = true; }
+      else if (w === "million") { total += (part || 1) * 1e6; part = 0; found = true; }
+    }
+    return found && total + part > 0 ? total + part : null;
+  }
+
+  // Says something once, if voice mode is on. `then` runs when it finishes speaking.
+  function say(text, then) {
+    if (!canSpeak || !$("voiceOn").checked || listening) return; // never talk over the mic
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    if (then) u.onend = then;
+    window.speechSynthesis.speak(u);
+  }
+  function sayOnce(key, text, then) {
+    if (spoken.has(key)) return;
+    spoken.add(key);
+    say(text, then);
+  }
+
+  // Short spoken updates built from the same data as the cards: every number
+  // comes from the code, never from the AI.
+  function narrate(m) {
+    const task = m.intent ? m.intent.task : "that job";
+    if (m.status === "searching") sayOnce("search", `I don't have robots for ${task} yet, so I'm searching the web. This takes a minute or two.`);
+    if (m.status === "failed") sayOnce("failed", "Sorry, something went wrong. Please try again.");
+    const best = m.picks[0];
+    if ((m.status === "ranked" || m.status === "done") && best) {
+      let line = `I found ${m.picks.length === 1 ? "one robot" : m.picks.length + " robots"} for ${task}. The best fit is ${best.name}`;
+      line += best.paybackMonths !== null ? `, which pays for itself in about ${best.paybackMonths} months.` : ".";
+      sayOnce("found", line);
+    }
+    if (m.status === "done" && best && best.reason) sayOnce("reason", best.reason);
+    if (!m.next) return;
+    if (m.next.kind === "ask") {
+      sayOnce("ask", "To work out payback, how much does this job cost you each year?",
+        () => { if (Recognition && $("voiceOn").checked) listenForCost(); });
+    }
+    if (m.next.kind === "suggest_bounty" && m.status === "done") {
+      sayOnce("bounty", `No robot fully fits yet. The main gap is: ${m.next.gaps[0]}. You can start a bounty to get one built.`);
+    }
+  }
+</script>
+</body>
+</html>

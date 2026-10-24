@@ -32,6 +32,56 @@ export const followUpAnswer = v.object({
   assumption: v.optional(v.object({ value: v.number(), unit: v.optional(v.string()) })),
 });
 
+// A robot spec found on a vendor page, in the canonical unit from lib/specs.ts,
+// with the sentence it came from so the page can show its source.
+export const robotSpec = v.object({
+  name: v.string(), // a SPEC_NAMES entry, e.g. "max_slope_deg"
+  value: v.number(),
+  quote: v.string(),
+  sourceUrl: v.string(),
+});
+
+// What the fast model read from the operator's message (see ai.matchRobots).
+export const intentInfo = v.object({
+  task: v.string(),
+  searchPhrase: v.string(),
+  annualTaskCost: v.union(v.number(), v.null()),
+  budget: v.union(v.number(), v.null()),
+  requirements: v.array(
+    v.object({
+      name: v.string(),
+      op: v.union(v.literal("atLeast"), v.literal("atMost")),
+      value: v.number(),
+      mandatory: v.boolean(),
+    }),
+  ),
+});
+
+// One ranked robot, decided by lib/decide.ts. `reason` is added by Claude afterwards.
+export const matchPick = v.object({
+  robotId: v.id("robots"),
+  score: v.number(),
+  fit: v.array(
+    v.object({
+      requirement: v.string(),
+      status: v.union(v.literal("meets"), v.literal("misses"), v.literal("unknown")),
+      mandatory: v.boolean(),
+    }),
+  ),
+  paybackMonths: v.union(v.number(), v.null()),
+  yearlyNetSavings: v.union(v.number(), v.null()),
+  breakEvenAnnualCost: v.union(v.number(), v.null()),
+  assumptions: v.array(v.string()),
+  reason: v.optional(v.string()),
+});
+
+// What the page should do next, from lib/decide.ts nextAction.
+export const matchNext = v.union(
+  v.object({ kind: v.literal("ask"), field: v.literal("annualTaskCost") }),
+  v.object({ kind: v.literal("show_matches") }),
+  v.object({ kind: v.literal("suggest_bounty"), gaps: v.array(v.string()) }),
+);
+
 export default defineSchema({
   // A problem submitted by an infrastructure operator.
   operatorRequests: defineTable({
@@ -114,7 +164,57 @@ export default defineSchema({
     regions: v.optional(v.array(v.string())),
     trl: v.optional(v.number()), // technology readiness level, illustrative
     provenance: v.optional(v.string()), // where these numbers come from
-  }).index("by_sample_key", ["sampleKey"]),
+    // Set for robots found on the web (scrape.ts + ai.extractPages):
+    priceStatus: v.optional(v.union(v.literal("listed"), v.literal("quote_only"))), // quote_only: price is 0, unknown
+    specs: v.optional(v.array(robotSpec)),
+    assumptions: v.optional(v.array(v.string())), // numbers we filled in because the page didn't say
+    fetchedAt: v.optional(v.number()),
+  })
+    .index("by_sample_key", ["sampleKey"])
+    .index("by_task", ["task"])
+    .index("by_url", ["url"]),
+
+  // A web search for robots that do one task: Google search -> crawl -> extract.
+  // One row per task; matches waiting for it are re-run when it finishes.
+  discoveries: defineTable({
+    task: v.string(), // normalised, e.g. "gutter cleaning"
+    searchPhrase: v.string(),
+    status: v.union(
+      v.literal("searching"), v.literal("crawling"), v.literal("extracting"),
+      v.literal("done"), v.literal("failed"),
+    ),
+    urls: v.array(v.string()),
+    robotsFound: v.number(),
+    waitingMatches: v.array(v.id("matches")),
+    error: v.optional(v.string()),
+    finishedAt: v.optional(v.number()),
+  }).index("by_task", ["task"]),
+
+  // Raw crawled pages, kept so extraction can be re-run without paying to scrape again.
+  pages: defineTable({
+    discoveryId: v.id("discoveries"),
+    url: v.string(),
+    title: v.string(),
+    markdown: v.string(),
+    extracted: v.boolean(),
+    fetchedAt: v.number(),
+  })
+    .index("by_discovery", ["discoveryId"])
+    .index("by_url", ["url"]),
+
+  // "Find robots for me": fast read -> catalog or web search -> decide -> reasons.
+  matches: defineTable({
+    requestId: v.id("operatorRequests"),
+    status: v.union(
+      v.literal("reading"), v.literal("searching"), v.literal("ranked"),
+      v.literal("done"), v.literal("failed"),
+    ),
+    intent: v.optional(intentInfo),
+    picks: v.array(matchPick),
+    next: v.optional(matchNext),
+    error: v.optional(v.string()),
+    msToRanked: v.optional(v.number()), // how long until picks showed (for the demo)
+  }).index("by_request", ["requestId"]),
 
   // The AI's "best for you" picks for a request.
   recommendations: defineTable({

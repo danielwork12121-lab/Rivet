@@ -228,6 +228,13 @@
   function aiStatus() { return call("query", "agent:aiStatus", {}); }
   function specStatus(id, token) { return call("query", "agent:specStatus", { requestId: id, clientToken: token }); }
   function generateSpec(id, token) { return call("mutation", "agent:generateSpec", { requestId: id, clientToken: token }); }
+  // Robot finder: findRobots starts a paid run (fast read, maybe a web search, then
+  // reasons); latestMatch is free and fills in over a few seconds, so poll it.
+  function findRobots(id, token) { return call("mutation", "agent:findRobots", { requestId: id, clientToken: token }); }
+  function latestMatch(id, token) { return call("query", "agent:latestMatch", { requestId: id, clientToken: token }); }
+  function setTaskCost(id, token, annualTaskCost) {
+    return call("mutation", "agent:setTaskCost", { requestId: id, clientToken: token, annualTaskCost: annualTaskCost });
+  }
   function getDraft(id, token) { return call("query", "requests:getDraft", { id: id, clientToken: token }); }
   function postBounty(id, token, bounty) {
     return call("mutation", "bounties:post", Object.assign({ requestId: id, clientToken: token }, bounty));
@@ -277,6 +284,9 @@
     aiStatus: aiStatus,
     specStatus: specStatus,
     generateSpec: generateSpec,
+    findRobots: findRobots,
+    latestMatch: latestMatch,
+    setTaskCost: setTaskCost,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadDraft: loadDraft,

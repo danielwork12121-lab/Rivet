@@ -3,6 +3,7 @@ import { internalMutation, internalQuery, mutation, query, type MutationCtx } fr
 import type { Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { loadOwnedDraft, withoutToken } from "./lib/drafts";
+import { intentInfo, matchNext, matchPick } from "./schema";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -321,5 +322,110 @@ export const logRun = internalMutation({
   },
   handler: async (ctx, run) => {
     await ctx.db.insert("agentRuns", run);
+  },
+});
+// ---------- 4. "Find robots for me" (fast read -> decide -> explain) ----------
+
+// Frontend calls this once the operator has described the job. Returns the match
+// id right away; agent:latestMatch fills in over the next few seconds.
+export const findRobots = mutation({
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
+    const latest = await ctx.db
+      .query("matches")
+      .withIndex("by_request", (q) => q.eq("requestId", requestId))
+      .order("desc")
+      .first();
+    // Repeated clicks reuse a match that is still being worked on.
+    if (latest && (latest.status === "reading" || latest.status === "searching") &&
+        Date.now() - latest._creationTime < STUCK_JOB_MS) {
+      return latest._id;
+    }
+    const matchId = await ctx.db.insert("matches", { requestId, status: "reading", picks: [] });
+    await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
+    return matchId;
+  },
+});
+
+// The operator answers "how much does this task cost you a year?"; matching is redone.
+export const setTaskCost = mutation({
+  args: { ...owner, annualTaskCost: v.number() },
+  handler: async (ctx, { requestId, clientToken, annualTaskCost }) => {
+    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+    if (!(Number.isFinite(annualTaskCost) && annualTaskCost > 0 && annualTaskCost < 100_000_000)) {
+      throw new ConvexError("annualTaskCost must be a positive number of dollars");
+    }
+    await ctx.db.patch(requestId, {
+      cost: { ...(request.cost ?? { currency: "USD" }), currentAnnualCost: annualTaskCost },
+      updatedAt: Date.now(),
+    });
+    if (!aiAvailable()) return null;
+    const matchId = await ctx.db.insert("matches", { requestId, status: "reading", picks: [] });
+    await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
+    return matchId;
+  },
+});
+
+// Everything the page needs to show the latest match, with each robot's details
+// and sources, and the web search's progress while one is running.
+export const latestMatch = query({
+  args: owner,
+  handler: async (ctx, { requestId, clientToken }) => {
+    await loadOwnedDraft(ctx, requestId, clientToken);
+    const match = await ctx.db
+      .query("matches")
+      .withIndex("by_request", (q) => q.eq("requestId", requestId))
+      .order("desc")
+      .first();
+    if (!match) return null;
+    const robots = [];
+    for (const p of match.picks) {
+      const r = await ctx.db.get(p.robotId);
+      if (!r) continue;
+      robots.push({
+        ...p,
+        name: r.name, vendor: r.vendor, url: r.url, sample: r.sample,
+        price: r.priceStatus === "quote_only" ? null : r.price,
+        specs: r.specs ?? [],
+        fetchedAt: r.fetchedAt ?? null,
+      });
+    }
+    const search = match.intent && match.status === "searching"
+      ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
+      : null;
+    return {
+      _id: match._id,
+      status: match.status,
+      intent: match.intent ?? null,
+      next: match.next ?? null,
+      error: match.error ?? null,
+      msToRanked: match.msToRanked ?? null,
+      picks: robots,
+      search: search && { status: search.status, sitesFound: search.urls.length },
+    };
+  },
+});
+
+export const getMatch = internalQuery({
+  args: { matchId: v.id("matches") },
+  handler: async (ctx, { matchId }) => ctx.db.get(matchId),
+});
+
+export const patchMatch = internalMutation({
+  args: {
+    matchId: v.id("matches"),
+    status: v.optional(
+      v.union(v.literal("reading"), v.literal("searching"), v.literal("ranked"), v.literal("done"), v.literal("failed")),
+    ),
+    intent: v.optional(intentInfo),
+    picks: v.optional(v.array(matchPick)),
+    next: v.optional(matchNext),
+    error: v.optional(v.string()),
+    msToRanked: v.optional(v.number()),
+  },
+  handler: async (ctx, { matchId, ...patch }) => {
+    await ctx.db.patch(matchId, patch);
   },
 });

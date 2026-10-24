@@ -7,7 +7,9 @@
 // Environment Variables). Until it's set, this returns 500 and the frontend
 // falls back to its built-in static copy — the page still works either way.
 
-const MODEL = "claude-opus-5-5"; // matches convex/ai.ts
+// The fast model: this route writes one short sentence, so speed matters more
+// than depth. convex/ai.ts uses the same model (FAST_MODEL) for its quick steps.
+const MODEL = "claude-haiku-5-5";
 // Vercel's default function timeout (10s on Hobby) was shorter than our old
 // 12s AbortController, so Vercel could kill the function before our own
 // timeout/error-handling ever ran, leaving the frontend with a bare failed
@@ -74,7 +76,9 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 150,
+        // Haiku thinks briefly before answering, so leave room beyond the ~20-word reply.
+        max_tokens: 2000,
+        output_config: { effort: "low" },
         system: SYSTEM_PROMPTS[mode],
         messages: [{ role: "user", content: message }],
       }),
