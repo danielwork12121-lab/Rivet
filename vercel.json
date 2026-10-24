@@ -6,6 +6,9 @@
   "functions": {
     "api/chat.js": {
       "maxDuration": 30
+    },
+    "api/analyze-video.js": {
+      "maxDuration": 30
     }
   },
   "git": {
