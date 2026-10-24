@@ -13,6 +13,9 @@ import type { Id } from "../_generated/dataModel";
 //   AI_REQUEST_DAILY_LIMIT  per operator request in the last 24 h  (default 3)
 //   AI_CLIENT_DAILY_LIMIT   per website visitor in the last 24 h   (default 10)
 //   AI_USER_DAILY_LIMIT     per signed-in account in the last 24 h (default 10)
+//   VIDEO_DAILY_LIMIT       video analyses (Gemini) in the last 24 h (default 10)
+//   VIDEO_USER_DAILY_LIMIT  video analyses per signed-in account     (default 3)
+// A video analysis also counts toward the all-kinds limits above.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -28,21 +31,27 @@ export const aiLimits = () => ({
   perRequest: limit("AI_REQUEST_DAILY_LIMIT", 3),
   perClient: limit("AI_CLIENT_DAILY_LIMIT", 10),
   perUser: limit("AI_USER_DAILY_LIMIT", 10),
+  video: limit("VIDEO_DAILY_LIMIT", 10),
+  videoPerUser: limit("VIDEO_USER_DAILY_LIMIT", 3),
 });
 
-export type AiBlock = "daily_limit" | "request_limit" | "client_limit" | "user_limit";
+export type AiBlock = "daily_limit" | "request_limit" | "client_limit" | "user_limit" | "video_limit" | "video_user_limit";
 
 export const AI_BLOCK_MESSAGES: Record<AiBlock, string> = {
   daily_limit: "The demo's AI budget for today has been used up. Please try again tomorrow.",
   request_limit: "This request has reached its AI limit for today.",
   client_limit: "You've reached today's AI limit for this demo.",
   user_limit: "Your account has reached today's AI limit for this demo.",
+  video_limit: "The demo's video analysis budget for today has been used up. Please try again tomorrow.",
+  video_user_limit: "Your account has reached today's video analysis limit for this demo.",
 };
 
 type Scope = { requestId?: Id<"operatorRequests">; clientKey?: string; userId?: Id<"users"> };
+type Kind = "spec" | "recommend" | "bounty" | "chat" | "video";
 
 // Which limit (if any) blocks a new paid call for this scope.
-export async function budgetBlock(ctx: QueryCtx, scope: Scope = {}): Promise<AiBlock | null> {
+// `kind: "video"` adds the video-specific limits on top of the all-kinds ones.
+export async function budgetBlock(ctx: QueryCtx, scope: Scope & { kind?: Kind } = {}): Promise<AiBlock | null> {
   const lim = aiLimits();
   const recent = await ctx.db
     .query("aiUsage")
@@ -58,6 +67,13 @@ export async function budgetBlock(ctx: QueryCtx, scope: Scope = {}): Promise<AiB
   if (scope.userId && recent.filter((u) => u.userId === scope.userId).length >= lim.perUser) {
     return "user_limit";
   }
+  if (scope.kind === "video") {
+    const videos = recent.filter((u) => u.kind === "video");
+    if (videos.length >= lim.video) return "video_limit";
+    if (scope.userId && videos.filter((u) => u.userId === scope.userId).length >= lim.videoPerUser) {
+      return "video_user_limit";
+    }
+  }
   return null;
 }
 
@@ -66,10 +82,10 @@ export async function budgetBlock(ctx: QueryCtx, scope: Scope = {}): Promise<AiB
 // can't both take the last unit of budget.
 export async function spendAiBudget(
   ctx: MutationCtx,
-  kind: "spec" | "recommend" | "bounty" | "chat",
+  kind: Kind,
   scope: Scope = {},
 ) {
-  const block = await budgetBlock(ctx, scope);
+  const block = await budgetBlock(ctx, { ...scope, kind });
   if (block) throw new ConvexError(AI_BLOCK_MESSAGES[block]);
   await ctx.db.insert("aiUsage", { kind, ...scope });
 }

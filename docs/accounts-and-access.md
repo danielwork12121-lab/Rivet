@@ -61,7 +61,7 @@ already has an owner can't be claimed by anyone else.
 | `bounties:listPosted` | approved Developer (a live query: subscribe with `RivetApi.watchPostedBounties`) |
 | `agent:*` except `aiStatus` | the owning Client (`clientToken` is still accepted, for older callers, and ignored) |
 | `agent:aiStatus`, `robots:search`, `robots:get` | anyone (no private data) |
-| `aiBudget:reserveChat` | server only: needs `RIVET_SERVER_SECRET` **and** a forwarded Client session |
+| `aiBudget:reserveChat`, `aiBudget:reserveVideo` | server only: need `RIVET_SERVER_SECRET` **and** a forwarded Client session |
 
 Refusals are `ConvexError`s whose `err.data` is one of: `"Please sign in to continue."`,
 `"Finish setting up your account first."`, `"This needs a Client account."`,
@@ -76,6 +76,10 @@ deliberately the same message).
   (`Authorization: Bearer …`). It forwards the token to Convex (`aiBudget:reserveChat`), which
   verifies it, requires a Client account and spends one unit of budget **before** Claude is called.
   No token: 401. Developer: 403. Over a limit: 429. Chat is also off unless `CHAT_ENABLED=true`.
+- `/api/analyze-video` (Gemini) works the same way through `aiBudget:reserveVideo` and is off unless
+  `VIDEO_ENABLED=true`. It validates frames first (JPEG/PNG/WebP data URLs, at most 8, ~450 KB each,
+  ~1.9 MB total) so bad requests never spend budget, keeps the Gemini key in a header, and never
+  returns Gemini's error text. A video analysis also counts toward the all-kinds daily limits.
 
 ## Configuration
 
@@ -84,6 +88,8 @@ deliberately the same message).
 | Convex (each deployment) | `CLERK_FRONTEND_API_URL` | `https://relevant-kingfish-8271.clerk.accounts.dev` (Development instance). Deploying without it fails on purpose |
 | Convex | `RIVET_SERVER_SECRET` | same random value as Vercel's, if chat is used |
 | Vercel | `CHAT_ENABLED`, `ANTHROPIC_API_KEY`, `CONVEX_URL`, `RIVET_SERVER_SECRET` | see `api/chat.js` |
+| Vercel | `VIDEO_ENABLED`, `GEMINI_API_KEY`, `CONVEX_URL`, `RIVET_SERVER_SECRET` | see `api/analyze-video.js`; off unless `VIDEO_ENABLED=true` |
+| Convex | `VIDEO_DAILY_LIMIT` (10), `VIDEO_USER_DAILY_LIMIT` (3) | video analyses per 24 h, overall and per account |
 | `js/rivet-config.js` | Clerk publishable key | public by design |
 | Clerk Dashboard | Convex integration | enabled (session tokens carry `aud: "convex"`) |
 

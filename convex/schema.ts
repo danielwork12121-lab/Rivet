@@ -218,7 +218,7 @@ export default defineSchema({
   // One row per paid AI call that was allowed to start (see lib/aiBudget.ts).
   // Used only to enforce the daily limits.
   aiUsage: defineTable({
-    kind: v.union(v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat")),
+    kind: v.union(v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat"), v.literal("video")),
     requestId: v.optional(v.id("operatorRequests")),
     clientKey: v.optional(v.string()), // keyed hash of a website visitor's IP, never the IP itself
     userId: v.optional(v.id("users")), // the signed-in account that asked

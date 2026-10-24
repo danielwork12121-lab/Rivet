@@ -181,3 +181,86 @@ describe("aiBudget:reserveChat (Vercel /api/chat)", () => {
     await expect(t.mutation(api.agent.generateSpec, r)).rejects.toThrow(/used up/);
   });
 });
+
+describe("aiBudget:reserveVideo (Vercel /api/analyze-video)", () => {
+  const secret = "server-secret-for-tests";
+  const video = (t: any, c: string) => t.mutation(api.aiBudget.reserveVideo, { secret, clientKey: key(c) });
+
+  it("requires the server secret; a wrong or missing secret spends nothing", async () => {
+    const { t, usage } = await setup(0);
+    await expect(t.mutation(api.aiBudget.reserveVideo, { secret: "wrong", clientKey: key("a") })).rejects.toThrow(/forbidden/);
+    vi.stubEnv("RIVET_SERVER_SECRET", "");
+    await expect(t.mutation(api.aiBudget.reserveVideo, { secret: "", clientKey: key("a") })).rejects.toThrow(/forbidden/);
+    expect(await usage()).toHaveLength(0);
+  });
+
+  it("requires a signed-in Client account; anonymous, no-account and Developer spend nothing", async () => {
+    const { base, usage } = await setup(0);
+    expect(await video(base, "a")).toEqual({ ok: false, reason: "unauthenticated" });
+    expect(await video(signedIn(base, "user_new"), "a")).toEqual({ ok: false, reason: "no_account" });
+    expect(await video(await asDeveloper(base), "a")).toEqual({ ok: false, reason: "not_client" });
+    expect(await usage()).toHaveLength(0);
+  });
+
+  it("records a video usage row for the account", async () => {
+    const { t, usage } = await setup(0);
+    expect(await video(t, "a")).toEqual({ ok: true });
+    const [row] = await usage();
+    expect(row).toMatchObject({ kind: "video", clientKey: key("a") });
+    expect(row.userId).toBeTruthy();
+  });
+
+  it("enforces VIDEO_USER_DAILY_LIMIT per account across visitors, and other accounts keep their own", async () => {
+    vi.stubEnv("VIDEO_USER_DAILY_LIMIT", "2");
+    const { t, base, usage } = await setup(0);
+    expect(await video(t, "a")).toEqual({ ok: true });
+    expect(await video(t, "b")).toEqual({ ok: true });
+    expect(await video(t, "c")).toEqual({ ok: false, reason: "video_user_limit" });
+    const other = await asClient(base, "user_client_b");
+    expect(await video(other, "d")).toEqual({ ok: true });
+    expect(await usage()).toHaveLength(3);
+  });
+
+  it("enforces VIDEO_DAILY_LIMIT across all accounts", async () => {
+    vi.stubEnv("VIDEO_DAILY_LIMIT", "2");
+    const { t, base } = await setup(0);
+    const other = await asClient(base, "user_client_b");
+    expect(await video(t, "a")).toEqual({ ok: true });
+    expect(await video(other, "b")).toEqual({ ok: true });
+    expect(await video(t, "c")).toEqual({ ok: false, reason: "video_limit" });
+    expect(await video(other, "d")).toEqual({ ok: false, reason: "video_limit" });
+  });
+
+  it("reservations are atomic: concurrent callers can't exceed the limit", async () => {
+    vi.stubEnv("VIDEO_DAILY_LIMIT", "3");
+    vi.stubEnv("VIDEO_USER_DAILY_LIMIT", "10");
+    vi.stubEnv("AI_USER_DAILY_LIMIT", "100");
+    const { t, usage } = await setup(0);
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => video(t, String(i))));
+    expect(results.filter((r: any) => r.ok)).toHaveLength(3);
+    expect(await usage()).toHaveLength(3);
+  });
+
+  it("video counts toward the all-kinds daily cap, and chat does not count toward video limits", async () => {
+    vi.stubEnv("AI_DAILY_LIMIT", "2");
+    const { t } = await setup(0);
+    const chat = (c: string) => t.mutation(api.aiBudget.reserveChat, { secret, clientKey: key(c) });
+    expect(await video(t, "a")).toEqual({ ok: true });
+    expect(await chat("b")).toEqual({ ok: true });
+    expect(await video(t, "c")).toEqual({ ok: false, reason: "daily_limit" });
+    expect(await chat("d")).toEqual({ ok: false, reason: "daily_limit" });
+  });
+
+  it("a video limit of 0 turns video off without affecting chat", async () => {
+    vi.stubEnv("VIDEO_DAILY_LIMIT", "0");
+    const { t } = await setup(0);
+    expect(await video(t, "a")).toEqual({ ok: false, reason: "video_limit" });
+    expect(await t.mutation(api.aiBudget.reserveChat, { secret, clientKey: key("a") })).toEqual({ ok: true });
+  });
+
+  it("a misconfigured video limit fails closed", async () => {
+    vi.stubEnv("VIDEO_USER_DAILY_LIMIT", "lots");
+    const { t } = await setup(0);
+    expect(await video(t, "a")).toEqual({ ok: false, reason: "video_user_limit" });
+  });
+});
