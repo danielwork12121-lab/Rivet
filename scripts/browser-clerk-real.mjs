@@ -4,13 +4,23 @@
 // test issuer. Creates two fictional Clerk test users (+clerk_test emails: Clerk accepts the
 // fixed code 424242 for these and sends no mail). Makes no AI calls.
 //
-//   npm run e2e:clerk
+//   HEADED=1 npm run e2e:clerk
+//   HEADED=1 PREVIEW_HOST=rivet-git-feature-clerk-auth-sim.vercel.app npm run e2e:clerk
+//
+// HEADED=1 (a normal Chrome window) is required: this instance has Clerk Protect on, whose bot
+// check never finishes in headless Chrome. With PREVIEW_HOST the site is served on that
+// hostname (Chrome maps it to this machine), so the pages must choose their backend from the
+// hostname alone, as on a Vercel branch preview, and /api/chat and /api/analyze-video run
+// in-process with their switches off, as in a preview that has no AI settings.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { ConvexHttpClient } from "convex/browser";
+import chatHandler from "../api/chat.js";
+import videoHandler from "../api/analyze-video.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const env = readFileSync(join(ROOT, ".env.local"), "utf8");
@@ -36,16 +46,35 @@ const cli = (fn, args) => {
 };
 const rejects = async (p, re) => { try { await p; return false; } catch (e) { return re.test(String(e.data ?? e.message)); } };
 
+const PREVIEW_HOST = process.env.PREVIEW_HOST || "";
+// *.app domains are HTTPS-only in Chrome (HSTS preload), so a simulated preview host is served over
+// HTTPS with a throwaway self-signed certificate that only this test's Chrome accepts.
+function selfSigned(host) {
+  const dir = mkdtempSync(join(tmpdir(), "rivet-cert-"));
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", `/CN=${host}`,
+    "-addext", `subjectAltName=DNS:${host}`, "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem")], { stdio: "ignore" });
+  const out = { key: readFileSync(join(dir, "k.pem")), cert: readFileSync(join(dir, "c.pem")) };
+  rmSync(dir, { recursive: true, force: true });
+  return out;
+}
 function startServer() {
   const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
-  const server = createServer((req, res) => {
+  const make = (handler) => (PREVIEW_HOST ? createHttpsServer(selfSigned(PREVIEW_HOST), handler) : createServer(handler));
+  const server = make(async (req, res) => {
     const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname));
+    if (PREVIEW_HOST && (path === "/api/chat" || path === "/api/analyze-video")) {
+      let raw = ""; for await (const chunk of req) raw += chunk;
+      const out = { statusCode: 200, status(c) { this.statusCode = c; return this; }, setHeader: (k, v) => res.setHeader(k, v),
+        json(b) { res.writeHead(this.statusCode, { "content-type": "application/json" }).end(JSON.stringify(b)); return this; } };
+      await (path === "/api/chat" ? chatHandler : videoHandler)({ method: req.method, headers: req.headers, body: raw }, out);
+      return;
+    }
     const file = join(ROOT, path);
     if (!file.startsWith(ROOT) || !existsSync(file) || !statSync(file).isFile()) { res.writeHead(404).end(); return; }
     res.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" });
     res.end(readFileSync(file));
   });
-  return new Promise((r) => server.listen(0, "localhost", () => r(server)));
+  return new Promise((r) => server.listen(0, PREVIEW_HOST ? "127.0.0.1" : "localhost", () => r(server)));
 }
 
 function findChrome() {
@@ -57,7 +86,7 @@ function findChrome() {
 async function launchChrome() {
   const profile = mkdtempSync(join(tmpdir(), "rivet-auth-e2e-"));
   const proc = spawn(findChrome(), [...(process.env.HEADED ? [] : ["--headless=new"]), "--remote-debugging-port=0", `--user-data-dir=${profile}`,
-    "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-blink-features=AutomationControlled", "about:blank"], { stdio: "ignore" });
+    "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-blink-features=AutomationControlled", ...(PREVIEW_HOST ? [`--host-resolver-rules=MAP ${PREVIEW_HOST} 127.0.0.1`, "--ignore-certificate-errors"] : []), "about:blank"], { stdio: "ignore" });
   const portFile = join(profile, "DevToolsActivePort");
   for (let i = 0; i < 100 && !existsSync(portFile); i++) await sleep(100);
   const port = readFileSync(portFile, "utf8").split("\n")[0];
@@ -130,7 +159,15 @@ async function newPerson(cdp) {
         await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
         await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       };
-      const go = (url) => send("Page.navigate", { url });
+      // Navigate, and if the page is still the loading placeholder after 15 s, say so and retry once.
+      const go = async (url) => {
+        await send("Page.navigate", { url });
+        const here = `location.href.startsWith(${JSON.stringify(url.split("?")[0])}) && document.readyState === "complete" && !document.getElementById("__bundler_placeholder")`;
+        if (await waitFor(here, 15000)) return;
+        const st = await ev(`JSON.stringify({ href: location.href, rs: document.readyState, text: document.body.innerText.slice(0, 80), err: (document.getElementById("__bundler_err") || {}).innerText })`).catch((e) => String(e));
+        console.log("STALL (retrying navigation):", st, "| page errors:", errors.slice(-3).join(" || ").slice(0, 300));
+        await send("Page.navigate", { url });
+      };
       return { ev, waitFor, errors, mouseClick, typeInto, pressEnter, go, close: () => ws.close() };
     },
   };
@@ -140,12 +177,14 @@ async function newPerson(cdp) {
 const text = (sel = "body") => `(document.querySelector(${JSON.stringify(sel)})?.innerText || "")`;
 const has = (t, sel = "body") => `${text(sel)}.includes(${JSON.stringify(t)})`;
 const pathIs = (p) => `location.pathname.endsWith(${JSON.stringify(p)})`;
-const clickButton = (t) => `([...document.querySelectorAll("button")].find((b) => b.offsetParent && b.textContent.trim().startsWith(${JSON.stringify(t)}))).click()`;
-const PRELOAD = `window.RIVET_CONVEX_URL = ${JSON.stringify(CONVEX_URL)};`;
+const clickButton = (t) => `(() => { const b = [...document.querySelectorAll("button")].find((b) => b.offsetParent && b.textContent.trim().startsWith(${JSON.stringify(t)})); if (!b) throw new Error("no button " + ${JSON.stringify(t)} + " on " + location.href + ": " + document.body.innerText.slice(0, 300)); b.click(); })()`;
+// Normally the test tells the pages which backend to use; on a (simulated) preview host the pages must decide.
+const PRELOAD = PREVIEW_HOST ? "" : `window.RIVET_CONVEX_URL = ${JSON.stringify(CONVEX_URL)};`;
 
 async function signUpVia(tab, base, { role, name, email }) {
   await tab.go(`${base}/pages/signup.html`);
-  await tab.waitFor(has("How will you use Rivet?"), 30000);
+  const rendered = await tab.waitFor(has("How will you use Rivet?"), 30000);
+  if (!rendered) throw new Error("signup page did not render: " + await tab.ev(`JSON.stringify({ href: location.href, text: document.body.innerText.slice(0, 300), clerk: typeof Clerk, loaded: typeof Clerk !== "undefined" && Clerk.loaded, backend: window.RIVET_BACKEND, errors: window.__errs || null })`) + " | page errors: " + tab.errors.join(" || ").slice(0, 600));
   await tab.ev(`document.querySelectorAll('[role=radio]')[${role === "developer" ? 1 : 0}].click()`);
   await tab.typeInto("input[autocomplete=name]", name);
   await tab.typeInto("input[autocomplete=organization]", "E2E-TEST Org " + RUN);
@@ -169,10 +208,20 @@ async function signUpVia(tab, base, { role, name, email }) {
 
 async function main() {
   const server = await startServer();
-  const base = `http://localhost:${server.address().port}`;
+  const base = `${PREVIEW_HOST ? "https" : "http"}://${PREVIEW_HOST || "localhost"}:${server.address().port}`;
   const chrome = await launchChrome();
   const tabs = [];
   try {
+    if (process.env.PROBE) { // diagnostic: just load pages, no sign-up
+      const pr = await (await newPerson(chrome.cdp)).tab(PRELOAD); tabs.push(pr);
+      for (const pg of ["signup", "login", "index", "login", "engineers"]) {
+        const t0 = Date.now();
+        await pr.go(`${base}/pages/${pg}.html`);
+        const ok = await pr.waitFor(`!document.getElementById("__bundler_placeholder") && document.body.innerText.length > 100`, 45000);
+        console.log("PROBE", pg, ok ? "rendered" : "STUCK", `${Date.now() - t0} ms`, (await pr.ev(`JSON.stringify({ rs: document.readyState, err: (document.getElementById("__bundler_err") || {}).innerText, text: document.body.innerText.slice(0, 80) })`)));
+      }
+      return;
+    }
     const clientEmail = `rivet.e2e.client.${RUN}+clerk_test@example.com`;
     const devEmail = `rivet.e2e.dev.${RUN}+clerk_test@example.com`;
     const client = await newPerson(chrome.cdp), dev = await newPerson(chrome.cdp);
@@ -184,6 +233,17 @@ async function main() {
     check("2. real Clerk: the code verifies and the account is created", !!su.welcomed, su.error ?? "");
     if (!su.welcomed) throw new Error("sign-up failed; stopping (see messages above)");
     const clientSub = await c.ev("Clerk.user.id");
+    if (PREVIEW_HOST) {
+      await c.go(`${base}/pages/robot-bounty-client-flow.html`);
+      await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
+      const where = await c.ev(`JSON.stringify({ backend: RivetApi.backend, url: RIVET_CONVEX_URL, host: location.hostname })`);
+      check("P1. a *.vercel.app host picks the isolated Convex deployment by itself (not coordinated-canary-9)", JSON.parse(where).backend === "preview" && JSON.parse(where).url === CONVEX_URL && !where.includes("canary"), where);
+      const sec = { chat: { message: "hi", mode: "opening" }, video: { frames: ["data:image/jpeg;base64,/9j/4AAQ"] } };
+      const tok0 = await c.ev("RivetAuth.getToken()");
+      const post = (path, body) => c.ev(`fetch(${JSON.stringify(path)}, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer ${tok0}" }, body: ${JSON.stringify(JSON.stringify(body))} }).then(async (r) => r.status + " " + ((await r.json()).error || ""))`);
+      check("P2. paid chat is disabled on the preview (503, even for a signed-in Client)", (await post("/api/chat", sec.chat)).startsWith("503"));
+      check("P3. video analysis is disabled on the preview (503, even for a signed-in Client)", (await post("/api/analyze-video", sec.video)).startsWith("503"));
+    }
     const tokenInfo = await c.ev(`RivetAuth.getToken().then((t) => { const p = JSON.parse(atob((b => b + "=".repeat((4 - b.length % 4) % 4))(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")))); return { aud: p.aud, iss: p.iss, sub: p.sub, hasEmail: !!p.email, exp: p.exp - Math.floor(Date.now() / 1000) }; })`);
     check("3a. the real session token has audience convex and this issuer", tokenInfo.aud === "convex" && tokenInfo.iss === ISSUER && tokenInfo.sub === clientSub, JSON.stringify({ aud: tokenInfo.aud, hasEmail: tokenInfo.hasEmail, secondsLeft: tokenInfo.exp }));
     const clientRow = cli("users:list", { role: "client" }).find((u) => u.clerkUserId === clientSub);
@@ -191,6 +251,7 @@ async function main() {
 
     // login / logout round trip
     await c.go(`${base}/pages/login.html`);
+    await c.waitFor(has("Go to your requests"), 60000);
     await c.ev(clickButton("Sign out"));
     check("1b. sign out returns to the login form", await c.waitFor(`!!document.querySelector("#login-submit-btn")`, 30000) && (await c.ev("Clerk.user")) === null);
     await c.typeInto("input[type=email]", clientEmail);
@@ -199,6 +260,20 @@ async function main() {
     await sleep(20000);
     check("1c. real Clerk login routes the Client to their page", await c.waitFor(`${pathIs("/robot-bounty-client-flow.html")} && typeof S === "object" && S.gate === "ready"`, 45000), await c.ev(text("[role=alert]")).catch(() => ""));
     check("4a. the Client sees only the Client view", await c.ev(`S.role === "client" && document.querySelector('#role [data-role=dev]').hidden`));
+
+    // navbar: does the header reflect the signed-in user? (report only; the nav is a teammate's)
+    if (PREVIEW_HOST) {
+      const nav = {};
+      for (const pg of ["index", "engineers", "robot-bounty-client-flow"]) {
+        await c.go(`${base}/pages/${pg}.html`);
+        await c.waitFor(`document.body.innerText.length > 200`, 30000);
+        await sleep(2500);
+        nav[pg] = JSON.parse(await c.ev(`JSON.stringify({ logInLink: [...document.querySelectorAll("a, button")].some((e) => e.offsetParent && /^log in$/i.test(e.textContent.trim())), signOutControl: [...document.querySelectorAll("a, button")].some((e) => e.offsetParent && /sign out/i.test(e.textContent)), namesUser: document.body.innerText.includes(${JSON.stringify(clientEmail)}) || /Casey/.test(document.body.innerText) })`));
+      }
+      console.log("NAVBAR (signed in as a Client):", JSON.stringify(nav));
+      await c.go(`${base}/pages/robot-bounty-client-flow.html`);
+      await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
+    }
 
     // 4. request ownership
     const company = `E2E-TEST Clerk Co ${RUN}`;

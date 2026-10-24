@@ -139,6 +139,18 @@ users in the Clerk Dashboard afterwards.
   that, `users:list` shows only the Clerk user id (plus the name and organization the person
   typed), so approve Developers by checking that id in the Clerk Dashboard.
 
+## Vercel branch previews
+
+`js/rivet-config.js` sends the production host (`rivet-rose.vercel.app`) and non-Vercel hosts to the
+shared Convex deployment, and **every other `*.vercel.app` host (a branch preview) to the isolated
+`woozy-warbler-733`**, so a preview can never reach the shared backend. `?backend=` cannot override
+this. **Remove the preview rule before merging this branch to production** (and when the isolated
+deployment expires). For a preview, set these in Vercel for the **Preview** environment only:
+`CONVEX_URL=https://woozy-warbler-733.convex.cloud` and a `RIVET_SERVER_SECRET` equal to the isolated
+deployment's, and leave `CHAT_ENABLED`, `VIDEO_ENABLED`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`
+unset for Preview. `HEADED=1 PREVIEW_HOST=<name>.vercel.app npm run e2e:clerk` simulates a preview
+over HTTPS (real Clerk, isolated deployment).
+
 ## Known behaviour
 
 - With convex 1.48, a WebSocket client kept acting as the previous user after
