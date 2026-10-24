@@ -10,7 +10,8 @@
     "test": "vitest run",
     "e2e:local": "node scripts/e2e-local.mjs",
     "e2e:browser": "node scripts/browser-e2e.mjs",
-    "check:frontend": "node scripts/check-frontend.mjs"
+    "check:frontend": "node scripts/check-frontend.mjs",
+    "test-data:list": "convex run maintenance:testData '{\"action\":\"list\"}'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

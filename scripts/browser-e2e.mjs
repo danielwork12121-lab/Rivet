@@ -6,7 +6,8 @@
 // No extra dependencies: serves the repo on 127.0.0.1 with node:http, drives the system
 // Chrome (or CHROME_PATH) over the DevTools protocol with Node's built-in WebSocket, and
 // counts rows with `npx convex data` (admin access to the local dev deployment only).
-// Uses fictional company names and leaves those rows in the local dev database.
+// Uses fictional company names starting with "E2E-TEST " and leaves those rows in the local
+// dev database; remove them with maintenance:testData (see docs/intake-integration.md).
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
@@ -184,7 +185,7 @@ async function main() {
   const open = async (preload, isolated) => { const t = await openTab(chrome.cdp, pageUrl, preload, isolated); tabs.push(t); return t; };
   try {
     // 1. Load and save the intake
-    const company = `Fictional E2E Lawn ${RUN}`;
+    const company = `E2E-TEST Lawn ${RUN}`;
     let tab = await open(FRESH);
     check("page loads with no script errors", tab.errors.length === 0 && (await tab.ev("typeof RivetApi")) === "object", tab.errors.join(" | "));
     check("Client/Developer role toggle is present", (await tab.ev(`document.querySelectorAll("#role button").length`)) === 2);
@@ -353,7 +354,7 @@ async function main() {
     await tab.close();
 
     // 5. Leaving step 1 through the stepper saves first
-    const company2 = `Fictional E2E Pest ${RUN}`;
+    const company2 = `E2E-TEST Pest ${RUN}`;
     tab = await open(FRESH);
     await tab.ev(setVal("#f-name", company2));
     await tab.ev(stepper(3));
@@ -371,7 +372,7 @@ async function main() {
     await tab.close();
 
     // 6. Empty description: error, no save, no success
-    const company3 = `Fictional E2E Empty ${RUN}`;
+    const company3 = `E2E-TEST Empty ${RUN}`;
     tab = await open(FRESH);
     await tab.ev(setVal("#f-name", company3));
     await tab.ev(setVal("#f-desc", "   "));
@@ -390,7 +391,7 @@ async function main() {
     await tab.close();
 
     // 8. Markup typed by a user stays inert after a round trip
-    const evil = `<img src=x onerror="window.__xss=1">${RUN}`;
+    const evil = `E2E-TEST <img src=x onerror="window.__xss=1">${RUN}`;
     tab = await open(FRESH);
     await tab.ev(setVal("#f-name", evil));
     await tab.ev(click("#next"));

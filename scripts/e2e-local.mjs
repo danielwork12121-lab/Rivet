@@ -20,7 +20,7 @@ const QUESTIONS = [
 const raw = new ConvexHttpClient(url);
 api._setClient(raw);
 const form = {
-  type: "lawn", name: `E2E Fictional Lawn Co. ${Date.now().toString(36)}`, describe: "Fictional demo: we mow 50 lawns a week.",
+  type: "lawn", name: `E2E-TEST Lawn Co. ${Date.now().toString(36)}`, describe: "Fictional demo: we mow 50 lawns a week.",
   crews: 2, perCrew: 2, wage: 24, region: "West", visibility: "anon",
 };
 const token = api.newClientToken();
