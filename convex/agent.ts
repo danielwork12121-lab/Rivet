@@ -8,12 +8,14 @@ import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./l
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
 //
-// Every public function here belongs to one operator request, so each takes
-// the draft's clientToken and checks it (lib/drafts.ts) before reading or
-// scheduling anything. Nothing calls these automatically: the frontend must
-// trigger them deliberately, since each one starts a paid Claude call.
+// Every public function here belongs to one operator request, so each checks
+// that the signed-in Client owns it (lib/drafts.ts) before reading or scheduling
+// anything. Nothing calls these automatically: the frontend must trigger them
+// deliberately, since each one starts a paid Claude call.
 
-const owner = { requestId: v.id("operatorRequests"), clientToken: v.string() };
+// clientToken is accepted for compatibility with callers written before accounts,
+// and ignored: ownership comes only from the verified sign-in.
+const owner = { requestId: v.id("operatorRequests"), clientToken: v.optional(v.string()) };
 
 // AI calls need an Anthropic key in the backend's environment (npx convex env set
 // ANTHROPIC_API_KEY ...). It never reaches the browser; only this yes/no does.
@@ -21,9 +23,9 @@ const aiAvailable = () => !!process.env.ANTHROPIC_API_KEY;
 const AI_UNAVAILABLE = "AI drafting is unavailable: no Anthropic API key is configured on the backend.";
 
 // Why a new paid call can't start right now (no key, or a daily limit), or null.
-async function aiUnavailable(ctx: QueryCtx, requestId?: Id<"operatorRequests">) {
+async function aiUnavailable(ctx: QueryCtx, scope: { requestId?: Id<"operatorRequests">; userId?: Id<"users"> } = {}) {
   if (!aiAvailable()) return { reason: "no_key" as const, message: AI_UNAVAILABLE };
-  const block: AiBlock | null = await budgetBlock(ctx, { requestId });
+  const block: AiBlock | null = await budgetBlock(ctx, scope);
   return block && { reason: block, message: AI_BLOCK_MESSAGES[block] };
 }
 
@@ -45,7 +47,7 @@ async function enqueueSpecJob(ctx: MutationCtx, request: Doc<"operatorRequests">
   if (active && Date.now() - (latest.startedAt ?? latest._creationTime) < STUCK_JOB_MS) {
     return { jobId: latest._id, reused: true };
   }
-  await spendAiBudget(ctx, "spec", { requestId: request._id }); // throws if a daily limit is reached
+  await spendAiBudget(ctx, "spec", { requestId: request._id, userId: request.ownerId }); // throws if a daily limit is reached
   const jobId = await ctx.db.insert("aiJobs", { requestId: request._id, kind: "spec", status: "queued" });
   await ctx.scheduler.runAfter(0, internal.ai.extractSpec, { requestId: request._id, jobId });
   return { jobId, reused: false };
@@ -72,8 +74,8 @@ function requireText(label: string, value: string, max: number) {
 // appears in agent:latestSpec a few seconds later.
 export const generateSpec = mutation({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
     return await enqueueSpecJob(ctx, request);
   },
@@ -85,8 +87,8 @@ export const answerQuestions = mutation({
     ...owner,
     answers: v.array(v.object({ question: v.string(), answer: v.string() })),
   },
-  handler: async (ctx, { requestId, clientToken, answers }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, answers }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (answers.length > 10) throw new ConvexError("At most 10 answers at a time");
     for (const a of answers) {
       if (!a.answer.trim()) continue;
@@ -98,14 +100,14 @@ export const answerQuestions = mutation({
     }
     // Answers are kept either way; the spec is redone only when AI is available
     // and within budget.
-    return (await aiUnavailable(ctx, requestId)) ? null : await enqueueSpecJob(ctx, request);
+    return (await aiUnavailable(ctx, { requestId, userId: request.ownerId })) ? null : await enqueueSpecJob(ctx, request);
   },
 });
 
 export const latestSpec = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     return ctx.db
       .query("requirementSpecs")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
@@ -204,8 +206,8 @@ export const finishJob = internalMutation({
 // stale, and the AI's own clarification Q&A (separate from the fixed follow-ups).
 export const specStatus = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     const job = await ctx.db
       .query("aiJobs")
       .withIndex("by_request_kind", (q) => q.eq("requestId", requestId).eq("kind", "spec"))
@@ -221,7 +223,7 @@ export const specStatus = query({
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
     const currentVersion = requestVersion(request);
-    const blocked = await aiUnavailable(ctx, requestId);
+    const blocked = await aiUnavailable(ctx, { requestId, userId: request.ownerId });
     return {
       available: !blocked,
       unavailableReason: blocked?.reason,
@@ -242,21 +244,21 @@ export const specStatus = query({
 
 export const recommend = mutation({
   args: { ...owner, maxPrice: v.optional(v.number()) },
-  handler: async (ctx, { requestId, clientToken, maxPrice }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, maxPrice }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (maxPrice !== undefined && !(Number.isFinite(maxPrice) && maxPrice >= 0)) {
       throw new ConvexError("maxPrice must be a non-negative number");
     }
     if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
-    await spendAiBudget(ctx, "recommend", { requestId });
+    await spendAiBudget(ctx, "recommend", { requestId, userId: request.ownerId });
     await ctx.scheduler.runAfter(0, internal.ai.recommendRobots, { requestId, maxPrice });
   },
 });
 
 export const latestPicks = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     return ctx.db
       .query("recommendations")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
@@ -286,11 +288,11 @@ export const savePicks = internalMutation({
 
 export const requestBounty = mutation({
   args: { ...owner, robotId: v.optional(v.id("robots")), gap: v.string() },
-  handler: async (ctx, { requestId, clientToken, robotId, gap }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, robotId, gap }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     const cleanGap = requireText("gap", gap, 1000);
     if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
-    await spendAiBudget(ctx, "bounty", { requestId });
+    await spendAiBudget(ctx, "bounty", { requestId, userId: request.ownerId });
     await ctx.scheduler.runAfter(0, internal.ai.writeBounty, {
       requestId,
       ...(robotId ? { robotId } : {}),
@@ -301,8 +303,8 @@ export const requestBounty = mutation({
 
 export const latestBounty = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     // The latest AI-written draft; posted bounties are read via bounties:getMine.
     return ctx.db
       .query("bounties")

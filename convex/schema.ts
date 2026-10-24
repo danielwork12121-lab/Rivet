@@ -32,9 +32,45 @@ export const followUpAnswer = v.object({
   assumption: v.optional(v.object({ value: v.number(), unit: v.optional(v.string()) })),
 });
 
+export const role = v.union(v.literal("client"), v.literal("developer"));
+export const developerStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("revoked"));
+
 export default defineSchema({
+  // One row per signed-in person. Clerk proves who they are; this row says what
+  // they may do (see lib/auth.ts). Created on first sign-in by users:ensureAccount.
+  // - role: chosen once at onboarding (users:chooseRole); only an admin changes it.
+  // - developerStatus: developers start "pending" and can do nothing developer-only
+  //   until an admin approves them or they redeem an invite (users.ts).
+  users: defineTable({
+    tokenIdentifier: v.string(), // "<issuer>|<Clerk user id>" from the verified token, never from the browser
+    clerkUserId: v.string(), // the token's subject
+    email: v.optional(v.string()), // only if the token carries it; informational, never used for access
+    name: v.optional(v.string()),
+    organization: v.optional(v.string()),
+    role: v.optional(role),
+    developerStatus: v.optional(developerStatus),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["tokenIdentifier"])
+    .index("by_clerk_user", ["clerkUserId"])
+    .index("by_developer_status", ["developerStatus"]),
+
+  // Single-use codes an admin hands to a developer (users:createDeveloperInvite).
+  // Only a hash is stored: the code itself is shown once, to the admin.
+  developerInvites: defineTable({
+    codeHash: v.string(), // SHA-256 hex of the code
+    note: v.optional(v.string()), // who it was for, for the admin's records
+    expiresAt: v.number(), // ms since epoch
+    usedBy: v.optional(v.id("users")),
+    usedAt: v.optional(v.number()),
+  }).index("by_code_hash", ["codeHash"]),
+
   // A problem submitted by an infrastructure operator.
   operatorRequests: defineTable({
+    // The Client account that owns this request. Every public function checks it
+    // (lib/drafts.ts). Rows from before accounts have none until claimed
+    // (requests:claimLegacyDraft) and are unreachable from browsers until then.
+    ownerId: v.optional(v.id("users")),
     title: v.string(),
     description: v.string(),
     environment: v.string(),
@@ -43,6 +79,7 @@ export default defineSchema({
     profile: v.optional(profileInfo),
     // Client-generated id that makes retries safe: create() with a token that
     // already exists returns the existing request instead of inserting again.
+    // Before accounts it was also the draft's password; now it grants nothing.
     clientToken: v.optional(v.string()),
     // Only questions the user actually answered; never the page's defaults.
     followUps: v.optional(v.array(followUpAnswer)),
@@ -51,7 +88,8 @@ export default defineSchema({
     status: v.union(v.literal("submitted"), v.literal("specified")),
   })
     .index("by_status", ["status"])
-    .index("by_client_token", ["clientToken"]),
+    .index("by_client_token", ["clientToken"])
+    .index("by_owner", ["ownerId"]),
 
   // AI-extracted structured requirements for a request. Schema only for now:
   // no functions write to this table until the AI integration exists.
@@ -137,6 +175,7 @@ export default defineSchema({
   // Money fields are illustrative demo figures in USD, not commitments.
   bounties: defineTable({
     requestId: v.id("operatorRequests"),
+    ownerId: v.optional(v.id("users")), // copied from the request when posted; never public
     status: v.union(v.literal("draft"), v.literal("posted")),
     source: v.union(v.literal("ai"), v.literal("client")),
     title: v.string(),
@@ -182,6 +221,7 @@ export default defineSchema({
     kind: v.union(v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat")),
     requestId: v.optional(v.id("operatorRequests")),
     clientKey: v.optional(v.string()), // keyed hash of a website visitor's IP, never the IP itself
+    userId: v.optional(v.id("users")), // the signed-in account that asked
   }),
 
   // One row per Claude call: your cost tracker and test history.

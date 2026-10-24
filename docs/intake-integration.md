@@ -1,7 +1,8 @@
 # Intake and follow-ups ⇄ Convex
 
 `pages/robot-bounty-client-flow.html` (served by Vercel at `/robot-bounty-client-flow`) keeps
-**one draft request per browser and backend** in Convex. Step 1
+the signed-in Client's request in Convex (signed-out visitors are sent to log in; see
+[accounts-and-access.md](accounts-and-access.md)). Step 1
 creates it the first time; later step 1 saves update the same record; step 2 adds the
 follow-up answers to it. Glue code is in [`js/rivet-api.js`](../js/rivet-api.js); the page's
 own additions are marked `RIVET-BACKEND`.
@@ -11,9 +12,9 @@ own additions are marked `RIVET-BACKEND`.
 |---|---|
 | Step 1 **Continue**, or a stepper jump forward from step 1 | first time `requests:create`, afterwards `requests:updateIntake` (only if something changed) |
 | Step 2 **See automation opportunities**, or a stepper jump forward from step 2 | `requests:saveFollowUps` (only if at least one answer was picked and something changed) |
-| Page load | `requests:getDraft` and `bounties:getMine` with the id + token from `localStorage` (`rivet.intake.draft.<backend>`) |
+| Page load | `users:ensureAccount`, then (Clients) `requests:claimLegacyDraft` once for a pre-accounts draft, then `requests:getDraft` for the request this browser was editing (`rivet.intake.current.<backend>`), else the newest from `requests:listMine`, and `bounties:getMine` |
 | Step 5 **Post bounty** | `bounties:post` (after saving the intake if it changed, e.g. "Join the shared program") |
-| Developer **Bounty board** shown | `bounties:listPosted` (at most every 3 s) |
+| Developer **Bounty board** shown | live subscription to `bounties:listPosted` (approved Developers only) |
 | Page load | `robots:search`: the page's sample products come from Convex; the built-in `PRODUCTS` copy is only an offline fallback |
 | Step 2 shown | `agent:specStatus` (or `agent:aiStatus` before step 1 is saved): status only |
 | Step 2 **Draft requirements with AI** | saves changed answers, then `agent:generateSpec`, then polls `agent:specStatus` every 2 s (max 3 min) |
@@ -35,7 +36,7 @@ since the last save.
 | *(derived)* | `title` | `"<company> — <business label> automation request"` (form has no title field) |
 | *(derived)* | `environment` | e.g. `"Lawn care operation, West region, 3 crews of 2 people."` |
 | *(none)* | `constraints` | `[]`; step 1 has none |
-| `crypto.randomUUID()` | `clientToken` | created once per draft; required for every later read or edit |
+| `crypto.randomUUID()` | `clientToken` | created once per draft; a retry key only (access comes from the account) |
 
 ## Field mapping, step 2
 Only the first `S.answered` questions are sent. The page pre-fills `S.answers` with defaults
@@ -61,8 +62,9 @@ that question are not restored.
 - **Errors** (empty fields, backend validation, unreachable server, 15 s timeout) show in the existing
   red `.notice` box; the operator stays put and can retry. Retrying is safe: a repeated create returns
   the same id, and updates replace values rather than adding records.
-- **Refresh** restores step 1 and the answers. A stored draft whose token is rejected (or whose record
-  is gone) is forgotten. If the backend is unreachable the blank form is shown and the draft is kept.
+- **Refresh** restores step 1 and the answers. A remembered request that isn't yours (or is gone) is
+  forgotten and the newest of your own is opened instead. If the backend is unreachable, the page
+  says it couldn't check your sign-in and offers a retry.
 - **Bounty (step 5)**: **Post bounty** saves via `bounties:post`; the posted view appears only after
   Convex confirms. "Edit my pledge" re-posts and updates the same bounty. Refresh restores it.
 - **Developer board** loads posted bounties when shown and labels every card: *sample*,

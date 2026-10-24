@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper, signedIn } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 
@@ -18,7 +19,8 @@ const intake = {
   title: "E2E-TEST budget", description: "Fictional.", environment: "Lawn care operation.", constraints: [],
 };
 async function setup(n = 1) {
-  const t = convexTest(schema, modules);
+  const base = convexTest(schema, modules);
+  const t = await asClient(base);
   const reqs = [];
   for (let i = 0; i < n; i++) {
     const clientToken = `budget-token-000${i}`;
@@ -26,7 +28,7 @@ async function setup(n = 1) {
   }
   const usage = () => t.run((ctx) => ctx.db.query("aiUsage").collect());
   const scheduled = () => t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
-  return { t, reqs, usage, scheduled };
+  return { t, base, reqs, usage, scheduled };
 }
 // Each new spec run needs the previous one to have finished.
 async function finishLatestJob(t: any, requestId: any) {
@@ -57,6 +59,21 @@ describe("AI budget: per request", () => {
     await t.mutation(api.agent.generateSpec, r);
     await t.mutation(api.agent.generateSpec, r);
     expect(await usage()).toHaveLength(1);
+  });
+});
+
+describe("AI budget: per account", () => {
+  it("AI_USER_DAILY_LIMIT caps one account across its requests", async () => {
+    vi.stubEnv("AI_USER_DAILY_LIMIT", "2");
+    const { t, base, reqs: [a, b, c], usage } = await setup(3);
+    await t.mutation(api.agent.generateSpec, a);
+    await t.mutation(api.agent.recommend, b);
+    await expect(t.mutation(api.agent.generateSpec, c)).rejects.toThrow(/Your account has reached today's AI limit/);
+    expect(await usage()).toHaveLength(2);
+    // Another account still has its own allowance.
+    const other = await asClient(base, "user_client_b");
+    const id = await other.mutation(api.requests.create, { ...intake, clientToken: "budget-token-other" });
+    await expect(other.mutation(api.agent.generateSpec, { requestId: id })).resolves.toMatchObject({ reused: false });
   });
 });
 
@@ -135,6 +152,26 @@ describe("aiBudget:reserveChat (Vercel /api/chat)", () => {
     expect(await reserve("b")).toEqual({ ok: true });
     expect(await reserve("c")).toEqual({ ok: false, reason: "daily_limit" });
     expect(await usage()).toHaveLength(3);
+  });
+
+  it("requires a signed-in Client account; others spend nothing", async () => {
+    const { base, usage } = await setup(0);
+    const args = { secret: "server-secret-for-tests", clientKey: key("e") };
+    expect(await base.mutation(api.aiBudget.reserveChat, args)).toEqual({ ok: false, reason: "unauthenticated" });
+    expect(await signedIn(base, "user_new").mutation(api.aiBudget.reserveChat, args)).toEqual({ ok: false, reason: "no_account" });
+    const dev = await asDeveloper(base);
+    expect(await dev.mutation(api.aiBudget.reserveChat, args)).toEqual({ ok: false, reason: "not_client" });
+    expect(await usage()).toHaveLength(0);
+  });
+
+  it("records the account and enforces the per-account limit across visitors", async () => {
+    vi.stubEnv("AI_USER_DAILY_LIMIT", "2");
+    const { t, usage } = await setup(0);
+    const reserve = (c: string) => t.mutation(api.aiBudget.reserveChat, { secret: "server-secret-for-tests", clientKey: key(c) });
+    expect(await reserve("a")).toEqual({ ok: true });
+    expect(await reserve("b")).toEqual({ ok: true });
+    expect(await reserve("c")).toEqual({ ok: false, reason: "user_limit" });
+    expect((await usage()).every((u) => u.userId)).toBe(true);
   });
 
   it("chat and spec drafting share the global cap", async () => {

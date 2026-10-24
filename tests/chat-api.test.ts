@@ -7,7 +7,11 @@ import handler from "../api/chat.js";
 const CONVEX = "https://example-test.convex.cloud";
 const ANTHROPIC = "https://api.anthropic.com/v1/messages";
 
-function call(opts: { method?: string; body?: unknown; ip?: string } = {}) {
+// Shaped like a Clerk session token. Its contents are never read here: /api/chat
+// forwards it and Convex verifies it (stubbed below).
+const TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyX3Rlc3QifQ.c2lnbmF0dXJl";
+
+function call(opts: { method?: string; body?: unknown; ip?: string; auth?: string | null } = {}) {
   const res: any = {
     statusCode: 0, body: undefined, headers: {} as Record<string, string>,
     status(c: number) { this.statusCode = c; return this; },
@@ -16,7 +20,10 @@ function call(opts: { method?: string; body?: unknown; ip?: string } = {}) {
   };
   const req = {
     method: opts.method ?? "POST",
-    headers: { "x-vercel-forwarded-for": opts.ip ?? "203.0.113.7" },
+    headers: {
+      "x-vercel-forwarded-for": opts.ip ?? "203.0.113.7",
+      ...(opts.auth === null ? {} : { authorization: opts.auth ?? `Bearer ${TOKEN}` }),
+    },
     body: opts.body ?? { message: "We mow 40 fictional lawns a week.", mode: "opening" },
   };
   return handler(req, res).then(() => res);
@@ -69,6 +76,34 @@ describe("api/chat", () => {
     },
   );
 
+  it.each([
+    ["no Authorization header", null],
+    ["a non-Bearer scheme", `Basic ${TOKEN}`],
+    ["a token that isn't a JWT", "Bearer not-a-jwt"],
+  ])("refuses %s with 401 before calling Convex or Claude", async (_n, auth) => {
+    const res = await call({ auth });
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({ error: "unauthenticated", message: "Sign in with a Client account to use the AI assistant." });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards the visitor's token to Convex, which does the verifying", async () => {
+    await call();
+    expect(calls(CONVEX)[0][1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    ["Convex rejects the token (expired, forged)", { status: "error", errorMessage: "Unauthenticated: Could not verify OIDC token claim" }, 401],
+    ["the account isn't signed up", { status: "success", value: { ok: false, reason: "unauthenticated" } }, 401],
+    ["the account is a Developer", { status: "success", value: { ok: false, reason: "not_client" } }, 403],
+    ["signed in but no account set up", { status: "success", value: { ok: false, reason: "no_account" } }, 403],
+  ])("%s: refused and Claude is never called", async (_n, budget, status) => {
+    route({ budget });
+    const res = await call();
+    expect(res.statusCode).toBe(status);
+    expect(calls(ANTHROPIC)).toHaveLength(0);
+  });
+
   it("rejects bad input before spending anything", async () => {
     expect((await call({ body: "{not json" })).statusCode).toBe(400);
     expect((await call({ body: { message: "   " } })).statusCode).toBe(400);
@@ -94,7 +129,7 @@ describe("api/chat", () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  it.each([["client_limit"], ["daily_limit"]])("over budget (%s): 429 and Claude is never called", async (reason) => {
+  it.each([["client_limit"], ["daily_limit"], ["user_limit"]])("over budget (%s): 429 and Claude is never called", async (reason) => {
     route({ budget: { status: "success", value: { ok: false, reason } } });
     const res = await call();
     expect(res.statusCode).toBe(429);

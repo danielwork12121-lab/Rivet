@@ -2,6 +2,10 @@
 // The frontend (pages/find-solution.html) POSTs { message, mode } here so the
 // Anthropic API key never reaches the browser. Runs as a Vercel serverless
 // function (Node.js runtime, auto-detected from this file's path under /api).
+// Only signed-in Client accounts may use it: the request must carry the
+// visitor's Clerk session token (Authorization: Bearer ...), which this function
+// forwards to Convex. Convex verifies it and checks the account's role before
+// any budget is reserved, so this file never parses or trusts the token itself.
 //
 // Off unless fully configured. Vercel env vars:
 //   CHAT_ENABLED=true        explicit switch; anything else keeps chat off
@@ -10,7 +14,8 @@
 //   RIVET_SERVER_SECRET      shared with the Convex deployment's env vars
 // Before every paid call this function reserves budget in Convex
 // (aiBudget:reserveChat), which enforces a global daily cap shared with the rest
-// of Rivet's AI and a per-visitor cap keyed by a hash of the visitor's IP.
+// of Rivet's AI, a per-account cap, and a per-visitor cap keyed by a hash of
+// the visitor's IP.
 // Every failure returns an explicit { error, message }; never a made-up reply.
 
 import { createHmac } from "node:crypto";
@@ -47,6 +52,9 @@ re-asking the questions above.`,
 
 const fail = (res, status, error, message) => res.status(status).json({ error, message });
 const UNAVAILABLE = "The AI assistant isn't available right now.";
+const SIGN_IN = "Sign in with a Client account to use the AI assistant.";
+// A JWT: three base64url parts. Anything else is refused before calling Convex.
+const BEARER = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
 
 // Stable per-visitor key without storing the IP: HMAC with the server secret.
 function visitorKey(req, secret) {
@@ -56,17 +64,23 @@ function visitorKey(req, secret) {
   return createHmac("sha256", secret).update(ip).digest("hex").slice(0, 32);
 }
 
-// Ask Convex for one unit of budget. Any problem means "no": fail closed.
-async function reserveBudget(convexUrl, secret, clientKey) {
+// Ask Convex for one unit of budget, as the signed-in visitor. Any problem means
+// "no": fail closed. A token Convex rejects (expired, forged, wrong audience)
+// comes back as an auth error, reported as "unauthenticated".
+async function reserveBudget(convexUrl, secret, clientKey, userToken) {
   try {
     const r = await fetch(`${convexUrl.replace(/\/+$/, "")}/api/mutation`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({ path: "aiBudget:reserveChat", args: { secret, clientKey }, format: "json" }),
     });
-    const data = await r.json();
+    const data = await r.json().catch(() => null);
     if (data?.status === "success" && data.value?.ok === true) return { ok: true };
-    return { ok: false, reason: data?.value?.reason ?? "unavailable" };
+    if (data?.status === "success") return { ok: false, reason: data.value?.reason ?? "unavailable" };
+    if (r.status === 401 || /Unauthenticated|InvalidAuthHeader|NoAuthProvider|token/i.test(String(data?.errorMessage ?? data?.code ?? ""))) {
+      return { ok: false, reason: "unauthenticated" };
+    }
+    return { ok: false, reason: "unavailable" };
   } catch {
     return { ok: false, reason: "unavailable" };
   }
@@ -82,6 +96,8 @@ export default async function handler(req, res) {
   if (CHAT_ENABLED !== "true" || !ANTHROPIC_API_KEY || !CONVEX_URL || !RIVET_SERVER_SECRET) {
     return fail(res, 503, "unavailable", UNAVAILABLE);
   }
+  const bearer = String(req.headers?.authorization || "").match(BEARER);
+  if (!bearer) return fail(res, 401, "unauthenticated", SIGN_IN);
 
   let body = req.body;
   if (typeof body === "string") {
@@ -95,8 +111,11 @@ export default async function handler(req, res) {
   const mode = body?.mode === "followup" ? "followup" : "opening";
   if (!message) return fail(res, 400, "bad_request", "message is required.");
 
-  const budget = await reserveBudget(CONVEX_URL, RIVET_SERVER_SECRET, visitorKey(req, RIVET_SERVER_SECRET));
+  const budget = await reserveBudget(CONVEX_URL, RIVET_SERVER_SECRET, visitorKey(req, RIVET_SERVER_SECRET), bearer[1]);
   if (!budget.ok) {
+    if (budget.reason === "unauthenticated") return fail(res, 401, "unauthenticated", SIGN_IN);
+    if (budget.reason === "not_client") return fail(res, 403, "forbidden", "The AI assistant is for Client accounts.");
+    if (budget.reason === "no_account") return fail(res, 403, "no_account", "Finish setting up your Rivet account to use the AI assistant.");
     return budget.reason === "unavailable"
       ? fail(res, 503, "unavailable", UNAVAILABLE)
       : fail(res, 429, "limit", "The AI assistant has reached its limit for today.");

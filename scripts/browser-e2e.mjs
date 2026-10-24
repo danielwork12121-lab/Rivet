@@ -1,8 +1,14 @@
 // Real-browser checks for pages/robot-bounty-client-flow.html against an explicitly chosen
 // Convex backend (the page is opened with ?backend=<target>, so it uses the same one):
 //
-//   npx convex dev                              # terminal 1, keep running
-//   RIVET_TARGET=local npm run e2e:browser      # or RIVET_TARGET=cloud
+//   node scripts/local-auth-issuer.mjs          # terminal 1 (see scripts/e2e-auth-local.mjs)
+//   npx convex dev                              # terminal 2, a LOCAL deployment, keep running
+//   RIVET_TARGET=local npm run e2e:browser
+//
+// The page needs a signed-in account. Each scenario runs as a ready-made local account
+// (Client, or an approved Developer), signed in through the stand-in for clerk-js in
+// scripts/fake-clerk.mjs with tokens from the local test issuer. A cloud deployment would
+// need real Clerk accounts, so RIVET_TARGET=cloud is refused.
 //
 // Never presses the AI button while AI is available: no paid calls.
 //
@@ -17,12 +23,19 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { resolveTarget } from "./targets.mjs";
+import { fakeClerkScript, makeAccount, signedInScript } from "./fake-clerk.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const TARGET = resolveTarget();
 const CONVEX_URL = TARGET.url;
+if (TARGET.name !== "local") {
+  console.error("This suite signs in with local test accounts, which only a local deployment accepts. Use RIVET_TARGET=local.");
+  process.exit(2);
+}
+const ISSUER = process.env.RIVET_TEST_ISSUER || "http://127.0.0.1:8790";
 const PAGE_PATH = `/pages/robot-bounty-client-flow.html?backend=${TARGET.name}`;
-const DRAFT_KEY = JSON.stringify(`rivet.intake.draft.${TARGET.name}`); // as a JS string literal for page code
+// Which request the page is editing, as a JS string literal for page code (js/rivet-api.js).
+const CURRENT_KEY = JSON.stringify(`rivet.intake.current.${TARGET.name}`);
 const RUN = Date.now().toString(36);
 
 let failed = 0;
@@ -95,7 +108,7 @@ async function newIsolatedTarget(cdp) {
   return { id: targetId, webSocketDebuggerUrl: `${cdp.replace("http", "ws")}/devtools/page/${targetId}` };
 }
 
-async function openTab(cdp, pageUrl, preload, isolated = false, ready = "typeof render === 'function'") {
+async function openTab(cdp, pageUrl, preload, isolated = false, ready = "typeof S === 'object' && S.gate === 'ready'") {
   const t = isolated ? await newIsolatedTarget(cdp) : await (await fetch(`${cdp}/json/new?about:blank`, { method: "PUT" })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
@@ -179,6 +192,9 @@ const convexRun = (fn, args) =>
 // Start a tab with empty storage. Runs once per tab (guarded by sessionStorage, which
 // survives reloads), so a later reload still sees what the page saved.
 const FRESH = `if (!sessionStorage.getItem("e2e-fresh")) { localStorage.clear(); sessionStorage.setItem("e2e-fresh", "1"); }`;
+const FAKE_CLERK = fakeClerkScript(ISSUER);
+// A tab signed in as `account`, starting with empty storage (the session is put back after the wipe).
+const as = (account, extra = "") => `${FRESH} ${signedInScript(account)} ${extra} ${FAKE_CLERK}`;
 const setVal = (sel, v) =>
   `(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event("input", { bubbles: true })); })()`;
 const click = (sel) => `document.querySelector(${JSON.stringify(sel)}).click()`;
@@ -196,6 +212,15 @@ async function main() {
     console.error(`Convex backend not reachable at ${CONVEX_URL}. Start it with \`npx convex dev\`.`);
     process.exit(2);
   }
+  try { await fetch(`${ISSUER}/.well-known/jwks.json`); } catch {
+    console.error(`Local test issuer not reachable at ${ISSUER}. Start it with \`node scripts/local-auth-issuer.mjs\`.`);
+    process.exit(2);
+  }
+  // People in this run. Each new Client starts with no saved request.
+  const account = (role, label) => makeAccount({ convexUrl: CONVEX_URL, issuer: ISSUER, role, label });
+  const alice = await account("client", "alice");
+  const developer = await account("developer", "dev");
+  convexRun("users:setDeveloperStatus", { clerkUserId: developer.sub, status: "approved" });
   const server = await startServer();
   const pageUrl = `http://127.0.0.1:${server.address().port}${PAGE_PATH}`;
   const chrome = await launchChrome();
@@ -204,12 +229,13 @@ async function main() {
   try {
     // 1. Load and save the intake
     const company = `E2E-TEST Lawn ${RUN}`;
-    let tab = await open(FRESH);
+    let tab = await open(as(alice));
     check("page loads with no script errors", tab.errors.length === 0 && (await tab.ev("typeof RivetApi")) === "object", tab.errors.join(" | "));
     check("the robot catalog loads from Convex (9 page products, each with a Convex id)",
       await tab.waitFor(`S.catalog.source === "convex" && PRODUCTS.length === 9 && PRODUCTS.every((p) => p.robotId && p.sample === true)`),
       "run `npx convex run robots:seed` if this fails");
-    check("Client/Developer role toggle is present", (await tab.ev(`document.querySelectorAll("#role button").length`)) === 2);
+    check("a Client account is offered only the Client view",
+      await tab.ev(`S.role === "client" && document.querySelector('#role [data-role="dev"]').hidden && !document.querySelector('#role [data-role="client"]').hidden`));
     await tab.ev(setVal("#f-name", company));
     const sync = await tab.ev(`(() => { document.querySelector("#next").click(); const b = document.querySelector("#next"); return { disabled: b.disabled, text: b.textContent }; })()`);
     check("Continue shows a disabled Saving state immediately", sync.disabled && /Saving/.test(sync.text), JSON.stringify(sync));
@@ -240,7 +266,7 @@ async function main() {
     await tab.ev(click("[data-bounty]"));
     check("opportunities -> request a bounty", await tab.waitFor(`${onStep(4)} && !!document.querySelector("#post")`));
     const note = `Fits in the trailer <img src=x onerror="window.__xss=1"> & more ${RUN}`;
-    const draftId = JSON.parse(await tab.ev(`localStorage.getItem(${DRAFT_KEY})`)).id;
+    const draftId = JSON.parse(await tab.ev(`localStorage.getItem(${CURRENT_KEY})`)).id;
     const bountyTitleText = await tab.ev("bountyTitle()");
     await tab.ev(clearToast);
     // Like a person: type the note, then go straight for the Post button with the mouse
@@ -286,33 +312,34 @@ async function main() {
     await tab.ev(stepper(4));
     await tab.waitFor(onStep(4));
 
-    // 3. Developer role, all screens, and back
-    await tab.ev(`document.querySelector('#role [data-role="dev"]').click()`);
-    check("Developer role opens the team profile", await tab.waitFor(`S.role === "dev" && S.dstep === 0 && !!document.querySelector("#d-team")`));
-    await tab.ev(click("#next"));
-    check("profile -> bounty board", await tab.waitFor(`S.dstep === 1`));
-    check("board shows this operator's bounty as their saved demo submission", await tab.ev(`document.body.innerText.includes("your saved demo submission")`));
+    // 3. A Developer account, all screens (its own session: one account has one role)
+    const devTab = await open(as(developer), true);
+    check("a Developer account opens the team profile, with no Client view",
+      await devTab.waitFor(`S.role === "dev" && S.dstep === 0 && !!document.querySelector("#d-team") && document.querySelector('#role [data-role="client"]').hidden`));
+    await devTab.ev(click("#next"));
+    check("profile -> bounty board", await devTab.waitFor(`S.dstep === 1`));
+    const savedCard = `[...document.querySelectorAll("article.prod")].find((x) => x.querySelector('[data-sel="saved-${bRows[0]._id}"]'))`;
+    check("board shows the Client's posted bounty as a saved demo submission", await devTab.waitFor(`!!(${savedCard})`));
     check("the board no longer claims every bounty comes from real operators",
-      !(await tab.ev(`document.body.innerText.includes("real operators")`)) && !(await tab.ev(`document.body.innerText.includes("let the AI rank")`)));
+      !(await devTab.ev(`document.body.innerText.includes("real operators")`)) && !(await devTab.ev(`document.body.innerText.includes("let the AI rank")`)));
     check("every board card carries a Sample or Saved demo pill",
-      await tab.ev(`[...document.querySelectorAll("article.prod")].every((a) => /^(Sample|Saved demo)$/.test(a.querySelector(".pill")?.textContent ?? ""))`));
-    const mineCard = await tab.ev(`(() => { const a = [...document.querySelectorAll("article.prod")].find((x) => x.textContent.includes("your saved demo submission")); return a && { pill: a.querySelector(".pill").textContent, pledged: a.querySelector(".prod-figs .v").textContent, backers: a.querySelectorAll(".prod-figs .v")[2].textContent }; })()`);
-    check("this operator's own card shows only the saved pledge and 1 backer",
-      mineCard?.pill === "Saved demo" && mineCard.pledged === "$" + Math.round(bRows[0].pledged).toLocaleString("en-US") && mineCard.backers === "1", JSON.stringify(mineCard));
-    check("sample bounties are labelled as samples", await tab.ev(`document.body.innerText.includes("Bait station checking robot for commercial sites") && /· sample/.test(document.body.innerText)`));
-    await tab.ev(click("[data-sel]"));
-    check("board -> claim", await tab.waitFor(`S.dstep === 2 && !!document.querySelector("#claim")`));
-    await tab.ev(click("#claim"));
-    check("claim -> build & deliver", await tab.waitFor(`S.dstep === 3 && !!document.querySelector("#post-u")`));
-    await tab.ev(click("#post-u"));
-    check("developer can post a milestone update", await tab.waitFor(`S.claim.milestones[0].done === true`));
+      await devTab.ev(`[...document.querySelectorAll("article.prod")].every((a) => /^(Sample|Saved demo)$/.test(a.querySelector(".pill")?.textContent ?? ""))`));
+    const theirCard = await devTab.ev(`(() => { const a = ${savedCard}; return a && { pill: a.querySelector(".pill").textContent, pledged: a.querySelector(".prod-figs .v").textContent, backers: a.querySelectorAll(".prod-figs .v")[2].textContent }; })()`);
+    check("the Client's card shows only the saved pledge and 1 backer",
+      theirCard?.pill === "Saved demo" && theirCard.pledged === "$" + Math.round(bRows[0].pledged).toLocaleString("en-US") && theirCard.backers === "1", JSON.stringify(theirCard));
+    check("sample bounties are labelled as samples", await devTab.ev(`document.body.innerText.includes("Bait station checking robot for commercial sites") && /· sample/.test(document.body.innerText)`));
+    await devTab.ev(click("[data-sel]"));
+    check("board -> claim (marked demo only)", await devTab.waitFor(`S.dstep === 2 && !!document.querySelector("#claim") && /demo only, not saved/i.test(document.body.innerText)`));
+    await devTab.ev(click("#claim"));
+    check("claim -> build & deliver", await devTab.waitFor(`S.dstep === 3 && !!document.querySelector("#post-u")`));
+    await devTab.ev(click("#post-u"));
+    check("developer can post a milestone update", await devTab.waitFor(`S.claim.milestones[0].done === true`));
     for (const n of [0, 1, 2, 3]) {
-      await tab.ev(stepper(n));
-      check(`developer stepper opens step ${n + 1}`, await tab.waitFor(`S.role === "dev" && S.dstep === ${n}`));
+      await devTab.ev(stepper(n));
+      check(`developer stepper opens step ${n + 1}`, await devTab.waitFor(`S.role === "dev" && S.dstep === ${n}`));
     }
-    await tab.ev(`document.querySelector('#role [data-role="client"]').click()`);
-    check("switching back to Client keeps the client step", await tab.waitFor(onStep(4)));
-    check("no script errors across both roles", tab.errors.length === 0, tab.errors.join(" | "));
+    check("no script errors in either account's session", tab.errors.length === 0 && devTab.errors.length === 0, [...tab.errors, ...devTab.errors].join(" | "));
+    await devTab.close();
 
     // 4. Refresh restores the saved intake
     await tab.reload();
@@ -357,14 +384,12 @@ async function main() {
     check("a failed intake update shows an error and stays on step 1", await tab.waitFor(`${noticeHas("Can't reach the Rivet server")} && ${onStep(0)}`));
     check("...with no success message and the stored record unchanged",
       !(await tab.ev(toastSaysSaved)) && rowsFor(company)[0].profile.hourlyLaborCost === 31 && rowsFor(company).length === 1);
-    const realDraft = JSON.parse(await tab.ev(`localStorage.getItem(${DRAFT_KEY})`));
+    const realDraft = JSON.parse(await tab.ev(`localStorage.getItem(${CURRENT_KEY})`));
     await tab.close();
 
     // A different person (separate browser context, empty storage) sees the bounty as a Developer
-    tab = await open(null, true);
-    check("a separate browser session starts with no draft", await tab.ev(`localStorage.getItem(${DRAFT_KEY}) === null`));
-    await tab.ev(`document.querySelector('#role [data-role="dev"]').click()`);
-    await tab.waitFor(`S.role === "dev"`);
+    tab = await open(as(developer), true);
+    check("a Developer session has no Client draft", await tab.ev(`localStorage.getItem(${CURRENT_KEY}) === null && !S.submit.id`));
     await tab.ev(click("#next"));
     const savedSel = `[data-sel="saved-${bRows[0]._id}"]`;
     check("the Developer board in another session shows the posted bounty",
@@ -380,16 +405,17 @@ async function main() {
     check("no script errors in the developer session", tab.errors.length === 0, tab.errors.join(" | "));
     await tab.close();
 
-    // Wrong token: the draft is not shown and is forgotten
-    tab = await open(`${FRESH} localStorage.setItem(${DRAFT_KEY}, JSON.stringify({ id: ${JSON.stringify(realDraft.id)}, token: "not-the-right-token" }));`);
-    check("a stored draft with a wrong token is rejected and forgotten",
-      await tab.waitFor(`localStorage.getItem(${DRAFT_KEY}) === null`));
+    // Another Client account, whose browser points at that draft's id: refused and forgotten
+    const bob = await account("client", "bob");
+    tab = await open(as(bob, `localStorage.setItem(${CURRENT_KEY}, JSON.stringify({ id: ${JSON.stringify(realDraft.id)} }));`), true);
+    check("another account's draft id is refused by the backend and forgotten",
+      await tab.waitFor(`localStorage.getItem(${CURRENT_KEY}) === null`));
     check("...and none of its data is shown", await tab.ev(`document.querySelector("#f-name").value !== ${JSON.stringify(company)} && !document.body.innerText.includes("Saved to Rivet")`));
     await tab.close();
 
     // 5. Leaving step 1 through the stepper saves first
     const company2 = `E2E-TEST Pest ${RUN}`;
-    tab = await open(FRESH);
+    tab = await open(as(await account("client", "pest")), true);
     await tab.ev(setVal("#f-name", company2));
     await tab.ev(stepper(3));
     check("stepper jump from step 1 saves, then lands on the chosen step", await tab.waitFor(onStep(3)));
@@ -407,7 +433,7 @@ async function main() {
 
     // 5b. AI requirement draft panel. Never presses the button while AI is available.
     const companyAi = `E2E-TEST AI ${RUN}`;
-    tab = await open(FRESH);
+    tab = await open(as(await account("client", "ai")), true);
     await tab.ev(setVal("#f-name", companyAi));
     await tab.ev(click("#next"));
     await tab.waitFor(onStep(1));
@@ -462,7 +488,7 @@ async function main() {
 
     // 6. Empty description: error, no save, no success
     const company3 = `E2E-TEST Empty ${RUN}`;
-    tab = await open(FRESH);
+    tab = await open(as(await account("client", "empty")), true);
     await tab.ev(setVal("#f-name", company3));
     await tab.ev(setVal("#f-desc", "   "));
     await tab.ev(click("#next"));
@@ -471,17 +497,16 @@ async function main() {
       !(await tab.ev(`/saved/i.test(document.querySelector("#toast").textContent)`)) && rowsFor(company3).length === 0);
     await tab.close();
 
-    // 7. Backend unreachable: error, no success, retry possible
-    tab = await open(`${FRESH} window.RIVET_CONVEX_URL = "http://127.0.0.1:1";`);
-    await tab.ev(click("#next"));
-    check("unreachable backend shows a connection error", await tab.waitFor(noticeHas("Can't reach the Rivet server")));
-    check("...stays on step 1, button usable, nothing marked saved",
-      await tab.ev(`${onStep(0)} && !document.querySelector("#next").disabled && RivetApi.backend === "custom" && RivetApi.loadDraft() === null`));
+    // 7. Backend unreachable: the sign-in check can't finish, so nothing can be saved
+    tab = await openTab(chrome.cdp, pageUrl, as(alice, `window.RIVET_CONVEX_URL = "http://127.0.0.1:1";`), true, "typeof S === 'object'");
+    tabs.push(tab);
+    check("unreachable backend shows a clear error with a retry button", await tab.waitFor(`S.gate === "error" && !!document.querySelector("#retry") && document.querySelector(".notice")?.textContent.trim().length > 0`, 25000));
+    check("...and no step, form or saved state is shown", await tab.ev(`!document.querySelector("#next") && !document.querySelector("#f-name") && RivetApi.backend === "custom" && RivetApi.loadCurrent() === null`));
     await tab.close();
 
     // 8. Markup typed by a user stays inert after a round trip
     const evil = `E2E-TEST <img src=x onerror="window.__xss=1">${RUN}`;
-    tab = await open(FRESH);
+    tab = await open(as(await account("client", "evil")), true);
     await tab.ev(setVal("#f-name", evil));
     await tab.ev(click("#next"));
     await tab.waitFor(onStep(1));
@@ -492,14 +517,16 @@ async function main() {
       await tab.ev(`window.__xss === undefined && !document.querySelector("#app img") && document.querySelector("#f-name").value === ${JSON.stringify(evil)}`));
     await tab.close();
 
-    // 9. The teammates' site pages (pages/, served by Vercel) still load without script errors
+    // 9. The teammates' site pages (pages/, served by Vercel) still load without script errors,
+    // signed out (the client flow then sends you to log in) and signed in as a Client.
     const origin = `http://127.0.0.1:${server.address().port}`;
-    for (const f of readdirSync(join(ROOT, "pages")).filter((x) => x.endsWith(".html"))) {
-      const t = await openTab(chrome.cdp, `${origin}/pages/${f}`, null, false, "true");
+    for (const [f, preload, who] of readdirSync(join(ROOT, "pages")).filter((x) => x.endsWith(".html"))
+      .flatMap((x) => [[x, `${FRESH} ${FAKE_CLERK}`, "signed out"], [x, as(alice), "signed in"]])) {
+      const t = await openTab(chrome.cdp, `${origin}/pages/${f}`, preload, true, "true");
       tabs.push(t);
       await sleep(1500); // let bundled pages finish their own startup
       const bodyText = await t.ev("document.body.innerText.trim().length");
-      check(`pages/${f} loads with no script errors`, t.errors.length === 0 && bodyText > 0, t.errors.join(" | ").slice(0, 160));
+      check(`pages/${f} loads with no script errors (${who})`, t.errors.length === 0 && bodyText > 0, t.errors.join(" | ").slice(0, 160));
       await t.close();
     }
   } finally {

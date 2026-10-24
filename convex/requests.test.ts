@@ -4,6 +4,7 @@ import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper, signedIn } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 
@@ -17,7 +18,7 @@ const valid = {
 
 describe("operator requests", () => {
   it("stores a valid request, normalising input, and retrieves it", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     const id = await t.mutation(api.requests.create, valid);
 
     const doc = await t.query(internal.requests.get, { id });
@@ -33,13 +34,13 @@ describe("operator requests", () => {
   });
 
   it("accepts a request without cost info", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     const { cost: _cost, ...noCost } = valid;
     await expect(t.mutation(api.requests.create, noCost)).resolves.toBeTruthy();
   });
 
   it("lists newest first and respects limit", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     await t.mutation(api.requests.create, { ...valid, title: "first" });
     await t.mutation(api.requests.create, { ...valid, title: "second" });
     const one = await t.query(internal.requests.list, { limit: 1 });
@@ -60,7 +61,7 @@ describe("operator requests", () => {
     ["negative budget", { cost: { currency: "USD", budget: -1 } }, /non-negative/],
     ["NaN cost", { cost: { currency: "USD", currentAnnualCost: NaN } }, /non-negative/],
   ])("rejects %s", async (_name, patch, message) => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     await expect(
       t.mutation(api.requests.create, { ...valid, ...patch }),
     ).rejects.toThrow(message);
@@ -68,7 +69,7 @@ describe("operator requests", () => {
   });
 
   it("reports validation failures as a ConvexError with a readable data string", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     const err = await t
       .mutation(api.requests.create, { ...valid, title: " " })
       .catch((e) => e);
@@ -77,7 +78,7 @@ describe("operator requests", () => {
   });
 
   it("rejects wrong argument types", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     await expect(
       // @ts-expect-error deliberately invalid
       t.mutation(api.requests.create, { ...valid, constraints: "nope" }),
@@ -85,7 +86,7 @@ describe("operator requests", () => {
   });
 
   it("get returns null for a deleted id", async () => {
-    const t = convexTest(schema, modules);
+    const t = await asClient(convexTest(schema, modules));
     const id = await t.mutation(api.requests.create, valid);
     await t.run((ctx) => ctx.db.delete(id));
     expect(await t.query(internal.requests.get, { id })).toBeNull();
@@ -103,14 +104,14 @@ describe("operator requests", () => {
     };
 
     it("stores a valid profile (trimmed) and returns it on get", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const id = await t.mutation(api.requests.create, { ...valid, profile });
       const doc = await t.query(internal.requests.get, { id });
       expect(doc?.profile).toEqual({ ...profile, companyName: "Green Acres Lawn Co." });
     });
 
     it("accepts a profile without peoplePerCrew", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const { peoplePerCrew: _p, ...noPer } = profile;
       const id = await t.mutation(api.requests.create, { ...valid, profile: noPer });
       expect((await t.query(internal.requests.get, { id }))?.profile).not.toHaveProperty(
@@ -132,7 +133,7 @@ describe("operator requests", () => {
       ["NaN wage", { hourlyLaborCost: NaN }, /profile.hourlyLaborCost must be greater than 0/],
       ["absurd wage", { hourlyLaborCost: 10_001 }, /profile.hourlyLaborCost must be greater than 0/],
     ])("rejects profile with %s and stores nothing", async (_n, patch, message) => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       await expect(
         t.mutation(api.requests.create, { ...valid, profile: { ...profile, ...patch } }),
       ).rejects.toThrow(message);
@@ -140,7 +141,7 @@ describe("operator requests", () => {
     });
 
     it("rejects an unknown visibility value", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       await expect(
         t.mutation(api.requests.create, {
           ...valid,
@@ -151,7 +152,7 @@ describe("operator requests", () => {
     });
 
     it("returns the existing id for a repeated clientToken and inserts once", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const args = { ...valid, profile, clientToken: "tok-12345678" };
       const first = await t.mutation(api.requests.create, args);
       const second = await t.mutation(api.requests.create, args);
@@ -160,7 +161,7 @@ describe("operator requests", () => {
     });
 
     it("creates exactly one row when the same token is submitted concurrently", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const args = { ...valid, clientToken: "tok-concurrent" };
       const ids = await Promise.all(
         Array.from({ length: 5 }, () => t.mutation(api.requests.create, args)),
@@ -170,7 +171,7 @@ describe("operator requests", () => {
     });
 
     it("treats different tokens, and no token, as separate requests", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const a = await t.mutation(api.requests.create, { ...valid, clientToken: "tok-aaaaaaaa" });
       const b = await t.mutation(api.requests.create, { ...valid, clientToken: "tok-bbbbbbbb" });
       const c = await t.mutation(api.requests.create, valid);
@@ -183,14 +184,14 @@ describe("operator requests", () => {
       ["bad characters", "tok with spaces!"],
       ["too long", "x".repeat(101)],
     ])("rejects a clientToken that is %s", async (_n, clientToken) => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       await expect(
         t.mutation(api.requests.create, { ...valid, clientToken }),
       ).rejects.toThrow(/clientToken must be/);
     });
 
     it("keeps markup in text as inert data (no stripping or execution)", async () => {
-      const t = convexTest(schema, modules);
+      const t = await asClient(convexTest(schema, modules));
       const evil = '<img src=x onerror="alert(1)">';
       const id = await t.mutation(api.requests.create, {
         ...valid,
@@ -203,7 +204,7 @@ describe("operator requests", () => {
     });
   });
 
-  describe("token-protected drafts", () => {
+  describe("account-owned drafts", () => {
     const token = "draft-token-1234";
     const profile = {
       companyName: "Fictional Lawn Co.",
@@ -231,55 +232,122 @@ describe("operator requests", () => {
     ];
 
     async function setup() {
-      const t = convexTest(schema, modules);
+      const base = convexTest(schema, modules);
+      const t = await asClient(base);
       const id = await t.mutation(api.requests.create, { ...intake, clientToken: token });
-      return { t, id };
+      return { t, base, id };
     }
 
     it("getDraft returns the owner's draft without the token", async () => {
       const { t, id } = await setup();
-      const draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      const draft = await t.query(api.requests.getDraft, { id });
       expect(draft._id).toBe(id);
       expect(draft.profile?.companyName).toBe("Fictional Lawn Co.");
       expect(draft).not.toHaveProperty("clientToken");
     });
 
-    it("rejects a wrong token for read, intake update and follow-ups alike", async () => {
-      const { t, id } = await setup();
-      const wrong = { id, clientToken: "someone-elses-token" };
-      await expect(t.query(api.requests.getDraft, wrong)).rejects.toThrow(/Draft not found/);
+    it("rejects another Client account for read, intake update and follow-ups alike", async () => {
+      const { base, id } = await setup();
+      const other = await asClient(base, "user_client_b");
+      await expect(other.query(api.requests.getDraft, { id })).rejects.toThrow(/Draft not found/);
       await expect(
-        t.mutation(api.requests.updateIntake, { ...wrong, ...intake, title: "Hijacked" }),
+        other.mutation(api.requests.updateIntake, { id, ...intake, title: "Hijacked" }),
       ).rejects.toThrow(/Draft not found/);
       await expect(
-        t.mutation(api.requests.saveFollowUps, { ...wrong, answers, complete: true }),
+        other.mutation(api.requests.saveFollowUps, { id, answers, complete: true }),
       ).rejects.toThrow(/Draft not found/);
-      const doc = await t.query(internal.requests.get, { id });
+      const doc = await base.query(internal.requests.get, { id });
       expect(doc?.title).toBe("Inspect culvert interiors");
       expect(doc?.followUps).toBeUndefined();
     });
 
-    it("gives the same error for an unknown id as for a wrong token", async () => {
-      const { t, id } = await setup();
-      await t.run((ctx) => ctx.db.delete(id));
-      await expect(
-        t.query(api.requests.getDraft, { id, clientToken: token }),
-      ).rejects.toThrow(/^.*Draft not found/);
+    it("rejects signed-out callers, accounts without a role and Developers", async () => {
+      const { base, id } = await setup();
+      await expect(base.query(api.requests.getDraft, { id })).rejects.toThrow(/Please sign in/);
+      await expect(base.mutation(api.requests.create, intake)).rejects.toThrow(/Please sign in/);
+      await expect(signedIn(base, "user_new").query(api.requests.getDraft, { id })).rejects.toThrow(/Finish setting up/);
+      const dev = await asDeveloper(base);
+      await expect(dev.query(api.requests.getDraft, { id })).rejects.toThrow(/needs a Client account/);
+      await expect(dev.mutation(api.requests.create, intake)).rejects.toThrow(/needs a Client account/);
+      await expect(dev.query(api.requests.listMine, {})).rejects.toThrow(/needs a Client account/);
     });
 
-    it("rejects any token for a request created without one", async () => {
-      const t = convexTest(schema, modules);
-      const id = await t.mutation(api.requests.create, intake);
-      await expect(
-        t.query(api.requests.getDraft, { id, clientToken: "" }),
-      ).rejects.toThrow(/Draft not found/);
+    it("gives the same error for an unknown id as for someone else's draft", async () => {
+      const { t, id } = await setup();
+      await t.run((ctx) => ctx.db.delete(id));
+      await expect(t.query(api.requests.getDraft, { id })).rejects.toThrow(/^.*Draft not found/);
+    });
+
+    it("sets the owner from the signed-in account, never from arguments", async () => {
+      const { base, id } = await setup();
+      const doc = await base.query(internal.requests.get, { id });
+      const owner = await base.run((ctx) => ctx.db.get(doc!.ownerId!));
+      expect(owner?.clerkUserId).toBe("user_client_a");
+    });
+
+    it("a repeated clientToken from another account is refused, not returned", async () => {
+      const { base } = await setup();
+      const other = await asClient(base, "user_client_b");
+      await expect(other.mutation(api.requests.create, { ...intake, clientToken: token })).rejects.toThrow(/already in use/);
+      expect(await base.query(internal.requests.list, {})).toHaveLength(1);
+    });
+
+    it("listMine returns only the caller's requests, newest first, without tokens or owner", async () => {
+      const { t, base, id } = await setup();
+      const other = await asClient(base, "user_client_b");
+      await other.mutation(api.requests.create, { ...intake, title: "Someone else" });
+      const second = await t.mutation(api.requests.create, { ...intake, title: "My second" });
+      const mine = await t.query(api.requests.listMine, {});
+      expect(mine.map((r) => r._id)).toEqual([second, id]);
+      expect(mine[0]).not.toHaveProperty("clientToken");
+      expect(mine[0]).not.toHaveProperty("ownerId");
+    });
+
+    it("getDraft never returns the owner id", async () => {
+      const { t, id } = await setup();
+      expect(await t.query(api.requests.getDraft, { id })).not.toHaveProperty("ownerId");
+    });
+
+    describe("claimLegacyDraft (drafts saved before accounts)", () => {
+      // A row as the old token-only API left it: no owner.
+      async function legacy() {
+        const base = convexTest(schema, modules);
+        const id = await base.run((ctx) =>
+          ctx.db.insert("operatorRequests", { ...intake, clientToken: token, status: "submitted" }));
+        const bountyId = await base.run((ctx) => ctx.db.insert("bounties", {
+          requestId: id, status: "posted", source: "client", title: "Old bounty", taskKey: "mow", goal: 1, pledged: 0,
+        }));
+        return { base, id, bountyId };
+      }
+
+      it("is unreachable until claimed, then belongs to the claimer with its bounties", async () => {
+        const { base, id, bountyId } = await legacy();
+        const me = await asClient(base);
+        await expect(me.query(api.requests.getDraft, { id })).rejects.toThrow(/Draft not found/);
+        expect(await me.mutation(api.requests.claimLegacyDraft, { id, clientToken: token })).toBe(id);
+        expect((await me.query(api.requests.getDraft, { id })).title).toBe(intake.title);
+        const owner = (await base.query(internal.requests.get, { id }))!.ownerId;
+        expect((await base.run((ctx) => ctx.db.get(bountyId)))?.ownerId).toBe(owner);
+        // Claiming again is harmless for the owner.
+        expect(await me.mutation(api.requests.claimLegacyDraft, { id, clientToken: token })).toBe(id);
+      });
+
+      it("needs the right token, works only once, and only for Clients", async () => {
+        const { base, id } = await legacy();
+        const me = await asClient(base);
+        await expect(me.mutation(api.requests.claimLegacyDraft, { id, clientToken: "wrong-token-123" })).rejects.toThrow(/Draft not found/);
+        const dev = await asDeveloper(base);
+        await expect(dev.mutation(api.requests.claimLegacyDraft, { id, clientToken: token })).rejects.toThrow(/needs a Client account/);
+        await me.mutation(api.requests.claimLegacyDraft, { id, clientToken: token });
+        const other = await asClient(base, "user_client_b");
+        await expect(other.mutation(api.requests.claimLegacyDraft, { id, clientToken: token })).rejects.toThrow(/Draft not found/);
+      });
     });
 
     it("updateIntake edits the same record: one row, new values, updatedAt set", async () => {
       const { t, id } = await setup();
       const returned = await t.mutation(api.requests.updateIntake, {
         id,
-        clientToken: token,
         ...intake,
         description: "  Edited fictional description ",
         profile: { ...profile, crewCount: 5 },
@@ -297,7 +365,7 @@ describe("operator requests", () => {
     it("updateIntake removes cost/profile when they are omitted", async () => {
       const { t, id } = await setup();
       const { profile: _p, cost: _c, ...bare } = intake;
-      await t.mutation(api.requests.updateIntake, { id, clientToken: token, ...bare });
+      await t.mutation(api.requests.updateIntake, { id, ...bare });
       const doc = await t.query(internal.requests.get, { id });
       expect(doc).not.toHaveProperty("profile");
       expect(doc).not.toHaveProperty("cost");
@@ -306,24 +374,24 @@ describe("operator requests", () => {
     it("updateIntake validates like create and leaves the record unchanged on failure", async () => {
       const { t, id } = await setup();
       await expect(
-        t.mutation(api.requests.updateIntake, { id, clientToken: token, ...intake, description: "  " }),
+        t.mutation(api.requests.updateIntake, { id, ...intake, description: "  " }),
       ).rejects.toThrow(/description must not be empty/);
       expect((await t.query(internal.requests.get, { id }))?.description).toBe(valid.description);
     });
 
     it("updateIntake keeps follow-up answers", async () => {
       const { t, id } = await setup();
-      await t.mutation(api.requests.saveFollowUps, { id, clientToken: token, answers, complete: false });
-      await t.mutation(api.requests.updateIntake, { id, clientToken: token, ...intake, title: "New title" });
-      const draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      await t.mutation(api.requests.saveFollowUps, { id, answers, complete: false });
+      await t.mutation(api.requests.updateIntake, { id, ...intake, title: "New title" });
+      const draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps).toHaveLength(2);
       expect(draft.title).toBe("New title");
     });
 
     it("saves follow-up answers with raw label, key and assumption kept apart", async () => {
       const { t, id } = await setup();
-      await t.mutation(api.requests.saveFollowUps, { id, clientToken: token, answers, complete: false });
-      const draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      await t.mutation(api.requests.saveFollowUps, { id, answers, complete: false });
+      const draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps).toEqual(answers);
       expect(draft.followUpsComplete).toBe(false);
       expect(draft.followUps?.[1]).not.toHaveProperty("assumption.unit");
@@ -331,14 +399,14 @@ describe("operator requests", () => {
 
     it("repeated identical saves are idempotent; a new save replaces the set", async () => {
       const { t, id } = await setup();
-      const args = { id, clientToken: token, answers, complete: false };
+      const args = { id, answers, complete: false };
       await t.mutation(api.requests.saveFollowUps, args);
       await t.mutation(api.requests.saveFollowUps, args);
-      let draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      let draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps).toEqual(answers);
       const changed = [{ ...answers[0], answerLabel: "Very few", assumption: { value: 15, unit: "degrees" } }];
       await t.mutation(api.requests.saveFollowUps, { ...args, answers: changed, complete: true });
-      draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps).toEqual(changed);
       expect(draft.followUpsComplete).toBe(true);
       expect(await t.query(internal.requests.list, {})).toHaveLength(1);
@@ -347,10 +415,10 @@ describe("operator requests", () => {
     it("trims answer text", async () => {
       const { t, id } = await setup();
       await t.mutation(api.requests.saveFollowUps, {
-        id, clientToken: token, complete: false,
+        id, complete: false,
         answers: [{ key: "weeks", question: " Weeks? ", answerLabel: " About 32 ", assumption: { value: 32, unit: " weeks per year " } }],
       });
-      const draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      const draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps?.[0]).toEqual({
         key: "weeks", question: "Weeks?", answerLabel: "About 32", assumption: { value: 32, unit: "weeks per year" },
       });
@@ -374,7 +442,7 @@ describe("operator requests", () => {
     ])("rejects follow-ups with %s and stores nothing", async (_n, bad, message) => {
       const { t, id } = await setup();
       await expect(
-        t.mutation(api.requests.saveFollowUps, { id, clientToken: token, answers: bad, complete: false }),
+        t.mutation(api.requests.saveFollowUps, { id, answers: bad, complete: false }),
       ).rejects.toThrow(message);
       expect((await t.query(internal.requests.get, { id }))?.followUps).toBeUndefined();
     });
@@ -383,7 +451,7 @@ describe("operator requests", () => {
       const { t, id } = await setup();
       await expect(
         t.mutation(api.requests.saveFollowUps, {
-          id, clientToken: token, complete: false,
+          id, complete: false,
           // @ts-expect-error deliberately invalid
           answers: [{ key: "slope", answerLabel: "Some" }],
         }),
@@ -392,9 +460,9 @@ describe("operator requests", () => {
 
     it("an empty answer set clears saved answers", async () => {
       const { t, id } = await setup();
-      await t.mutation(api.requests.saveFollowUps, { id, clientToken: token, answers, complete: false });
-      await t.mutation(api.requests.saveFollowUps, { id, clientToken: token, answers: [], complete: false });
-      const draft = await t.query(api.requests.getDraft, { id, clientToken: token });
+      await t.mutation(api.requests.saveFollowUps, { id, answers, complete: false });
+      await t.mutation(api.requests.saveFollowUps, { id, answers: [], complete: false });
+      const draft = await t.query(api.requests.getDraft, { id });
       expect(draft.followUps).toEqual([]);
     });
   });

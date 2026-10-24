@@ -30,7 +30,8 @@ describe("rivet-config", () => {
 
   it("?backend= overrides explicitly; unknown values are ignored", () => {
     expect(configFor("http://127.0.0.1:8080/?backend=cloud").backend).toBe("cloud");
-    expect(configFor("https://rivet-rose.vercel.app/?backend=local").backend).toBe("local");
+    // A deployed site never sends sign-in tokens to the visitor's own machine.
+    expect(configFor("https://rivet-rose.vercel.app/?backend=local").backend).toBe("cloud");
     expect(configFor("https://rivet-rose.vercel.app/?backend=https://evil.example").backend).toBe("cloud");
   });
 

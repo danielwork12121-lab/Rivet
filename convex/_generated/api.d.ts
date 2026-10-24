@@ -13,6 +13,7 @@ import type * as ai from "../ai.js";
 import type * as aiBudget from "../aiBudget.js";
 import type * as bounties from "../bounties.js";
 import type * as lib_aiBudget from "../lib/aiBudget.js";
+import type * as lib_auth from "../lib/auth.js";
 import type * as lib_drafts from "../lib/drafts.js";
 import type * as lib_personas from "../lib/personas.js";
 import type * as lib_roi from "../lib/roi.js";
@@ -20,6 +21,7 @@ import type * as lib_validation from "../lib/validation.js";
 import type * as maintenance from "../maintenance.js";
 import type * as requests from "../requests.js";
 import type * as robots from "../robots.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -33,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   aiBudget: typeof aiBudget;
   bounties: typeof bounties;
   "lib/aiBudget": typeof lib_aiBudget;
+  "lib/auth": typeof lib_auth;
   "lib/drafts": typeof lib_drafts;
   "lib/personas": typeof lib_personas;
   "lib/roi": typeof lib_roi;
@@ -40,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   maintenance: typeof maintenance;
   requests: typeof requests;
   robots: typeof robots;
+  users: typeof users;
 }>;
 
 /**
