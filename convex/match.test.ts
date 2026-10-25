@@ -191,7 +191,9 @@ describe("extractPages (real action, stubbed transport)", () => {
     }));
     await t.mutation(internal.discovery.savePage, {
       discoveryId, url: "https://vendor.example/x1", title: "X1",
-      markdown: "TurfBot X1 is a fictional robot mower. It costs $18,500 and climbs slopes up to 30 degrees. ".repeat(3),
+      markdown: "TurfBot X1 is a fictional robot mower. It costs $18,500 and climbs slopes up to 30 degrees. ".repeat(3) +
+        "![TurfBot X1](https://vendor.example/img/x1.jpg)",
+      imageUrl: "https://vendor.example/og.jpg",
     });
     stubClaude({ // TEST FIXTURE
       isRobotProduct: true, name: "TurfBot X1", vendor: "Fictional Vendor", priceOnRequest: false,
@@ -200,6 +202,7 @@ describe("extractPages (real action, stubbed transport)", () => {
       laborSavedPercent: { value: null, unit: null, quote: null },
       specs: [{ name: "max_slope_deg", value: 30, unit: "degrees", quote: "climbs slopes up to 30 degrees" }],
       environments: ["outdoor"],
+      imageUrl: "https://vendor.example/img/x1.jpg",
     });
     vi.useFakeTimers();
     await t.action(internal.ai.extractPages, { discoveryId });
@@ -210,6 +213,7 @@ describe("extractPages (real action, stubbed transport)", () => {
       { name: "max_slope_deg", value: 30, quote: "climbs slopes up to 30 degrees", sourceUrl: "https://vendor.example/x1" },
     ]);
     expect(robots[0].assumptions).toHaveLength(2);
+    expect(robots[0].imageUrl).toBe("https://vendor.example/img/x1.jpg"); // linked in the page, so kept
     expect(await t.run((ctx) => ctx.db.get(discoveryId))).toMatchObject({ status: "done", robotsFound: 1 });
   });
 });

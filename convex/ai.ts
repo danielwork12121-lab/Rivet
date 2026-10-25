@@ -12,6 +12,8 @@ import { internal } from "./_generated/api";
 import { computeRoi, suggestBounty } from "./lib/roi";
 import { nextAction, rankRobots, type Requirement } from "./lib/decide";
 import { cleanIntent, robotFromPage } from "./lib/extract";
+import { numbersIn } from "./lib/verify";
+import { cleanSteps } from "./lib/workflow";
 import { isSpecName, SPEC_NAMES } from "./lib/specs";
 import type { Id } from "./_generated/dataModel";
 import { PERSONAS } from "./lib/personas";
@@ -151,15 +153,6 @@ const RECOMMEND_PROMPT = `You recommend existing robots to an operator.
 Each reason is one sentence about this operator's situation. If you mention money or
 months, copy the exact numbers from compute_roi. Never calculate numbers yourself.
 If nothing fits, call submit_picks with an empty list.`;
-
-// Finds "$12,000" and "9 months" in a sentence.
-function numbersIn(text: string): string[] {
-  const found: string[] = [];
-  for (const m of text.matchAll(/\$\s?([\d,]+)|(\d+)\s*months?/g)) {
-    found.push((m[1] ?? m[2]).replace(/,/g, ""));
-  }
-  return found;
-}
 
 export const recommendRobots = internalAction({
   args: { requestId: v.id("operatorRequests"), maxPrice: v.optional(v.number()) },
@@ -328,7 +321,9 @@ facilities, construction) find robots.
   priceOnRequest is true and price is null.
 - yearlyRunningCost: a stated yearly subscription, service plan or maintenance cost in USD.
 - laborSavedPercent: a stated share of labor or time saved, e.g. "cuts labor by 60%" is 60.
-- specs: only these names: ${SPEC_NAMES.join(", ")}.`;
+- specs: only these names: ${SPEC_NAMES.join(", ")}.
+- imageUrl: the URL of a photo of this robot exactly as it appears in the page text (an image
+  link), or null. Not a logo or icon.`;
 
 const Evidence = z.object({ value: z.number().nullable(), unit: z.string().nullable(), quote: z.string().nullable() });
 const RobotPageSchema = z.object({
@@ -341,6 +336,7 @@ const RobotPageSchema = z.object({
   laborSavedPercent: Evidence,
   specs: z.array(z.object({ name: z.enum(SPEC_NAMES), value: z.number(), unit: z.string(), quote: z.string() })),
   environments: z.array(z.string()),
+  imageUrl: z.string().nullable(),
 });
 
 export const extractPages = internalAction({
@@ -531,6 +527,87 @@ export const matchRobots = internalAction({
         status: latest && latest.picks.length > 0 ? "done" : "failed",
         error: classify(err).error,
       });
+    }
+  },
+});
+
+// ---------- 6. Workflow breakdown: split a job into steps ----------
+
+const WORKFLOW_PROMPT = `A small trade business (lawn care, cleaning, pest control, construction,
+facilities and similar) describes a job. Split it into the 3 to 7 steps a crew actually does,
+in order, so the owner can see which steps a robot could take over.
+For each step:
+- name: 2 to 6 plain words, e.g. "Mow the lawn", "Load the trailer", "Talk to the customer".
+- sharePct: your best guess of the share of the crew's time on this job the step takes. Use
+  the operator's own numbers if they gave any. The shares should add up to about 100.
+- verdict: "automatable" if robots that do this step are sold today (mowing, floor scrubbing,
+  window or solar panel cleaning, pallet moving, spraying, inspection drones and similar);
+  "possible" if a robot could plausibly do it but few or no products exist; "person" if it
+  needs judgment, talking to people, driving on public roads, or fine handwork no robot does.
+- why: one short sentence explaining the verdict, in plain words.
+- task: 1 to 3 lowercase words naming the step's job for a robot search. If one of knownTasks
+  fits, use it exactly.
+- searchPhrase: 2 to 5 words a buyer would type into Google to find robots for this step.
+Also pull out, for the whole job:
+- annualLaborCost: what they spend per year on this job's labor in USD, and budget: what they
+  would pay per robot in USD. Only if the operator wrote the number; otherwise null. Never
+  estimate or calculate.
+- requirements: measurable needs the operator stated, using only these names:
+  ${SPEC_NAMES.join(", ")}. Give value and unit exactly as written; don't convert.
+  op is atLeast for minimums and atMost for maximums. mandatory is true unless they said
+  it's a nice-to-have.`;
+
+const WorkflowSchema = z.object({
+  steps: z.array(
+    z.object({
+      name: z.string(),
+      sharePct: z.number(),
+      verdict: z.enum(["automatable", "possible", "person"]),
+      why: z.string(),
+      task: z.string(),
+      searchPhrase: z.string(),
+    }),
+  ),
+  annualLaborCost: z.number().nullable(),
+  budget: z.number().nullable(),
+  requirements: IntentSchema.shape.requirements,
+});
+
+export const splitWorkflow = internalAction({
+  args: { workflowId: v.id("workflows") },
+  handler: async (ctx, { workflowId }) => {
+    const wf = await ctx.runQuery(internal.agent.getWorkflow, { workflowId });
+    if (!wf) return;
+    const started = Date.now();
+    try {
+      const context = await ctx.runQuery(internal.agent.requestContext, { requestId: wf.requestId });
+      const knownTasks = await ctx.runQuery(internal.robots.knownTasks, {});
+      const res = await client().messages.parse({
+        model: FAST_MODEL,
+        max_tokens: 4000,
+        output_config: { effort: "low", format: zodOutputFormat(WorkflowSchema) },
+        system: [{ type: "text", text: WORKFLOW_PROMPT, cache_control: { type: "ephemeral" } }],
+        messages: [{ role: "user", content: JSON.stringify({ knownTasks, ...context }) }],
+      });
+      const out = res.parsed_output;
+      if (!out || out.steps.length === 0) throw new Error(`No steps returned (stop_reason: ${res.stop_reason})`);
+      const steps = cleanSteps(out.steps);
+      // Same checks as a single match: only numbers the operator wrote survive.
+      const clean = cleanIntent(
+        { task: steps[0].task, searchPhrase: steps[0].searchPhrase, annualTaskCost: out.annualLaborCost, budget: out.budget, requirements: out.requirements },
+        JSON.stringify(context),
+        context.request.cost?.currentAnnualCost,
+      );
+      await ctx.runMutation(internal.agent.saveWorkflowSteps, {
+        workflowId, steps, laborCost: clean.annualTaskCost, budget: clean.budget, requirements: clean.requirements,
+      });
+      await ctx.runMutation(internal.agent.logRun, {
+        route: "workflow", ms: Date.now() - started, ok: true,
+        inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
+      });
+    } catch (err) {
+      await logFailure(ctx, "workflow", err);
+      await ctx.runMutation(internal.agent.failWorkflow, { workflowId, error: classify(err).error });
     }
   },
 });

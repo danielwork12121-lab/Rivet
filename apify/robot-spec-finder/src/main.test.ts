@@ -26,7 +26,8 @@ vi.mock("@anthropic-ai/sdk/helpers/zod", () => ({ zodOutputFormat: () => ({}) })
 
 const longText = "It mows steep slopes and runs four hours. ".repeat(12); // over the 200-character floor
 const crawled = [
-  { url: "https://acme.example/x1", markdown: longText, metadata: { title: "Acme X1" } },
+  { url: "https://acme.example/x1", markdown: longText,
+    metadata: { title: "Acme X1", openGraph: [{ property: "og:image", content: "/img/x1.jpg" }] } },
   { url: "https://acme.example/text-only", text: longText },
   { url: "https://blocked.example", markdown: "403 Forbidden" }, // too short: dropped
   { markdown: longText }, // no url: dropped
@@ -47,15 +48,15 @@ const run = async (input: Record<string, unknown>) => {
 };
 
 describe("crawlOnly", () => {
-  it("needs no Anthropic key, returns { url, title, markdown } rows, and never creates a Claude client", async () => {
+  it("needs no Anthropic key, returns { url, title, markdown, imageUrl } rows, and never creates a Claude client", async () => {
     await run({ crawlOnly: true });
     expect(actor.fail).not.toHaveBeenCalled();
     expect(anthropicCtor).not.toHaveBeenCalled();
     expect(parse).not.toHaveBeenCalled();
     expect(actor.pushData).toHaveBeenCalledTimes(1);
     expect(actor.pushData.mock.calls[0][0]).toEqual([
-      { url: "https://acme.example/x1", title: "Acme X1", markdown: longText },
-      { url: "https://acme.example/text-only", title: "", markdown: longText },
+      { url: "https://acme.example/x1", title: "Acme X1", markdown: longText, imageUrl: "https://acme.example/img/x1.jpg" },
+      { url: "https://acme.example/text-only", title: "", markdown: longText, imageUrl: null },
     ]);
     expect(actor.exit).toHaveBeenCalledWith(expect.stringMatching(/Crawled 2 of 1 pages.*Nothing was sent to an AI model/));
   });

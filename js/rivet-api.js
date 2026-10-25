@@ -310,6 +310,18 @@
   function setTaskCost(id, annualTaskCost) {
     return call("mutation", "agent:setTaskCost", { requestId: id, annualTaskCost: annualTaskCost });
   }
+  // Workflow breakdown: planWorkflow is one paid run (split the job into steps, search the biggest
+  // robot-ready ones); latestWorkflow is free, poll it. Sliders and the labor cost re-rank in code
+  // (free); checkStep is a paid search for one step that wasn't searched up front.
+  function planWorkflow(id) { return call("mutation", "agent:planWorkflow", { requestId: id }); }
+  function latestWorkflow(id) { return call("query", "agent:latestWorkflow", { requestId: id }); }
+  function setStepShare(id, step, sharePct) {
+    return call("mutation", "agent:setStepShare", { requestId: id, step: step, sharePct: sharePct });
+  }
+  function setWorkflowLabor(id, laborCost) {
+    return call("mutation", "agent:setWorkflowLabor", { requestId: id, laborCost: laborCost });
+  }
+  function checkStep(id, step) { return call("mutation", "agent:checkStep", { requestId: id, step: step }); }
   function getDraft(id) { return call("query", "requests:getDraft", { id: id }); }
   function listMyRequests(limit) { return call("query", "requests:listMine", { limit: limit || 20 }); }
   function claimLegacyDraft(id, token) { return call("mutation", "requests:claimLegacyDraft", { id: id, clientToken: token }); }
@@ -411,6 +423,11 @@
     findRobots: findRobots,
     latestMatch: latestMatch,
     setTaskCost: setTaskCost,
+    planWorkflow: planWorkflow,
+    latestWorkflow: latestWorkflow,
+    setStepShare: setStepShare,
+    setWorkflowLabor: setWorkflowLabor,
+    checkStep: checkStep,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadCurrent: loadCurrent,

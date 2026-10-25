@@ -41,3 +41,18 @@ The verified side is the robots' vendor-page specs (`fitSources`: `vendor_spec`,
   exactly as `savedRequirements` and `latestMatch` return them. `state` is `no_result`, `stale` (inputs
   changed since the last run: run matching again) or `current`.
 - All of them are owner-only (`loadOwnedDraft`). Bad input is rejected before anything is written.
+
+## Workflow breakdown (Find a solution page)
+
+`agent:planWorkflow` splits the Client's job into 3 to 7 steps with the fast model (one unit of AI
+budget), stores them in the `workflows` table, and starts one match for each of the biggest steps a
+robot might do (at most 3; never "needs a person" steps). Each step's match is preset with the
+step's search phrase and its share of the job's yearly labor, so `ai.matchRobots` skips its read.
+
+- `agent:latestWorkflow` returns every step with a verdict decided in code (`lib/workflow.ts`):
+  `today` (a robot fits), `possible` (bounty candidate), `person`, `checking`, `unchecked`, `failed`,
+  plus each step's robots and the combined yearly savings.
+- `agent:setStepShare` (a slider) and `agent:setWorkflowLabor` re-rank in plain code: no AI, no budget.
+- `agent:checkStep` searches a step that wasn't searched up front (one unit of budget).
+- Robot photos (`robots.imageUrl`) come from the vendor page only: a photo link in the page text,
+  else its Product JSON-LD image or `og:image` (`lib/images.ts`).
