@@ -1,8 +1,9 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { internalMutation, internalQuery, query, type MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { normalizeTask } from "./lib/decide";
-import { budgetBlock } from "./lib/aiBudget";
+import { AI_BLOCK_MESSAGES, budgetBlock } from "./lib/aiBudget";
 import { requireClient } from "./lib/auth";
 
 // Database side of the web search for robots. The Apify calls live in scrape.ts
@@ -16,6 +17,12 @@ const STUCK_MS = 15 * 60 * 1000; // a search older than this has crashed
 // budget charged to the account whose match asked for it (lib/aiBudget.ts). The check and the
 // usage row are in this one mutation, so concurrent matches can't both take the last unit.
 const discoveryEnabled = () => process.env.DISCOVERY_ENABLED === "true" && !!process.env.APIFY_TOKEN;
+const DISCOVERY_OFF = "Web search is turned off on this backend (set DISCOVERY_ENABLED=true and APIFY_TOKEN).";
+
+// Tells the match why it went on without a web search, so the page can say so.
+async function noteSkipped(ctx: MutationCtx, matchId: Id<"matches"> | undefined, note: string) {
+  if (matchId && (await ctx.db.get(matchId))) await ctx.db.patch(matchId, { searchNote: note });
+}
 
 // Starts a search for `task`, or joins the one already running.
 // Returns "run" (started), "wait" (joined a running one), "done" (searched recently) or
@@ -23,7 +30,10 @@ const discoveryEnabled = () => process.env.DISCOVERY_ENABLED === "true" && !!pro
 export const start = internalMutation({
   args: { task: v.string(), searchPhrase: v.string(), matchId: v.optional(v.id("matches")) },
   handler: async (ctx, { task, searchPhrase, matchId }) => {
-    if (!discoveryEnabled()) return "blocked" as const;
+    if (!discoveryEnabled()) {
+      await noteSkipped(ctx, matchId, DISCOVERY_OFF);
+      return "blocked" as const;
+    }
     const key = normalizeTask(task);
     const existing = await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", key)).first();
     const waiting = matchId ? [matchId] : [];
@@ -34,15 +44,21 @@ export const start = internalMutation({
         await ctx.db.patch(existing._id, { waitingMatches: [...existing.waitingMatches, ...waiting] });
         return "wait";
       }
-      // Only a search that found robots counts; a failed or empty one is retried.
-      const found = existing.status === "done" && existing.robotsFound > 0;
+      // Only a search whose robots are still filed under this task counts; a failed or empty one
+      // is retried. (A robot page found again under another task name moves to that task.)
+      const found = existing.status === "done" && existing.robotsFound > 0 &&
+        (await ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", key)).collect()).some((r) => !r.sample);
       if (found && Date.now() - lastTouched < RECENT_MS) return "done";
     }
     // A new, paid search: charge it to the account behind the match, if there is one.
     const match = matchId ? await ctx.db.get(matchId) : null;
     const request = match ? await ctx.db.get(match.requestId) : null;
     const scope = { kind: "discovery" as const, ...(request?.ownerId ? { userId: request.ownerId } : {}) };
-    if (await budgetBlock(ctx, scope)) return "blocked" as const;
+    const block = await budgetBlock(ctx, scope);
+    if (block) {
+      await noteSkipped(ctx, matchId, `Web search skipped: ${AI_BLOCK_MESSAGES[block]}`);
+      return "blocked" as const;
+    }
     await ctx.db.insert("aiUsage", { kind: "discovery", ...(scope.userId ? { userId: scope.userId } : {}) });
     if (existing) await ctx.db.delete(existing._id); // stale or stuck: start over
     const discoveryId = await ctx.db.insert("discoveries", {

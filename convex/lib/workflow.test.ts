@@ -57,6 +57,7 @@ describe("stepVerdict", () => {
     expect(stepVerdict("automatable", done(2, "ask"))).toBe("today");
     expect(stepVerdict("automatable", done(2, "suggest_bounty"))).toBe("possible");
     expect(stepVerdict("automatable", done(0, "suggest_bounty"))).toBe("possible");
+    expect(stepVerdict("automatable", { ...done(0, "suggest_bounty"), searchSkipped: true })).toBe("skipped");
   });
 });
 

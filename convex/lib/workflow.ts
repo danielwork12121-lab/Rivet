@@ -12,7 +12,8 @@ export type AiVerdict = "automatable" | "possible" | "person";
 //   checking  a search is running
 //   unchecked not searched yet (only the biggest steps are searched up front)
 //   failed    the search hit an error
-export type StepVerdict = "today" | "possible" | "person" | "checking" | "unchecked" | "failed";
+//   skipped   no robots in the catalog and the web search didn't run (off, or a daily limit)
+export type StepVerdict = "today" | "possible" | "person" | "checking" | "unchecked" | "failed" | "skipped";
 
 export const MAX_STEPS = 7;
 export const SEARCH_CAP = 3; // searches started per breakdown
@@ -82,6 +83,7 @@ type MatchSummary = {
   status: "reading" | "searching" | "ranked" | "done" | "failed";
   pickCount: number;
   next: { kind: string } | null;
+  searchSkipped?: boolean;
 } | null;
 
 export function stepVerdict(aiVerdict: AiVerdict, match: MatchSummary): StepVerdict {
@@ -90,6 +92,7 @@ export function stepVerdict(aiVerdict: AiVerdict, match: MatchSummary): StepVerd
   if (match.status === "failed") return "failed";
   if (match.status !== "done") return "checking";
   if (match.pickCount > 0 && match.next?.kind !== "suggest_bounty") return "today";
+  if (match.pickCount === 0 && match.searchSkipped) return "skipped"; // unknown, not "no product"
   return "possible";
 }
 

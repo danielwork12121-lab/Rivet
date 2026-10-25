@@ -457,6 +457,7 @@ export const latestMatch = query({
       next: match.next ?? null,
       error: match.error ?? null,
       msToRanked: match.msToRanked ?? null,
+      searchNote: match.searchNote ?? null,
       picks: robots,
       search: search && { status: search.status, sitesFound: search.urls.length },
     };
@@ -466,6 +467,13 @@ export const latestMatch = query({
 export const getMatch = internalQuery({
   args: { matchId: v.id("matches") },
   handler: async (ctx, { matchId }) => ctx.db.get(matchId),
+});
+
+export const noteSearch = internalMutation({
+  args: { matchId: v.id("matches"), note: v.string() },
+  handler: async (ctx, { matchId, note }) => {
+    await ctx.db.patch(matchId, { searchNote: note });
+  },
 });
 
 export const patchMatch = internalMutation({
@@ -604,6 +612,7 @@ export const latestWorkflow = query({
       const picks = match ? await picksWithRobots(ctx, match.picks) : [];
       const verdict = stepVerdict(s.aiVerdict, match && {
         status: match.status, pickCount: match.picks.length, next: match.next ?? null,
+        searchSkipped: !!match.searchNote && match.searchNote.startsWith("Web search"),
       });
       const fits = picks.filter((p) => !p.fit.some((f) => f.mandatory && f.status === "misses"));
       const savings = fits.map((p) => p.yearlyNetSavings).filter((n): n is number => n !== null);
@@ -616,6 +625,7 @@ export const latestWorkflow = query({
         verdict,
         annualCost: stepCost(wf.laborCost, s.sharePct),
         matchStatus: match?.status ?? null,
+        searchNote: match?.searchNote ?? null,
         next: match?.next ?? null,
         search: search && { status: search.status, sitesFound: search.urls.length },
         picks,
@@ -676,7 +686,8 @@ export const checkStep = mutation({
     const s = wf.steps[step];
     if (!s) throw new ConvexError("No such step.");
     const existing = s.matchId ? await ctx.db.get(s.matchId) : null;
-    if (existing && existing.status !== "failed") return existing._id;
+    const skipped = existing?.status === "done" && existing.picks.length === 0 && !!existing.searchNote?.startsWith("Web search");
+    if (existing && existing.status !== "failed" && !skipped) return existing._id;
     await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
     const matchId = await startStepMatch(ctx, wf, step);
     await ctx.db.patch(wf._id, { steps: wf.steps.map((x, k) => (k === step ? { ...x, matchId } : x)) });

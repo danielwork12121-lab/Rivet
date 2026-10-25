@@ -290,6 +290,8 @@ export default defineSchema({
     // Set when this match searches one step of a workflow breakdown (workflows table).
     workflowId: v.optional(v.id("workflows")),
     step: v.optional(v.number()),
+    // Why this match has no fresh web results: search off, a daily limit, or a search that found none.
+    searchNote: v.optional(v.string()),
   }).index("by_request", ["requestId"]),
 
   // A job split into steps (agent:planWorkflow): what share of the week each step takes, and

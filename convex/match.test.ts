@@ -158,8 +158,20 @@ describe("matchRobots (real action, stubbed transport)", () => {
     await insert("done", 0);
     expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("run");
     await clear();
+    // Its robots were since filed under another task name: nothing to show, so search again.
     await insert("done", 3);
+    expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("run");
+    await clear();
+    await insert("done", 3);
+    await addRobot(t, "found-mower", 30);
     expect(await t.mutation(internal.discovery.start, { task: "mowing", searchPhrase: "x" })).toBe("done");
+  });
+
+  it("tells the match why the web search was skipped", async () => {
+    const { t, matchId, latest } = await setup();
+    stubClaude(intentFixture);
+    await t.action(internal.ai.matchRobots, { matchId }); // DISCOVERY_ENABLED is not set
+    expect((await latest())!.searchNote).toMatch(/Web search is turned off/);
   });
 
   it("suggests a bounty listing the gap when no robot meets a must-have", async () => {
