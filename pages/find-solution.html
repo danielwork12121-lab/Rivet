@@ -426,21 +426,25 @@ document.addEventListener('DOMContentLoaded', async function() {
   function __rivetB64ToStr(b64) {
     try { return decodeURIComponent(escape(atob(b64))); } catch (e) { return ''; }
   }
-  function __rivetVideoContentBox(videoEl) {
-    var cw = videoEl.clientWidth, ch = videoEl.clientHeight;
-    var iw = videoEl.videoWidth, ih = videoEl.videoHeight;
+  function __rivetVideoContentBox(videoEl, wrapEl) {
+    if (!videoEl || !wrapEl) return null;
+    var vr = videoEl.getBoundingClientRect(), wr = wrapEl.getBoundingClientRect();
+    var cw = vr.width, ch = vr.height;
     if (!cw || !ch) return null;
-    if (!iw || !ih) return { left: 0, top: 0, width: cw, height: ch };
+    var outerLeft = vr.left - wr.left, outerTop = vr.top - wr.top;
+    var iw = videoEl.videoWidth, ih = videoEl.videoHeight;
+    if (!iw || !ih) return { left: outerLeft, top: outerTop, width: cw, height: ch };
     var videoRatio = iw / ih, boxRatio = cw / ch;
     var width, height, left, top;
     if (boxRatio > videoRatio) { height = ch; width = ch * videoRatio; top = 0; left = (cw - width) / 2; }
     else { width = cw; height = cw / videoRatio; left = 0; top = (ch - height) / 2; }
-    return { left: left, top: top, width: width, height: height };
+    return { left: outerLeft + left, top: outerTop + top, width: width, height: height };
   }
   function __rivetRenderVideoOverlay(videoEl) {
     var overlay = document.getElementById('video-box-overlay');
+    var wrap = document.getElementById('video-preview-wrap');
     if (!overlay || !videoEl) return;
-    var box = __rivetVideoContentBox(videoEl);
+    var box = __rivetVideoContentBox(videoEl, wrap);
     if (box) {
       overlay.style.left = box.left + 'px';
       overlay.style.top = box.top + 'px';
