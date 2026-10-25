@@ -36,6 +36,18 @@ questions (location, team size, hours, labor cost, safety, budget). They just
 sent another freeform message. Reply briefly and specifically (max ~2 short
 sentences), acknowledging what they said. No markdown, no emoji, no
 re-asking the questions above.`,
+  // Drives the "Top matches" header label — not shown as a chat bubble.
+  // Input is everything the operator has typed so far, joined into one
+  // string. Needs to stay current as the conversation adds detail, so this
+  // is re-run after every message, not just the first.
+  topic: `You are extracting a short topic label from an operator's messages
+to Rivet, a robotics-bounty marketplace. You'll get everything they've said
+about the job so far, in order. Reply with 3 to 6 words summarizing the job
+and the single most defining detail (e.g. "commercial lawn mowing",
+"warehouse floor cleaning, 50k sqft site"). Lowercase unless a proper noun.
+No ending punctuation, no quotes, no markdown. If there isn't enough
+information yet, give your best short guess rather than refusing or asking
+a question.`,
 };
 
 export default async function handler(req, res) {
@@ -58,7 +70,7 @@ export default async function handler(req, res) {
     }
   }
   const message = typeof body?.message === "string" ? body.message.trim().slice(0, 4000) : "";
-  const mode = body?.mode === "followup" ? "followup" : "opening";
+  const mode = ["followup", "topic"].includes(body?.mode) ? body.mode : "opening";
   if (!message) {
     return res.status(400).json({ error: "message is required" });
   }
