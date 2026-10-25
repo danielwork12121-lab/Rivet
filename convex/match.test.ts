@@ -229,3 +229,15 @@ describe("extractPages (real action, stubbed transport)", () => {
     expect(await t.run((ctx) => ctx.db.get(discoveryId))).toMatchObject({ status: "done", robotsFound: 1 });
   });
 });
+
+describe("discovery.finish", () => {
+  it("tells waiting matches that the search failed, with the reason", async () => {
+    const { t, matchId, latest } = await setup();
+    const discoveryId = await t.run((ctx) => ctx.db.insert("discoveries", {
+      task: "mowing", searchPhrase: "x", status: "crawling", urls: [], robotsFound: 0, waitingMatches: [matchId],
+    }));
+    vi.useFakeTimers();
+    await t.mutation(internal.discovery.finish, { discoveryId, status: "failed", robotsFound: 0, error: "Apify POST /acts/x/runs failed: 400 invalid input" });
+    expect((await latest())!.searchNote).toBe("Web search failed: Apify POST /acts/x/runs failed: 400 invalid input");
+  });
+});

@@ -464,12 +464,6 @@ export const matchRobots = internalAction({
         }
       }
 
-      if (searched && robots.length === 0) {
-        await ctx.runMutation(internal.agent.noteSearch, {
-          matchId, note: `The web search for "${intent.task}" robots finished but found none on the pages it could read.`,
-        });
-      }
-
       // 3. Decision layer: plain code, milliseconds.
       const typed = { ...intent, requirements: intent.requirements.filter((r) => isSpecName(r.name)) as Requirement[] };
       const ranked = rankRobots(typed, robots.map((r) => ({ ...r, _id: r._id as string })));

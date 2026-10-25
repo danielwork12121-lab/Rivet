@@ -138,7 +138,12 @@ export const finish = internalMutation({
     const d = await ctx.db.get(discoveryId);
     if (!d) return;
     await ctx.db.patch(discoveryId, { ...result, waitingMatches: [], finishedAt: Date.now() });
+    // Tell each waiting match how the search went, so an empty result isn't read as "no product".
+    const note = result.status === "failed"
+      ? `Web search failed: ${(result.error ?? "unknown error").replace(/\s+/g, " ").slice(0, 200)}`
+      : result.robotsFound === 0 ? `The web search for "${d.task}" robots read the pages it found but none described a robot.` : null;
     for (const matchId of d.waitingMatches) {
+      if (note && (await ctx.db.get(matchId))) await ctx.db.patch(matchId, { searchNote: note });
       await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId, searched: true });
     }
   },

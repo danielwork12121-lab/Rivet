@@ -469,13 +469,6 @@ export const getMatch = internalQuery({
   handler: async (ctx, { matchId }) => ctx.db.get(matchId),
 });
 
-export const noteSearch = internalMutation({
-  args: { matchId: v.id("matches"), note: v.string() },
-  handler: async (ctx, { matchId, note }) => {
-    await ctx.db.patch(matchId, { searchNote: note });
-  },
-});
-
 export const patchMatch = internalMutation({
   args: {
     matchId: v.id("matches"),
@@ -612,7 +605,7 @@ export const latestWorkflow = query({
       const picks = match ? await picksWithRobots(ctx, match.picks) : [];
       const verdict = stepVerdict(s.aiVerdict, match && {
         status: match.status, pickCount: match.picks.length, next: match.next ?? null,
-        searchSkipped: !!match.searchNote && match.searchNote.startsWith("Web search"),
+        searchSkipped: !!match.searchNote && /^Web search (is turned off|skipped|failed)/.test(match.searchNote),
       });
       const fits = picks.filter((p) => !p.fit.some((f) => f.mandatory && f.status === "misses"));
       const savings = fits.map((p) => p.yearlyNetSavings).filter((n): n is number => n !== null);
@@ -686,7 +679,7 @@ export const checkStep = mutation({
     const s = wf.steps[step];
     if (!s) throw new ConvexError("No such step.");
     const existing = s.matchId ? await ctx.db.get(s.matchId) : null;
-    const skipped = existing?.status === "done" && existing.picks.length === 0 && !!existing.searchNote?.startsWith("Web search");
+    const skipped = existing?.status === "done" && existing.picks.length === 0 && /^Web search (is turned off|skipped|failed)/.test(existing.searchNote ?? "");
     if (existing && existing.status !== "failed" && !skipped) return existing._id;
     await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
     const matchId = await startStepMatch(ctx, wf, step);
