@@ -62,6 +62,138 @@ function round1(v) {
   return Math.round(v * 10) / 10;
 }
 
+// Two numbers count as "the same" if they're within a dollar or two, or
+// within relTol of each other -- small enough to catch a real typo or
+// transposition (the kind this feature is meant to catch), loose enough not
+// to flag honest cent-level rounding in a sheet.
+function approxEqual(a, b, relTol = 0.01, absTol = 2) {
+  if (typeof a !== "number" || typeof b !== "number" || isNaN(a) || isNaN(b)) return false;
+  const diff = Math.abs(a - b);
+  return diff <= absTol || diff <= relTol * Math.max(Math.abs(a), Math.abs(b));
+}
+
+// Groundedness (above) only asks "did this number appear in the sheet at
+// all". Reconciliation goes one step further: it checks whether a *stated*
+// figure is internally consistent with the other stated figures it's
+// supposed to add up from, the same way a careful bookkeeper would re-foot a
+// sheet before trusting it. When a stated figure doesn't reconcile, it's
+// treated the same way an ungrounded number is -- dropped and replaced with
+// the deterministically-computed value -- and the swap is recorded as a
+// correction so the operator can see exactly what changed and why. Claude
+// never does this arithmetic; it only supplies the stated figures being
+// checked.
+//
+// Returns { totals, corrections } where `totals` has the same shape
+// computeMargins expects (any inconsistent stated field replaced by its
+// derived value) and `corrections` is a list of { field, original,
+// corrected, reason }, oldest fix first.
+export function reconcileTotals(totals) {
+  const corrections = [];
+  const revenue = numOrNull(totals?.revenue);
+  const cogs = numOrNull(totals?.cogs);
+  const operatingExpenses = numOrNull(totals?.operatingExpenses);
+  let grossProfit = numOrNull(totals?.grossProfit);
+
+  const derivedGrossProfit = revenue !== null && cogs !== null ? revenue - cogs : null;
+  if (grossProfit !== null && derivedGrossProfit !== null && !approxEqual(grossProfit, derivedGrossProfit)) {
+    corrections.push({
+      field: "totals.grossProfit",
+      original: grossProfit,
+      corrected: derivedGrossProfit,
+      reason: "Stated gross profit didn't equal revenue − COGS on the sheet; corrected to revenue − COGS.",
+    });
+    grossProfit = derivedGrossProfit;
+  }
+
+  let netProfit = numOrNull(totals?.netProfit);
+  const effectiveGrossProfit = grossProfit !== null ? grossProfit : derivedGrossProfit;
+  const derivedNetProfit =
+    effectiveGrossProfit !== null && operatingExpenses !== null ? effectiveGrossProfit - operatingExpenses : null;
+  if (netProfit !== null && derivedNetProfit !== null && !approxEqual(netProfit, derivedNetProfit)) {
+    corrections.push({
+      field: "totals.netProfit",
+      original: netProfit,
+      corrected: derivedNetProfit,
+      reason: "Stated net profit didn't equal gross profit − operating expenses on the sheet; corrected to match.",
+    });
+    netProfit = derivedNetProfit;
+  }
+
+  return {
+    totals: { revenue, cogs, grossProfit, operatingExpenses, netProfit },
+    corrections,
+  };
+}
+
+// Same idea, one process at a time: a process's annual cost should equal
+// crewCount × peoplePerCrew × hoursPerWeek × weeksPerYear × hourlyLaborCost
+// whenever the sheet states (or implies) all five of those. When it's
+// stated but doesn't match, the computed figure wins and the swap is
+// logged; when it isn't stated at all, the computed figure fills it in
+// (also logged, so it's clear the number was derived, not read off the
+// sheet).
+export function reconcileProcess(process) {
+  const p = { ...process };
+  const corrections = [];
+  const { crewCount, peoplePerCrew, hoursPerWeek, weeksPerYear, hourlyLaborCost } = p;
+  const inputs = [crewCount, peoplePerCrew, hoursPerWeek, weeksPerYear, hourlyLaborCost];
+  const haveAllInputs = inputs.every((v) => typeof v === "number" && !isNaN(v));
+
+  if (haveAllInputs) {
+    const computed = Math.round(crewCount * peoplePerCrew * hoursPerWeek * weeksPerYear * hourlyLaborCost);
+    if (typeof p.annualCost === "number" && !approxEqual(p.annualCost, computed)) {
+      corrections.push({
+        field: `${p.name || "process"}.annualCost`,
+        original: p.annualCost,
+        corrected: computed,
+        reason: `Stated annual cost for "${p.name || "this process"}" didn't match crew size × hours/week × weeks/year × hourly rate; corrected to the computed figure.`,
+      });
+      p.annualCost = computed;
+    } else if (p.annualCost === null || p.annualCost === undefined) {
+      corrections.push({
+        field: `${p.name || "process"}.annualCost`,
+        original: null,
+        corrected: computed,
+        reason: `Annual cost wasn't stated directly for "${p.name || "this process"}"; derived from crew size × hours/week × weeks/year × hourly rate.`,
+      });
+      p.annualCost = computed;
+    }
+  }
+
+  return { process: p, corrections };
+}
+
+// The deliberately-simple, deterministic projection shown alongside a
+// corrected workbook: "if a robot took over the recommended process, what
+// happens to net profit?" Mirrors the same 70%-of-labor-cost savings
+// assumption pages/find-solution.html's own sample robot matching already
+// uses for the Chat/Video/Excel tabs (`labor * 0.7` there) -- one consistent
+// assumption across the app, rather than a second, different guess here.
+// Actual savings for a specific robot also net out that robot's running
+// cost, which this layer doesn't know (no robot has been picked yet); that
+// caveat is spelled out in the returned note.
+export const AUTOMATION_SAVINGS_RATE = 0.7;
+
+export function estimateAutomationImpact(process, totals) {
+  if (!process || typeof process.annualCost !== "number") return null;
+  const estimatedAnnualSavings = Math.round(process.annualCost * AUTOMATION_SAVINGS_RATE);
+  const currentNetProfit = numOrNull(totals?.netProfit);
+  const revenue = numOrNull(totals?.revenue);
+  const projectedNetProfit = currentNetProfit !== null ? currentNetProfit + estimatedAnnualSavings : null;
+  const projectedNetMarginPct = projectedNetProfit !== null && revenue ? round1((projectedNetProfit / revenue) * 100) : null;
+  return {
+    process: process.name || null,
+    currentAnnualCost: process.annualCost,
+    estimatedAnnualSavings,
+    savingsRateAssumed: AUTOMATION_SAVINGS_RATE,
+    currentNetProfit,
+    projectedNetProfit,
+    projectedNetMarginPct,
+    note:
+      "Assumes a robot could take over about 70% of this process's current labor cost -- the same assumption Rivet's own sample robot matching uses elsewhere in the app. Actual savings depend on which robot is chosen and its running cost; see the Chat/Video/Excel tabs for a specific robot's payback.",
+  };
+}
+
 // All percentage math lives here, as a plain function, so Claude never has
 // to compute a margin itself -- same rule convex/lib/roi.ts states for ROI.
 // Prefers a stated grossProfit/netProfit line; falls back to deriving one

@@ -10,12 +10,31 @@
 // function (Node.js runtime, auto-detected from this file's path under
 // /api), same shape as api/chat.js and api/analyze-video.js.
 //
+// A real operator's own sheet is allowed to have a few mistakes -- a typo'd
+// subtotal, a crew-cost line someone forgot to update. After grounding,
+// every stated figure is also *reconciled* (api/lib/financials.js's
+// reconcileTotals/reconcileProcess): checked against the other stated
+// figures it should add up from, and replaced with the computed value when
+// it doesn't. Every swap is logged in `extraction.corrections` and baked
+// into a downloadable, corrected .xlsx (api/lib/corrected-workbook.js),
+// which also carries a before/after net-profit projection for the
+// recommended process (estimateAutomationImpact).
+//
 // Env var required: ANTHROPIC_API_KEY (same key api/chat.js uses -- set in
 // Vercel -> Project Settings -> Environment Variables). Until it's set, this
 // returns 500 and the Excel Input tab shows a clear error; the upload
 // control still works either way.
 
-import { computeMargins, extractNumbers, groundFields, summarizeSheets } from "./lib/financials.js";
+import {
+  computeMargins,
+  estimateAutomationImpact,
+  extractNumbers,
+  groundFields,
+  reconcileProcess,
+  reconcileTotals,
+  summarizeSheets,
+} from "./lib/financials.js";
+import { buildCorrectedWorkbook } from "./lib/corrected-workbook.js";
 import { readWorkbookSheets } from "./lib/workbook.js";
 
 // Deep layer: careful reading of real financial figures, so this uses the
@@ -110,9 +129,13 @@ in the rows below -- never add, average, or otherwise calculate a number
 yourself, and never invent a figure the sheet doesn't contain. If a field
 isn't stated, leave it null: a downstream check discards any number you
 return that can't be matched back to these rows, so a guess only costs
-accuracy, never gains it. List every distinct job or crew that has its own
-labor cost as a process, and mark the ones that look like manual, repetitive,
-physical work a robot could plausibly take over.`;
+accuracy, never gains it. Read off every stated figure exactly as written,
+even one that looks like it might be a mistake (a subtotal that looks off, a
+crew cost that looks stale) -- a separate deterministic check reconciles
+those against each other afterward, so your job is to transcribe accurately,
+not to decide which figures look right. List every distinct job or crew that
+has its own labor cost as a process, and mark the ones that look like
+manual, repetitive, physical work a robot could plausibly take over.`;
 
 function errorRes(res, status, error, detail) {
   return res.status(status).json(detail ? { error, detail } : { error });
@@ -223,19 +246,37 @@ export default async function handler(req, res) {
       };
     });
 
-    const totals = computeMargins(groundedTotalsWrapper.totals);
-    const recommendedProcess =
-      groundedProcesses.find((p) => p.name === raw.recommendedProcess)?.name ||
-      groundedProcesses.find((p) => p.automationCandidate)?.name ||
-      groundedProcesses[0]?.name ||
+    // Grounded doesn't mean consistent -- a stated figure can still fail to
+    // add up against the sheet's own other figures (a stale subtotal, a
+    // crew-cost line nobody updated). Reconcile every stated figure against
+    // what it should compute to, swap in the computed value where it
+    // doesn't match, and keep a plain log of every swap.
+    const { totals: reconciledTotalsInput, corrections: totalsCorrections } = reconcileTotals(groundedTotalsWrapper.totals);
+    const totals = computeMargins(reconciledTotalsInput);
+
+    const corrections = [...totalsCorrections];
+    const reconciledProcesses = groundedProcesses.map((p) => {
+      const { process, corrections: processCorrections } = reconcileProcess(p);
+      corrections.push(...processCorrections);
+      return process;
+    });
+
+    const recommendedProcessName =
+      reconciledProcesses.find((p) => p.name === raw.recommendedProcess)?.name ||
+      reconciledProcesses.find((p) => p.automationCandidate)?.name ||
+      reconciledProcesses[0]?.name ||
       null;
+    const recommendedProcess = reconciledProcesses.find((p) => p.name === recommendedProcessName) || null;
+    const impact = estimateAutomationImpact(recommendedProcess, totals);
 
     const extraction = {
       companyName: typeof raw.companyName === "string" && raw.companyName ? raw.companyName.slice(0, 200) : null,
       currency: typeof raw.currency === "string" && raw.currency ? raw.currency.toUpperCase().slice(0, 3) : "USD",
       totals,
-      processes: groundedProcesses,
-      recommendedProcess,
+      processes: reconciledProcesses,
+      recommendedProcess: recommendedProcessName,
+      corrections,
+      impact,
       followUpQuestions: Array.isArray(raw.followUpQuestions)
         ? raw.followUpQuestions.slice(0, 3).map((q) => String(q).slice(0, 300))
         : [],
@@ -243,7 +284,22 @@ export default async function handler(req, res) {
       sheetsRead: sheets.map((s) => s.name),
     };
 
-    return res.status(200).json({ extraction });
+    let correctedWorkbookBase64 = null;
+    try {
+      const correctedBuf = await buildCorrectedWorkbook({ extraction, corrections, impact, sourceFileName: fileName });
+      correctedWorkbookBase64 = correctedBuf.toString("base64");
+    } catch {
+      // Best-effort: the extraction itself is still fully usable without the
+      // downloadable file, so a workbook-generation failure doesn't fail the request.
+      correctedWorkbookBase64 = null;
+    }
+
+    return res.status(200).json({
+      extraction,
+      correctedWorkbook: correctedWorkbookBase64
+        ? { fileBase64: correctedWorkbookBase64, fileName: `corrected-${fileName.replace(/\.(xlsx|csv)$/i, "")}.xlsx` }
+        : null,
+    });
   } catch (err) {
     const timedOut = err?.name === "AbortError";
     return errorRes(res, timedOut ? 504 : 500, timedOut ? "Request timed out" : "Request failed");
