@@ -10,6 +10,7 @@ import { pickUrls, searchQueries } from "./lib/discovery";
 import { normalizeTask } from "./lib/decide";
 import { callActor, datasetItems, getRun, isRunning, startActor } from "./lib/apify";
 import { robotFromActorRow, type ActorRow } from "./lib/actorRows";
+import { pageImage, type CrawledPage } from "./lib/images";
 
 const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets at most 4
 
@@ -100,7 +101,7 @@ async function crawlAndExtract(ctx: ActionCtx, discoveryId: Id<"discoveries">, u
   await ctx.scheduler.runAfter(0, internal.ai.extractPages, { discoveryId });
 }
 
-type PageItem = { url?: string; markdown?: string; text?: string; title?: string; metadata?: { title?: string } };
+type PageItem = CrawledPage & { title?: string; metadata?: CrawledPage["metadata"] & { title?: string } };
 
 // Stores crawled pages for ai.extractPages. Returns how many were usable.
 async function savePages(ctx: ActionCtx, discoveryId: Id<"discoveries">, items: unknown[]): Promise<number> {
@@ -110,6 +111,7 @@ async function savePages(ctx: ActionCtx, discoveryId: Id<"discoveries">, items: 
     if (!item.url || markdown.length < 200) continue; // blocked or empty pages
     await ctx.runMutation(internal.discovery.savePage, {
       discoveryId, url: item.url, title: item.title ?? item.metadata?.title ?? "", markdown: markdown.slice(0, 200_000),
+      ...(pageImage(item) ? { imageUrl: pageImage(item)! } : {}),
     });
     saved++;
   }

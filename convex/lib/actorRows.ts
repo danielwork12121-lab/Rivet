@@ -13,6 +13,7 @@ export type ActorRow = {
   estimates?: string | null;
   environments?: string | null;
   specs?: { name: string; value: number; quote: string; sourceUrl: string }[];
+  imageUrl?: string | null;
 };
 
 export function robotFromActorRow(row: ActorRow, task: string) {
@@ -34,5 +35,6 @@ export function robotFromActorRow(row: ActorRow, task: string) {
     environments: row.environments ? row.environments.split(", ") : [],
     specs: (row.specs ?? []).map(({ name, value, quote, sourceUrl }) => ({ name, value, quote, sourceUrl })),
     assumptions,
+    ...(row.imageUrl ? { imageUrl: row.imageUrl } : {}),
   };
 }

@@ -4,8 +4,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { loadOwnedDraft, withoutToken } from "./lib/drafts";
 import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./lib/aiBudget";
-import { intentInfo, matchNext, matchPick } from "./schema";
+import { intentInfo, matchNext, matchPick, workflowStep } from "./schema";
 import { dataSourceOf } from "./matching";
+import { nextAction, rankRobots, type Requirement } from "./lib/decide";
+import { isSpecName } from "./lib/specs";
+import { numbersIn } from "./lib/verify";
+import { stepCost, stepVerdict, stepsToSearch, workflowSummary } from "./lib/workflow";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -365,7 +369,7 @@ async function latestAgentMatch(ctx: QueryCtx, requestId: Id<"operatorRequests">
     .withIndex("by_request", (q) => q.eq("requestId", requestId))
     .order("desc")
     .take(50);
-  return rows.find((m) => m.engine !== "rules") ?? null;
+  return rows.find((m) => m.engine !== "rules" && m.workflowId === undefined) ?? null;
 }
 
 // Starts a paid run, or (with reuse) returns the one still in progress so repeated clicks never
@@ -414,6 +418,26 @@ export const setTaskCost = mutation({
   },
 });
 
+// A match's picks with each robot's details and source, for the page.
+async function picksWithRobots(ctx: QueryCtx, picks: Doc<"matches">["picks"]) {
+  const robots = [];
+  for (const p of picks) {
+    const r = await ctx.db.get(p.robotId);
+    if (!r) continue;
+    robots.push({
+      ...p,
+      name: r.name, vendor: r.vendor, url: r.url, sample: r.sample,
+      price: r.priceStatus === "quote_only" ? null : r.price,
+      yearlyOpex: r.priceStatus === "quote_only" ? null : r.yearlyOpex,
+      specs: r.specs ?? [],
+      fetchedAt: r.fetchedAt ?? null,
+      dataSource: dataSourceOf(r),
+      imageUrl: r.imageUrl ?? null,
+    });
+  }
+  return robots;
+}
+
 // Everything the page needs to show the latest match, with each robot's details
 // and sources, and the web search's progress while one is running.
 export const latestMatch = query({
@@ -422,20 +446,7 @@ export const latestMatch = query({
     await loadOwnedDraft(ctx, requestId);
     const match = await latestAgentMatch(ctx, requestId);
     if (!match) return null;
-    const robots = [];
-    for (const p of match.picks) {
-      const r = await ctx.db.get(p.robotId);
-      if (!r) continue;
-      robots.push({
-        ...p,
-        name: r.name, vendor: r.vendor, url: r.url, sample: r.sample,
-        price: r.priceStatus === "quote_only" ? null : r.price,
-        yearlyOpex: r.priceStatus === "quote_only" ? null : r.yearlyOpex,
-        specs: r.specs ?? [],
-        fetchedAt: r.fetchedAt ?? null,
-        dataSource: dataSourceOf(r),
-      });
-    }
+    const robots = await picksWithRobots(ctx, match.picks);
     const search = match.intent && match.status === "searching"
       ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
       : null;
@@ -471,5 +482,204 @@ export const patchMatch = internalMutation({
   },
   handler: async (ctx, { matchId, ...patch }) => {
     await ctx.db.patch(matchId, patch);
+  },
+});
+
+// ---------- 5. Workflow breakdown: split the job into steps, search the robot-ready ones ----------
+// One paid run (one unit of AI budget) splits the job with the fast model and searches up to
+// SEARCH_CAP steps. Moving a step's slider or giving the job's labor cost re-ranks in plain code
+// (no AI, no budget); "Check this step" on an unsearched step is a new paid search.
+
+async function latestWorkflowRow(ctx: QueryCtx, requestId: Id<"operatorRequests">) {
+  return await ctx.db.query("workflows").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").first();
+}
+
+// Starts the search for one step: a match whose intent is already known, so matchRobots skips
+// its read and goes straight to the catalog (or a web search) and ranking.
+async function startStepMatch(ctx: MutationCtx, wf: Doc<"workflows">, step: number) {
+  const s = wf.steps[step];
+  const matchId = await ctx.db.insert("matches", {
+    requestId: wf.requestId, status: "reading", picks: [], engine: "agent", workflowId: wf._id, step,
+    intent: {
+      task: s.task, searchPhrase: s.searchPhrase,
+      annualTaskCost: stepCost(wf.laborCost, s.sharePct), budget: wf.budget, requirements: wf.requirements,
+    },
+  });
+  await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
+  return matchId;
+}
+
+// Re-ranks a step's robots for a new yearly cost. Plain code; explanations are kept unless they
+// quote a money figure or month count that is no longer true.
+async function rerankStep(ctx: MutationCtx, matchId: Id<"matches">, annualTaskCost: number | null) {
+  const match = await ctx.db.get(matchId);
+  if (!match?.intent) return;
+  const intent = { ...match.intent, annualTaskCost };
+  if (match.status !== "done" && match.status !== "ranked") {
+    await ctx.db.patch(matchId, { intent }); // a running search ranks with this cost when it finishes
+    return;
+  }
+  const robots = (await ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", intent.task)).collect())
+    .filter((r) => !r.sample);
+  const typed = { ...intent, requirements: intent.requirements.filter((r) => isSpecName(r.name)) as Requirement[] };
+  const ranked = rankRobots(typed, robots.map((r) => ({ ...r, _id: r._id as string })));
+  const byId = new Map(robots.map((r) => [r._id as string, r]));
+  const oldReasons = new Map(match.picks.map((p) => [p.robotId as string, p.reason]));
+  const picks = ranked.map((p) => {
+    const r = byId.get(p.robotId)!;
+    const allowed = new Set(
+      [r.priceStatus === "quote_only" ? null : r.price, p.paybackMonths, p.yearlyNetSavings, p.breakEvenAnnualCost, annualTaskCost, intent.budget]
+        .filter((n) => n !== null && n !== undefined).map(String),
+    );
+    const reason = oldReasons.get(p.robotId);
+    const keep = reason && numbersIn(reason).every((n) => allowed.has(n));
+    return { ...p, robotId: p.robotId as Id<"robots">, ...(keep ? { reason } : {}) };
+  });
+  await ctx.db.patch(matchId, { intent, picks, next: nextAction(typed, ranked) });
+}
+
+// "Break this job down": splits the job into steps and searches the biggest robot-ready ones.
+export const planWorkflow = mutation({
+  args: owner,
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
+    if (!matchEnabled()) throw new ConvexError(MATCH_OFF);
+    const latest = await latestWorkflowRow(ctx, requestId);
+    if (latest && latest.status === "splitting" && Date.now() - latest._creationTime < STUCK_JOB_MS) return latest._id;
+    await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
+    const workflowId = await ctx.db.insert("workflows", {
+      requestId, status: "splitting", steps: [], laborCost: request.cost?.currentAnnualCost ?? null,
+      budget: null, requirements: [],
+    });
+    await ctx.scheduler.runAfter(0, internal.ai.splitWorkflow, { workflowId });
+    return workflowId;
+  },
+});
+
+export const getWorkflow = internalQuery({
+  args: { workflowId: v.id("workflows") },
+  handler: async (ctx, { workflowId }) => ctx.db.get(workflowId),
+});
+
+// Saves the AI's steps (already cleaned by lib/workflow.ts) and starts the searches.
+export const saveWorkflowSteps = internalMutation({
+  args: {
+    workflowId: v.id("workflows"),
+    steps: v.array(workflowStep),
+    laborCost: v.union(v.number(), v.null()),
+    budget: v.union(v.number(), v.null()),
+    requirements: intentInfo.fields.requirements,
+  },
+  handler: async (ctx, { workflowId, steps, laborCost, budget, requirements }) => {
+    const wf = await ctx.db.get(workflowId);
+    if (!wf) return;
+    await ctx.db.patch(workflowId, { status: "ready", steps, laborCost: wf.laborCost ?? laborCost, budget, requirements });
+    let current = (await ctx.db.get(workflowId))!;
+    for (const i of stepsToSearch(steps)) {
+      const matchId = await startStepMatch(ctx, current, i);
+      const next = current.steps.map((s, k) => (k === i ? { ...s, matchId } : s));
+      await ctx.db.patch(workflowId, { steps: next });
+      current = { ...current, steps: next };
+    }
+  },
+});
+
+export const failWorkflow = internalMutation({
+  args: { workflowId: v.id("workflows"), error: v.string() },
+  handler: async (ctx, { workflowId, error }) => {
+    await ctx.db.patch(workflowId, { status: "failed", error });
+  },
+});
+
+// The latest breakdown with each step's verdict (decided here, in code), its robots and the totals.
+export const latestWorkflow = query({
+  args: owner,
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
+    const wf = await latestWorkflowRow(ctx, requestId);
+    if (!wf) return null;
+    const steps = [];
+    for (const [index, s] of wf.steps.entries()) {
+      const match = s.matchId ? await ctx.db.get(s.matchId) : null;
+      const picks = match ? await picksWithRobots(ctx, match.picks) : [];
+      const verdict = stepVerdict(s.aiVerdict, match && {
+        status: match.status, pickCount: match.picks.length, next: match.next ?? null,
+      });
+      const fits = picks.filter((p) => !p.fit.some((f) => f.mandatory && f.status === "misses"));
+      const savings = fits.map((p) => p.yearlyNetSavings).filter((n): n is number => n !== null);
+      const paybacks = fits.map((p) => p.paybackMonths).filter((n): n is number => n !== null);
+      const search = match?.status === "searching" && match.intent
+        ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
+        : null;
+      steps.push({
+        index, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
+        verdict,
+        annualCost: stepCost(wf.laborCost, s.sharePct),
+        matchStatus: match?.status ?? null,
+        next: match?.next ?? null,
+        search: search && { status: search.status, sitesFound: search.urls.length },
+        picks,
+        bestSavings: savings.length ? Math.max(...savings) : null,
+        bestPaybackMonths: paybacks.length ? Math.min(...paybacks) : null,
+      });
+    }
+    return {
+      _id: wf._id, status: wf.status, error: wf.error ?? null, laborCost: wf.laborCost,
+      steps, summary: workflowSummary(steps),
+    };
+  },
+});
+
+async function ownedWorkflow(ctx: MutationCtx, requestId: Id<"operatorRequests">) {
+  const request = await loadOwnedDraft(ctx, requestId);
+  const wf = await latestWorkflowRow(ctx, requestId);
+  if (!wf || wf.status !== "ready") throw new ConvexError("Break the job down first.");
+  return { request, wf };
+}
+
+// The Client moves a step's slider: saves the share and re-ranks that step for its new cost.
+export const setStepShare = mutation({
+  args: { ...owner, step: v.number(), sharePct: v.number() },
+  handler: async (ctx, { requestId, step, sharePct }) => {
+    const { wf } = await ownedWorkflow(ctx, requestId);
+    if (!wf.steps[step]) throw new ConvexError("No such step.");
+    if (!(Number.isFinite(sharePct) && sharePct >= 0 && sharePct <= 100)) throw new ConvexError("Share must be 0 to 100.");
+    const share = Math.round(sharePct);
+    await ctx.db.patch(wf._id, { steps: wf.steps.map((s, k) => (k === step ? { ...s, sharePct: share } : s)) });
+    const matchId = wf.steps[step].matchId;
+    if (matchId) await rerankStep(ctx, matchId, stepCost(wf.laborCost, share));
+  },
+});
+
+// The Client gives the whole job's yearly labor cost: every step is re-ranked with its share of it.
+export const setWorkflowLabor = mutation({
+  args: { ...owner, laborCost: v.number() },
+  handler: async (ctx, { requestId, laborCost }) => {
+    const { request, wf } = await ownedWorkflow(ctx, requestId);
+    if (!(Number.isFinite(laborCost) && laborCost > 0 && laborCost < 100_000_000)) {
+      throw new ConvexError("laborCost must be a positive number of dollars");
+    }
+    await ctx.db.patch(requestId, {
+      cost: { ...(request.cost ?? { currency: "USD" }), currentAnnualCost: laborCost }, updatedAt: Date.now(),
+    });
+    await ctx.db.patch(wf._id, { laborCost });
+    for (const s of wf.steps) if (s.matchId) await rerankStep(ctx, s.matchId, stepCost(laborCost, s.sharePct));
+  },
+});
+
+// "Check this step": a paid search for a step that wasn't searched up front (or whose search failed).
+export const checkStep = mutation({
+  args: { ...owner, step: v.number() },
+  handler: async (ctx, { requestId, step }) => {
+    const { request, wf } = await ownedWorkflow(ctx, requestId);
+    if (!matchEnabled()) throw new ConvexError(MATCH_OFF);
+    const s = wf.steps[step];
+    if (!s) throw new ConvexError("No such step.");
+    const existing = s.matchId ? await ctx.db.get(s.matchId) : null;
+    if (existing && existing.status !== "failed") return existing._id;
+    await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
+    const matchId = await startStepMatch(ctx, wf, step);
+    await ctx.db.patch(wf._id, { steps: wf.steps.map((x, k) => (k === step ? { ...x, matchId } : x)) });
+    return matchId;
   },
 });

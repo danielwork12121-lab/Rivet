@@ -85,7 +85,10 @@ export const setStatus = internalMutation({
 
 // Saves a crawled page, replacing an older copy of the same URL.
 export const savePage = internalMutation({
-  args: { discoveryId: v.id("discoveries"), url: v.string(), title: v.string(), markdown: v.string() },
+  args: {
+    discoveryId: v.id("discoveries"), url: v.string(), title: v.string(), markdown: v.string(),
+    imageUrl: v.optional(v.string()),
+  },
   handler: async (ctx, page) => {
     const old = await ctx.db.query("pages").withIndex("by_url", (q) => q.eq("url", page.url)).first();
     if (old) await ctx.db.delete(old._id);

@@ -19,7 +19,7 @@ Built for small trade businesses (lawn care, cleaning, pest control, facilities)
 | `searchPhrase` (optional) | `gutter cleaning robot` |
 | `startUrls` (optional) | vendor product pages to read instead of searching |
 | `maxSites` | `8` |
-| `crawlOnly` | `true` to return page text (`url`, `title`, `markdown`) and skip Claude. No key needed. Used by Rivet's backend, which reads the pages itself |
+| `crawlOnly` | `true` to return page text (`url`, `title`, `markdown`, `imageUrl`) and skip Claude. No key needed. Used by Rivet's backend, which reads the pages itself |
 | `anthropicApiKey` | for hand runs only: your key, stored encrypted. Never put a key in a program's run input |
 
 ## Output
@@ -29,6 +29,7 @@ One row per robot. Every price and spec has its own column, so the table view an
 | Column | Example |
 |---|---|
 | `name`, `vendor`, `task`, `url` | Example Mower X1, Example Robotics, commercial mowing, source page |
+| `imageUrl` | a product photo from the vendor's page: one linked in the page text for that robot, else the page's `og:image` / Product image when the page is about one robot. `null` if none |
 | `priceAvailable` | `true` |
 | `pricingModel` | `purchase`, `subscription` or `none` |
 | `priceSummary` | "$799 per month ($9,588 a year), no purchase price listed" |

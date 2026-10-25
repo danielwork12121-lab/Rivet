@@ -79,6 +79,16 @@ export const matchPick = v.object({
 });
 
 // What the page should do next, from lib/decide.ts nextAction.
+export const workflowStep = v.object({
+  name: v.string(),
+  sharePct: v.number(), // share of the job's week, 0..100 (the AI's guess until the Client moves it)
+  aiVerdict: v.union(v.literal("automatable"), v.literal("possible"), v.literal("person")),
+  why: v.string(),
+  task: v.string(), // normalised, like a match intent's task
+  searchPhrase: v.string(),
+  matchId: v.optional(v.id("matches")),
+});
+
 export const matchNext = v.union(
   v.object({ kind: v.literal("ask"), field: v.literal("annualTaskCost") }),
   v.object({ kind: v.literal("show_matches") }),
@@ -226,6 +236,7 @@ export default defineSchema({
     specs: v.optional(v.array(robotSpec)),
     assumptions: v.optional(v.array(v.string())), // numbers we filled in because the page didn't say
     fetchedAt: v.optional(v.number()),
+    imageUrl: v.optional(v.string()), // product photo from the vendor's page (og:image or similar)
   })
     .index("by_sample_key", ["sampleKey"])
     .index("by_task", ["task"])
@@ -253,6 +264,7 @@ export default defineSchema({
     url: v.string(),
     title: v.string(),
     markdown: v.string(),
+    imageUrl: v.optional(v.string()), // the page's main photo (lib/images.ts pageImage)
     extracted: v.boolean(),
     fetchedAt: v.number(),
   })
@@ -275,6 +287,21 @@ export default defineSchema({
     // absent or "agent" = agent:findRobots (AI read + web search + reasons). Each flow only reads
     // and replaces its own rows.
     engine: v.optional(v.union(v.literal("rules"), v.literal("agent"))),
+    // Set when this match searches one step of a workflow breakdown (workflows table).
+    workflowId: v.optional(v.id("workflows")),
+    step: v.optional(v.number()),
+  }).index("by_request", ["requestId"]),
+
+  // A job split into steps (agent:planWorkflow): what share of the week each step takes, and
+  // whether a robot could do it. The biggest steps a robot might do each get a match.
+  workflows: defineTable({
+    requestId: v.id("operatorRequests"),
+    status: v.union(v.literal("splitting"), v.literal("ready"), v.literal("failed")),
+    steps: v.array(workflowStep),
+    laborCost: v.union(v.number(), v.null()), // the whole job's yearly labor, USD
+    budget: v.union(v.number(), v.null()), // per robot, if the Client wrote one
+    requirements: intentInfo.fields.requirements, // apply to every step's search
+    error: v.optional(v.string()),
   }).index("by_request", ["requestId"]),
 
   // The AI's "best for you" picks for a request.
