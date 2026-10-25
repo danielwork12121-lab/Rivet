@@ -309,9 +309,12 @@ export default async function handler(req, res) {
     try {
       const correctedBuf = await buildCorrectedWorkbook({ extraction, corrections, impact, sourceFileName: fileName });
       correctedWorkbookBase64 = correctedBuf.toString("base64");
-    } catch {
+    } catch (workbookErr) {
       // Best-effort: the extraction itself is still fully usable without the
-      // downloadable file, so a workbook-generation failure doesn't fail the request.
+      // downloadable file, so a workbook-generation failure doesn't fail the
+      // request. Still log it -- a silent catch here makes "download" button
+      // failures invisible in Vercel's runtime logs.
+      console.error("buildCorrectedWorkbook failed:", workbookErr);
       correctedWorkbookBase64 = null;
     }
 
