@@ -19,7 +19,8 @@ Built for small trade businesses (lawn care, cleaning, pest control, facilities)
 | `searchPhrase` (optional) | `gutter cleaning robot` |
 | `startUrls` (optional) | vendor product pages to read instead of searching |
 | `maxSites` | `8` |
-| `anthropicApiKey` | your key, stored encrypted |
+| `crawlOnly` | `true` to return page text (`url`, `title`, `markdown`) and skip Claude. No key needed. Used by Rivet's backend, which reads the pages itself |
+| `anthropicApiKey` | for hand runs only: your key, stored encrypted. Never put a key in a program's run input |
 
 ## Output
 

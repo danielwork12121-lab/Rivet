@@ -157,6 +157,11 @@ to an isolated deployment, with a matching `RIVET_SERVER_SECRET`, and leave `CHA
 | `DISCOVERY_ENABLED` | off | a finder run may start a paid Apify web search (also needs `APIFY_TOKEN`); `DISCOVERY_DAILY_LIMIT` (3) and `DISCOVERY_USER_DAILY_LIMIT` (1) per 24 h |
 | `SHOW_SAMPLE_ROBOTS` | off | `matching:*` includes fictional sample robots (labelled). Set it only on isolated test deployments |
 
+Web search (when `APIFY_ACTOR_ID` is set) runs the Robot Spec Finder Actor with `crawlOnly: true`: Apify
+only finds and crawls vendor pages, and Convex reads them with Claude. `ANTHROPIC_API_KEY` is never put in
+an Apify run's input (Apify stores and shows it), and `lib/apify.ts` refuses any Actor input with a
+key, token or secret field. The deployed Actor must be a version that has the `crawlOnly` input.
+
 ## Known behaviour
 
 - With convex 1.48, a WebSocket client kept acting as the previous user after
