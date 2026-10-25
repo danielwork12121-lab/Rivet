@@ -245,7 +245,9 @@ async function main() {
     check("a wrong password is refused", await c.waitFor(has("That email and password don't match an account.")));
     await c.typeInto("input[type=password]", "pw-e2e-12345");
     await c.pressEnter();
-    check("signing in sends a Client to their requests", await c.waitFor(`${pathIs("/robot-bounty-client-flow.html")} && typeof S === "object" && S.gate === "ready"`, 20000));
+    check("signing in sends a Client to Find a solution", await c.waitFor(`${pathIs("/find-solution.html")} && typeof RivetApi === "object"`, 20000));
+    await c.go(`${base}/pages/robot-bounty-client-flow.html`); // the Client checks below run on the client-flow page
+    await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
 
     // ---- Client experience ----------------------------------------------------------------
     check("the Client sees only the Client view", await c.ev(`document.querySelector('#role [data-role=dev]').hidden && !document.querySelector('#role [data-role=client]').hidden && S.role === "client"`));
@@ -343,7 +345,9 @@ async function main() {
     check("sign-in from a new device asks for the emailed code", await c.waitFor(has("We emailed a sign-in code")));
     await c.typeInto("input[autocomplete=one-time-code]", "424242");
     await c.ev(`document.getElementById("login-code-btn").click()`);
-    check("the code completes sign-in and routes to the Client page", await c.waitFor(`${pathIs("/robot-bounty-client-flow.html")} && S.gate === "ready"`, 20000));
+    check("the code completes sign-in and routes to Find a solution", await c.waitFor(`${pathIs("/find-solution.html")} && typeof RivetApi === "object"`, 20000));
+    await c.go(`${base}/pages/robot-bounty-client-flow.html`); // the Client checks below run on the client-flow page
+    await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
     check("the saved request is restored after signing in again", await c.waitFor(`S.submit.id === ${JSON.stringify(requestId)} && S.name === ${JSON.stringify(company)}`, 15000));
     await c.ev(`signOut()`);
     check("signing out from the client page lands on the login page", await c.waitFor(`${pathIs("/login.html")} && ${has("You’ve been signed out.")}`));
@@ -358,7 +362,9 @@ async function main() {
     check("a too-short new password is refused before calling Clerk", await c.waitFor(has("at least 8 characters")));
     await c.typeInto("input[autocomplete=new-password]", "pw-e2e-new-123");
     await c.ev(`document.getElementById("login-newpw-btn").click()`);
-    check("reset + new password signs in and routes to the Client page", await c.waitFor(`${pathIs("/robot-bounty-client-flow.html")} && S.gate === "ready"`, 20000));
+    check("reset + new password signs in and routes to Find a solution", await c.waitFor(`${pathIs("/find-solution.html")} && typeof RivetApi === "object"`, 20000));
+    await c.go(`${base}/pages/robot-bounty-client-flow.html`); // the Client checks below run on the client-flow page
+    await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
 
     // ---- session ends while the page is open ---------------------------------------------------------
     await c.ev(`__e2eExpire()`);

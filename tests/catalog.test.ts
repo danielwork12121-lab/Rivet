@@ -20,9 +20,17 @@ const asRows = () =>
   PAGE_SAMPLE_PRODUCTS.map((p, i) => ({ ...p, regions: [...p.regions], _id: `robot${i}`, sample: true }));
 
 describe("catalog", () => {
-  it("Convex's copy of the page products matches the page exactly (no drift)", () => {
-    const fromConvex = api().robotsToProducts(asRows()).map(({ robotId: _r, sample: _s, ...p }: any) => p);
-    expect(fromConvex).toEqual(pageProducts());
+  // The page used to carry the same fictional products as robots:seed. They were removed so
+  // operators only ever see real robots; Convex keeps its fictional copy for demos and tests,
+  // hidden unless SHOW_SAMPLE_ROBOTS=true (convex/matching.ts) and never ranked by the agent.
+  it("the client-flow page lists no fictional products", () => {
+    expect(pageProducts()).toEqual([]);
+  });
+
+  it("Convex's fictional copy is still mapped whole and marked as sample data", () => {
+    const fromConvex = api().robotsToProducts(asRows());
+    expect(fromConvex).toHaveLength(PAGE_SAMPLE_PRODUCTS.length);
+    expect(fromConvex.every((p: any) => p.sample === true)).toBe(true);
   });
 
   it("maps only page-mirrored robots, in p1..pN order, keeping the Convex id", () => {

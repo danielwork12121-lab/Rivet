@@ -357,7 +357,7 @@
   // Where a signed-in account belongs (page name in pages/), from Convex's answer only.
   function homeFor(account) {
     if (!account || !account.role) return "signup";
-    return account.role === "developer" ? "engineers" : "robot-bounty-client-flow";
+    return account.role === "developer" ? "engineers" : "find-solution";
   }
 
   // ---- ids and persistence --------------------------------------------------------
