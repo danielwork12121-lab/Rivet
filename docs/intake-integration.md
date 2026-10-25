@@ -1,5 +1,7 @@
 # Intake and follow-ups ⇄ Convex
 
+> The old prototype page `pages/robot-bounty-client-flow.html` was removed on 2026-10-25; clients use Find a solution (`/`). The notes below are kept for history.
+
 `pages/robot-bounty-client-flow.html` (served by Vercel at `/robot-bounty-client-flow`) keeps
 the signed-in Client's request in Convex (signed-out visitors are sent to log in; see
 [accounts-and-access.md](accounts-and-access.md)). Step 1
