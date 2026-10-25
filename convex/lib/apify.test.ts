@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callActor, datasetItems, startActor } from "./apify";
+import { assertNoCredentials, callActor, datasetItems, startActor } from "./apify";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -48,5 +48,40 @@ describe("apify REST client", () => {
   it("says when the token is missing", async () => {
     vi.stubEnv("APIFY_TOKEN", "");
     await expect(datasetItems("d1")).rejects.toThrow(/APIFY_TOKEN/);
+  });
+});
+
+describe("no credentials in Actor input", () => {
+  const SENTINEL = "sk-ant-TEST-SENTINEL-do-not-leak";
+
+  it("refuses an input that carries a key, token or secret, at any depth, before any request", async () => {
+    vi.stubEnv("APIFY_TOKEN", "tok");
+    const calls = stubFetch([{ data: { id: "r1", status: "RUNNING", defaultDatasetId: "d1" } }]);
+    for (const input of [
+      { task: "mowing", anthropicApiKey: SENTINEL },
+      { task: "mowing", ANTHROPIC_API_KEY: SENTINEL },
+      { task: "mowing", nested: { deeper: [{ accessToken: SENTINEL }] } },
+      { task: "mowing", headers: { Authorization: SENTINEL } },
+      { task: "mowing", client_secret: SENTINEL },
+    ]) {
+      await expect(startActor("trevor/robot-spec-finder", input)).rejects.toThrow(/credentials must not go in Actor input/);
+      await expect(callActor("apify/website-content-crawler", input, 1)).rejects.toThrow(/credentials must not go in Actor input/);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("names the offending field but never prints its value", () => {
+    let message = "";
+    try { assertNoCredentials({ task: "mowing", nested: { apiKey: SENTINEL } }); } catch (e) { message = String(e); }
+    expect(message).toContain("input.nested.apiKey");
+    expect(message).not.toContain(SENTINEL);
+  });
+
+  it("allows the inputs the finder and the crawlers really use", () => {
+    expect(() => assertNoCredentials({ task: "mowing", searchPhrase: "robotic mower", crawlOnly: true, maxSites: 8 })).not.toThrow();
+    expect(() => assertNoCredentials({
+      startUrls: [{ url: "https://example.com/a" }], maxCrawlDepth: 0, crawlerType: "playwright:adaptive",
+      proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] }, saveMarkdown: true,
+    })).not.toThrow();
   });
 });

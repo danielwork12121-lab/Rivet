@@ -29,3 +29,12 @@ export function verifyEvidence(e: Evidence, pageText: string): Evidence {
   const onPage = squash(pageText).includes(squash(e.quote));
   return onPage && numberAppears(e.value, e.quote) ? e : { ...e, value: null };
 }
+
+// Finds "$12,000" and "9 months" in a sentence.
+export function numbersIn(text: string): string[] {
+  const found: string[] = [];
+  for (const m of text.matchAll(/\$\s?([\d,]+)|(\d+)\s*months?/g)) {
+    found.push((m[1] ?? m[2]).replace(/,/g, ""));
+  }
+  return found;
+}

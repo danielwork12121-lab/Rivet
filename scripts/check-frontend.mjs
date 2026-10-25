@@ -33,6 +33,21 @@ for (const page of pages) {
     // Only blocks a browser runs as classic scripts. Modules have their own scope, and
     // other types (JSON, templates, bundler data) are never executed.
     const type = attrs.match(/type=["']?([^"'\s>]+)/)?.[1]?.toLowerCase();
+    // JSON data blocks (incl. the site's exported bundles) must parse, or the page's
+    // own loader fails: a stray raw newline once froze find-solution on "Loading...".
+    if (type && (type.includes("json") || type.startsWith("__bundler/"))) {
+      let data;
+      try { data = JSON.parse(m[2]); } catch (e) { console.log(`FAIL  ${page} <script type="${type}">: invalid JSON: ${e.message}`); failed++; }
+      // The exported template carries each page's component logic (<script type="text/x-dc">),
+      // which the page runtime compiles the same way as below.
+      if (type === "__bundler/template" && typeof data === "string") {
+        for (const c of data.matchAll(/<script type="text\/x-dc"[^>]*>([\s\S]*?)<\/script>/g)) {
+          try { new vm.Script(`(function (DCLogic, StreamableLogic, React) {\n${c[1]}\n;return Component; })`, { filename: `${page} x-dc` }); }
+          catch (e) { console.log(`FAIL  ${page} component logic: ${e.name}: ${e.message}`); failed++; }
+        }
+      }
+      continue;
+    }
     if (type && type !== "text/javascript" && type !== "application/javascript") continue;
     const src = attrs.match(/src=["']([^"']+)["']/)?.[1];
     if (src && /^https?:/.test(src)) continue;

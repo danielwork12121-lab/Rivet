@@ -58,6 +58,7 @@ p { margin: 0; }
 .top-inner { max-width: 1120px; margin: 0 auto; padding-block: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-size: 1.35rem; font-weight: 700; }
 .brand-mark { width: 28px; height: 28px; border-radius: 6px; background: var(--hivis); color: var(--hivis-ink); display: grid; place-items: center; font-size: .95rem; }
+.acct { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: .85rem; color: var(--muted); }
 .sample-tag { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; padding: 2px 8px; border-radius: 99px; background: var(--warn-bg); color: var(--warn); }
 .steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; overflow-x: auto; flex: 1 0 auto; max-width: 100%; min-width: 0; }
 .steps button { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; font-size: .85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
@@ -197,6 +198,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   <div class="top-inner">
     <div class="brand"><span class="brand-mark" aria-hidden="true">RB</span>Robot Bounty <span class="sample-tag">Prototype · sample data</span></div>
     <div class="seg role" id="role" role="group" aria-label="Viewing as"><button data-role="client">Client</button><button data-role="dev">Developer</button></div>
+    <div class="acct" id="acct"></div>
     <ol class="steps" id="steps"></ol>
   </div>
 </header>
@@ -204,6 +206,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="../js/rivet-config.js"></script>
+<script src="../js/rivet-auth.js"></script>
 <script src="../js/rivet-api.js"></script>
 <script>
 // ---------- Data (all sample / illustrative) ----------
@@ -232,17 +235,9 @@ const COMPANY = {
   },
 };
 
-const PRODUCTS = [
-  { id: "p1", task: "mow", name: "TurfRover R2", maker: "Sample Robotics Co. A", price: 18500, opex: 1200, share: .7, slope: 20, regions: ["West", "South"], trl: 9 },
-  { id: "p2", task: "mow", name: "Fieldline AutoMow Pro", maker: "Sample Robotics Co. B", price: 32000, opex: 2000, share: .8, slope: 30, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
-  { id: "p3", task: "mow", name: "GreenPath Compact", maker: "Sample Robotics Co. C", price: 6900, opex: 600, share: .4, slope: 15, regions: ["West", "Midwest", "Northeast"], trl: 9 },
-  { id: "p4", task: "trim", name: "EdgeBot E1", maker: "Sample Robotics Co. D", price: 14000, opex: 1500, share: .3, slope: 10, regions: ["West", "South", "Midwest", "Northeast"], trl: 6 },
-  { id: "p5", task: "spray", name: "SprayScout S", maker: "Sample Robotics Co. E", price: 21000, opex: 1800, share: .6, slope: 15, regions: ["West", "South"], trl: 7 },
-  { id: "p6", task: "spray", name: "TankWalker T3", maker: "Sample Robotics Co. F", price: 27500, opex: 2400, share: .65, slope: 25, regions: ["West", "South", "Midwest"], trl: 7 },
-  { id: "p7", task: "perim", name: "PerimeterPro Rover", maker: "Sample Robotics Co. G", price: 24000, opex: 2200, share: .5, slope: 20, regions: ["West", "South", "Midwest", "Northeast"], trl: 7 },
-  { id: "p8", task: "crawl", name: "CrawlEye C2", maker: "Sample Robotics Co. H", price: 9800, opex: 700, share: .7, slope: 35, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
-  { id: "p9", task: "crawl", name: "UnderView Mini", maker: "Sample Robotics Co. I", price: 4200, opex: 300, share: .45, slope: 25, regions: ["South", "Midwest"], trl: 9 },
-];
+// No built-in robots: the fictional sample products were removed. Robots come only
+// from the Convex catalog; with none, every task shows "nothing fits yet" and offers a bounty.
+const PRODUCTS = [];
 
 const QUESTIONS = [
   { key: "slope", q: "How many of your properties have slopes steeper than about 20°?", opts: [["Very few", 15], ["Some", 20], ["A lot of them", 28]] },
@@ -273,12 +268,13 @@ const S = {
   pledgePct: 30,
   posted: false,
   invited: false,
-  // RIVET-BACKEND: save state. One draft request per browser: created on the first
+  // RIVET-BACKEND: save state. The signed-in Client's request: created on the first
   // step 1 save, then updated in place. Steps 3-5 and the Developer side are NOT saved yet.
+  // token is only a retry key for create (no duplicates); access comes from the account.
   submit: { status: "idle", id: null, token: "", fp: "", error: "", errorFp: "" },
   answersSave: { status: "idle", fp: "", error: "", errorFp: "" },
   bountySave: { status: "idle", id: null, pledged: 0, error: "" }, // this operator's posted bounty (pledged = saved amount)
-  board: { loading: false, at: 0, items: [], error: "" }, // saved bounties for the Developer board
+  board: { loading: false, at: 0, items: [], error: "", stop: null }, // live posted bounties for the Developer board
   catalog: { source: "built-in" }, // "convex" once the sample catalog loads from the backend
   // AI requirement draft (step 2). Filled from agent:specStatus; available is null until checked.
   ai: { available: null, job: null, spec: null, stale: false, at: 0, loading: false, busy: false, polling: false, error: "" },
@@ -391,7 +387,7 @@ function saveStatus(st, fp, savedText) {
   return "";
 }
 function intakeStatus() {
-  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
+  return saveStatus(S.submit, fingerprint(), S.submit.id && `Saved to Rivet (${esc(RivetApi.backend)}) \u00b7 ref ${esc(S.submit.id.slice(-6))}`);
 }
 function answersStatus() {
   return saveStatus(S.answersSave, answersFp(), S.submit.id && S.answered > 0 && "Answers saved");
@@ -401,7 +397,7 @@ function resetDraft() {
   Object.assign(S.submit, { id: null, token: "", fp: "" });
   S.answersSave.fp = "";
   Object.assign(S.ai, { job: null, spec: null, stale: false, at: 0 });
-  RivetApi.clearDraft();
+  RivetApi.clearCurrent();
 }
 async function submitIntake(target) {
   const u = S.submit;
@@ -416,9 +412,9 @@ async function submitIntake(target) {
   try {
     if (creating) {
       u.id = await RivetApi.createRequest({ ...args, clientToken: u.token });
-      RivetApi.saveDraft(u.id, u.token);
+      RivetApi.saveCurrent(u.id);
     } else {
-      await RivetApi.updateIntake(u.id, u.token, args);
+      await RivetApi.updateIntake(u.id, args);
     }
     u.fp = fp; u.status = "saved";
     if (fingerprint() !== fp) { render(); toast("Saved. You changed something while saving, so press Continue again."); return; }
@@ -438,7 +434,7 @@ async function submitFollowUps(target) {
   }
   a.status = "saving"; a.error = ""; render();
   try {
-    await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+    await RivetApi.saveFollowUps(S.submit.id, f);
     a.fp = fp; a.status = "saved";
     if (answersFp() !== fp) { render(); toast("Saved. You changed an answer while saving, so press the button again."); return; }
     toast("Answers saved"); go(target);
@@ -453,19 +449,18 @@ function navTo(step) {
   else if (S.step === 1 && step > 1) submitFollowUps(step);
   else go(step);
 }
-// After a refresh, load this browser's draft (id + token from localStorage) and refill
-// step 1 and the follow-up answers.
+// After sign-in, load the account's request (the one this browser was editing, else the
+// newest) and refill step 1 and the follow-up answers.
 async function hydrateSaved() {
-  const d = RivetApi.loadDraft();
-  if (!d) return;
   const startFp = fingerprint(), startAnswers = answersFp();
   try {
-    const [doc, posted] = await Promise.all([
-      RivetApi.getDraft(d.id, d.token),
-      RivetApi.getMyBounties(d.id, d.token).catch(() => null), // a bounty restore failure must not block the rest
-    ]);
+    const pick = RivetApi.loadCurrent();
+    const doc = pick ? await RivetApi.getDraft(pick.id) : (await RivetApi.listMyRequests(1))[0];
+    if (!doc) return;
+    const posted = await RivetApi.getMyBounties(doc._id).catch(() => null); // a bounty restore failure must not block the rest
     // Keep using this draft even if we don't refill the form: later saves update it.
-    Object.assign(S.submit, { id: d.id, token: d.token });
+    Object.assign(S.submit, { id: doc._id, token: "" });
+    RivetApi.saveCurrent(doc._id);
     const p = RivetApi.requestToIntake(doc);
     if (!p || !Object.hasOwn(COMPANY, p.type) || !REGIONS.includes(p.region)) return;
     if (S.role !== "client" || S.step !== 0 || fingerprint() !== startFp || answersFp() !== startAnswers) return; // user already started
@@ -482,9 +477,23 @@ async function hydrateSaved() {
     }
     render(); toast(b ? "Restored your saved request and posted bounty" : f.answered ? "Restored your saved request and answers" : "Restored your saved request");
   } catch (e) {
-    if (RivetApi.isDraftMissing(e)) RivetApi.clearDraft(); // wrong token or deleted: forget it
-    // otherwise the backend is unreachable: keep the blank form and the stored draft
+    if (RivetApi.isDraftMissing(e)) { RivetApi.clearCurrent(); return hydrateSaved(); } // deleted: open the newest instead
+    // otherwise the backend is unreachable: keep the blank form
   }
+}
+// A draft saved in this browser before accounts existed (id + token) moves into the
+// signed-in account once; afterwards the token is forgotten.
+async function claimLegacyDraft() {
+  const d = RivetApi.loadLegacyDraft();
+  if (!d) return;
+  try {
+    await RivetApi.claimLegacyDraft(d.id, d.token);
+    RivetApi.saveCurrent(d.id);
+    toast("Moved your earlier saved request into your account");
+  } catch (e) {
+    if (!RivetApi.isDraftMissing(e)) return; // backend unreachable: try again next visit
+  }
+  RivetApi.clearLegacyDraft();
 }
 // "What we're assuming": mark values that are still the page's defaults.
 const notAnswered = (key) =>
@@ -500,10 +509,11 @@ async function refreshAi(force) {
   a.loading = true;
   try {
     if (S.submit.id) {
-      const st = await RivetApi.specStatus(S.submit.id, S.submit.token);
-      Object.assign(a, { available: st.available, job: st.job, spec: st.spec, stale: st.stale });
+      const st = await RivetApi.specStatus(S.submit.id);
+      Object.assign(a, { available: st.available, unavailableMessage: st.unavailableMessage, job: st.job, spec: st.spec, stale: st.stale });
     } else {
-      a.available = (await RivetApi.aiStatus()).available;
+      const st = await RivetApi.aiStatus();
+      Object.assign(a, { available: st.available, unavailableMessage: st.message });
     }
     if (!a.busy && !aiActive()) a.error = "";
   } catch (e) {
@@ -536,25 +546,25 @@ async function generateAiSpec() {
     // The AI reads the saved request, so save answers picked since the last save first.
     const f = RivetApi.followUpsFromState(S, QUESTIONS), fp = JSON.stringify(f);
     if (f.answers.length && S.answersSave.fp !== fp) {
-      await RivetApi.saveFollowUps(S.submit.id, S.submit.token, f);
+      await RivetApi.saveFollowUps(S.submit.id, f);
       Object.assign(S.answersSave, { status: "saved", fp });
     }
-    await RivetApi.generateSpec(S.submit.id, S.submit.token);
+    await RivetApi.generateSpec(S.submit.id);
     a.busy = false;
     await refreshAi(true);
   } catch (e) {
     a.busy = false;
     if (RivetApi.isDraftMissing(e)) resetDraft();
-    if (/unavailable/i.test(e?.data ?? "")) a.available = false;
-    a.error = RivetApi.friendlyError(e);
+    a.error = RivetApi.friendlyError(e); // e.g. no key, or a daily AI limit (server-enforced)
     render();
+    refreshAi(true); // pick up the server's current availability
   }
 }
 function aiPanel() {
   const a = S.ai, j = a.job, busy = a.busy || aiActive(), small = `style="font-size:.85rem"`;
   const notice = (t) => `<div class="notice" role="alert">${esc(t)}</div>`;
   let state = "";
-  if (a.available === false) state = notice("AI drafting is unavailable in this demo: no Anthropic API key is configured on the backend. Nothing is sent to an AI service.");
+  if (a.available === false && !a.error) state = notice(a.unavailableMessage || "AI drafting is unavailable right now.");
   else if (a.available === null) state = `<p class="muted" ${small}>Checking whether AI drafting is available\u2026</p>`;
   if (j?.status === "queued") state += `<p class="muted" ${small} role="status">Queued\u2026</p>`;
   if (j?.status === "running") state += `<p class="muted" ${small} role="status">Claude is drafting your requirements\u2026</p>`;
@@ -578,16 +588,15 @@ function aiPanel() {
       <div><button class="btn" id="ai-draft" ${a.available !== true || busy ? "disabled" : ""}>${busy ? "Drafting\u2026" : sp ? "Draft again with AI" : "Draft requirements with AI"}</button></div>
     </div>`;
 }
-// Catalog: Convex is the canonical source. The PRODUCTS array above stays as an
-// offline fallback copy (kept identical by tests/catalog.test.ts).
+// Catalog: Convex is the only source of products (the built-in list is empty).
 async function loadCatalog() {
   try {
     const products = RivetApi.robotsToProducts(await RivetApi.listRobots());
-    if (!products.length) return; // not seeded yet: keep the built-in copy
+    if (!products.length) return; // nothing in the catalog yet
     PRODUCTS.splice(0, PRODUCTS.length, ...products);
     S.catalog.source = "convex";
     if (S.role === "client" && S.step >= 2) render();
-  } catch (e) { /* backend unreachable: keep the built-in copy */ }
+  } catch (e) { /* backend unreachable: no products */ }
 }
 // Mirrors the sample goal the bounty page shows; stored as an illustrative figure.
 const DEMO_BOUNTY_GOAL = 150000;
@@ -605,45 +614,57 @@ async function postBounty() {
   b.status = "saving"; b.error = ""; render();
   try {
     if (S.submit.fp !== fingerprint()) { // e.g. "Join the shared program" was picked on this screen
-      await RivetApi.updateIntake(S.submit.id, S.submit.token, RivetApi.intakeToRequest(S));
+      await RivetApi.updateIntake(S.submit.id, RivetApi.intakeToRequest(S));
       Object.assign(S.submit, { status: "saved", fp: fingerprint() });
     }
     const t = taskById(S.bounty.taskId);
     const pledged = Math.round(bountyBasis(t) * S.pledgePct / 100);
-    b.id = await RivetApi.postBounty(S.submit.id, S.submit.token, {
+    b.id = await RivetApi.postBounty(S.submit.id, {
       taskKey: t.id, title: bountyTitle(), specLines: specLines(), gaps: [...S.gaps], note: S.gapNote.trim(),
       industry: COMPANY[S.type].label, pledgePercent: S.pledgePct, pledged, goal: DEMO_BOUNTY_GOAL,
     });
     b.pledged = pledged;
-    b.status = "saved"; S.posted = true; S.board.at = 0; // board refetches next time
+    b.status = "saved"; S.posted = true; // the Developer board's subscription picks it up
     render(); window.scrollTo({ top: 0 }); toast("Bounty posted");
   } catch (e) {
     if (RivetApi.isDraftMissing(e)) resetDraft();
     Object.assign(b, { status: "error", error: RivetApi.friendlyError(e) }); render();
   }
 }
-// Developer board: saved demo bounties from Convex, fetched when the board is shown.
+// Developer board: bounties posted by Client accounts, live from Convex (a subscription:
+// a newly posted bounty appears without a refresh). Approved Developers only.
 function savedBoardBounties() {
   return S.board.items
     .filter((p) => p._id !== S.bountySave.id) // the operator's own bounty is already shown as "mine"
     .map((p) => RivetApi.toBoardBounty(p, TASK_SKILLS, CATEGORY))
     .filter(Boolean);
 }
-async function loadBoard() {
+function loadBoard() {
   const bd = S.board;
-  if (bd.loading || Date.now() - bd.at < 3000) return;
+  if (bd.stop || !S.account?.approvedDeveloper) return;
   bd.loading = true;
-  try { bd.items = await RivetApi.listPostedBounties(); bd.error = ""; }
-  catch (e) { bd.error = RivetApi.friendlyError(e); }
-  bd.loading = false; bd.at = Date.now();
-  if (S.role === "dev" && S.dstep === 1) render();
+  const onBoard = () => S.role === "dev" && S.dstep === 1;
+  bd.stop = RivetApi.watchPostedBounties(
+    (rows) => { const first = !bd.at; Object.assign(bd, { items: rows, error: "", loading: false, at: Date.now() }); if (onBoard()) { render(); if (!first) toast("Bounty board updated"); } },
+    (e) => { Object.assign(bd, { error: RivetApi.friendlyError(e), loading: false, stop: null }); if (onBoard()) render(); },
+  );
 }
 function boardStatus() {
   const bd = S.board, small = `style="font-size:.8rem"`;
-  if (bd.error) return `<div class="notice" ${small} role="alert">Couldn't load saved bounties, so only samples are shown. ${esc(bd.error)}</div>`;
-  if (bd.loading && !bd.at) return `<p class="muted" ${small}>Loading saved bounties\u2026</p>`;
+  if (!S.account?.approvedDeveloper) return `<div class="notice" ${small} role="status">Your Developer account is waiting for approval, so only sample bounties are shown. Have an invite code? <input id="invite-code" type="text" aria-label="Invite code" placeholder="rivet-dev-\u2026" style="width:16em"> <button class="link" id="redeem">Use code</button></div>`;
+  if (bd.error) return `<div class="notice" ${small} role="alert">Couldn't load posted bounties, so only samples are shown. ${esc(bd.error)}</div>`;
+  if (bd.loading && !bd.at) return `<p class="muted" ${small}>Loading posted bounties\u2026</p>`;
   const n = savedBoardBounties().length;
-  return n ? `<p class="muted" ${small}>${n} saved demo submission${n === 1 ? "" : "s"} from other operators.</p>` : "";
+  return n ? `<p class="muted" ${small}>${n} bount${n === 1 ? "y" : "ies"} posted by Client accounts \u00b7 updates live.</p>` : `<p class="muted" ${small}>No Client has posted a bounty yet \u00b7 new ones appear here live.</p>`;
+}
+async function redeemInvite() {
+  const code = $("#invite-code")?.value || "";
+  if (!code.trim()) return;
+  try {
+    S.account = await RivetApi.redeemInvite(code);
+    toast("Invite accepted: you're an approved Developer");
+    render(); loadBoard();
+  } catch (e) { toast(RivetApi.friendlyError(e)); }
 }
 // Once this operator's bounty is saved, its totals count only persisted pledges;
 // the page's sample backers are still listed, but not added in.
@@ -885,7 +906,7 @@ function screenBounty() {
         <p class="muted" style="font-size:.9rem">A robot that does this would save you about <b class="num">${money(basis)}</b> a year. We suggest pledging 20–40% of one year's savings, so the robot still pays for itself.</p>
         <div class="pledge-big">${money(pledge)}</div>
         <div class="field"><label for="pledge">Pledge: <span class="num">${S.pledgePct}%</span> of first-year savings</label><input type="range" id="pledge" min="20" max="40" step="1" value="${S.pledgePct}"></div>
-        <div class="callout"><b>You're only charged if it works out</b><span style="font-size:.88rem">Pledges are all-or-nothing. Nobody pays unless the bounty reaches its goal and a developer delivers a robot that meets the spec.</span></div>
+        <div class="callout"><b>You're only charged if it works out</b><span class="pill plain" style="justify-self:start">Demo: no payment is taken</span><span style="font-size:.88rem">Pledges are all-or-nothing. Nobody pays unless the bounty reaches its goal and a developer delivers a robot that meets the spec.</span></div>
         ${anon ? `<div class="notice">You chose to stay anonymous, so you can't pledge to shared bounties. <button class="link" id="optin">Join the shared program</button></div>` : ""}
         ${bountyStatus()}
         <button class="btn hivis" id="post" ${anon || S.bountySave.status === "saving" ? "disabled" : ""}>${S.bountySave.status === "saving" ? "Posting\u2026" : `Post bounty and pledge ${money(pledge)}`}</button>
@@ -1143,6 +1164,8 @@ function bindBoard() {
   document.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => { S.sel = b.dataset.sel; goDev(2); });
   document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => goDev(3));
   $("#back").onclick = () => goDev(0);
+  const redeem = $("#redeem");
+  if (redeem) redeem.onclick = redeemInvite;
   loadBoard(); // RIVET-BACKEND
 }
 
@@ -1163,7 +1186,7 @@ function screenClaim() {
   const other = S.claim && S.claim.bountyId !== b.id ? bountyById(S.claim.bountyId) : null;
   return `
   <div class="screen-head">
-    <span class="label">Developer · Step 3 of 4 · Claim</span>
+    <span class="label">Developer · Step 3 of 4 · Claim · <span class="pill plain">Demo only, not saved</span></span>
     <h1>${esc(b.title)}</h1>
     <p class="muted">${esc(b.industry)} · ${esc(b.region)} · ${backersOf(b)} backers · closes ${b.closes}</p>
   </div>
@@ -1236,7 +1259,7 @@ function screenDeliver() {
   else final = `<button class="btn hivis" id="deliver" ${next !== -1 ? "disabled" : ""}>Mark robot delivered</button>${next !== -1 ? `<p class="muted" style="font-size:.85rem">Finish every milestone first.</p>` : ""}`;
   return `
   <div class="screen-head">
-    <span class="label">Developer · Step 4 of 4 · Build &amp; deliver</span>
+    <span class="label">Developer · Step 4 of 4 · Build &amp; deliver · <span class="pill plain">Demo only, not saved</span></span>
     <h1>${esc(b.title)}</h1>
     <div class="row"><span class="pill ${started ? "good" : "warn"}">${started ? "Claim locked in" : "Reserved for you until Nov 7"}</span><span class="pill plain">${esc(S.dev.team)} · ${money(c.price)} · ${c.weeks} weeks</span></div>
   </div>
@@ -1286,11 +1309,29 @@ function devUpdatesHtml() {
 // ---------- Main ----------
 const SCREENS = [[screenIntake, bindIntake], [screenFollowups, bindFollowups], [screenOpps, bindOpps], [screenSearch, bindSearch], [screenBounty, bindBounty]];
 const DEV_SCREENS = [[screenProfile, bindProfile], [screenBoard, bindBoard], [screenClaim, bindClaim], [screenDeliver, bindDeliver]];
+// The view follows the account's role as Convex reports it; the other side is hidden.
 function renderRole() {
-  document.querySelectorAll("#role button").forEach(b => { b.setAttribute("aria-pressed", b.dataset.role === S.role); b.onclick = () => { S.role = b.dataset.role; render(); window.scrollTo({ top: 0 }); }; });
+  document.querySelectorAll("#role button").forEach(b => {
+    b.hidden = !!S.account && b.dataset.role !== S.role;
+    b.setAttribute("aria-pressed", b.dataset.role === S.role);
+    b.onclick = null;
+  });
+  const acct = $("#acct");
+  if (S.account) {
+    const who = S.account.email || S.account.name || "your account";
+    const kind = S.account.role === "developer" ? (S.account.approvedDeveloper ? "Developer" : "Developer, pending approval") : "Client";
+    acct.innerHTML = `<span>Signed in as <b>${esc(who)}</b> (${esc(kind)})</span><button class="link" id="signout">Sign out</button>`;
+    $("#signout").onclick = signOut;
+  } else acct.innerHTML = "";
 }
 function render() {
   renderRole();
+  if (S.gate !== "ready") {
+    $("#steps").innerHTML = "";
+    $("#app").innerHTML = `<div class="screen"><div class="screen-head"><h1>${S.gate === "error" ? "Couldn't check your sign-in" : "Checking your sign-in\u2026"}</h1>${S.gateError ? `<div class="notice" role="alert">${esc(S.gateError)}</div><div class="actions" style="justify-content:flex-start"><button class="btn primary" id="retry">Try again</button></div>` : ""}</div></div>`;
+    const r = $("#retry"); if (r) r.onclick = () => location.reload();
+    return;
+  }
   const dev = S.role === "dev";
   const names = dev ? DEV_STEPS : STEP_NAMES, cur = dev ? S.dstep : S.step;
   $("#steps").innerHTML = names.map((n, i) =>
@@ -1300,8 +1341,43 @@ function render() {
   $("#app").innerHTML = `<div class="screen">${html()}</div>`;
   bind();
 }
+// ---------- Account ----------
+// Signed-out visitors go to the login page; accounts without a role finish setup on
+// the signup page. Everything after that is checked again by Convex on every call.
+function goToPage(name, why) {
+  location.href = RivetAuth.pageUrl(name) + (why ? "?reason=" + encodeURIComponent(why) : "");
+}
+async function signOut() {
+  S.board.stop?.();
+  await RivetAuth.signOut().catch(() => null);
+  goToPage("login", "signed_out");
+}
+async function startSession() {
+  try {
+    const st = await RivetAuth.current();
+    if (!st.signedIn) return goToPage("login", "signin");
+    const account = await RivetApi.ensureAccount();
+    if (!account.role) return goToPage("signup", "finish");
+    S.account = account;
+    S.role = account.role === "developer" ? "dev" : "client";
+    S.gate = "ready";
+    render();
+    if (S.role === "client") { await claimLegacyDraft(); hydrateSaved(); }
+    else loadBoard();
+  } catch (e) {
+    S.gate = "error"; S.gateError = RivetApi.authProblem(e) ? RivetApi.friendlyError(e) : (e?.message || RivetApi.friendlyError(e));
+    render();
+  }
+}
+// The session can end while the page is open (sign-out in another tab, expiry):
+// stop and ask the person to sign in again rather than failing on the next save.
+RivetAuth.onChange((st) => {
+  if (S.gate === "ready" && !st.signedIn) { S.board.stop?.(); goToPage("login", "expired"); }
+});
+
+S.gate = "checking";
 render();
-hydrateSaved();
+startSession();
 loadCatalog(); // RIVET-BACKEND
 </script>
 

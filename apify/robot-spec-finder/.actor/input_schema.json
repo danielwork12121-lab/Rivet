@@ -48,16 +48,21 @@
         ]
       }
     },
+    "crawlOnly": {
+      "title": "Crawl only (no AI)",
+      "type": "boolean",
+      "description": "Return each page's text instead of robots, and ask for no API key. The caller reads the pages itself. Rivet's backend always uses this.",
+      "default": false
+    },
     "anthropicApiKey": {
       "title": "Anthropic API key",
       "type": "string",
-      "description": "Used to read each page with Claude Haiku. Stored encrypted.",
+      "description": "Only for running this Actor by hand: used to read each page with Claude Haiku. Stored encrypted. Not needed with Crawl only. Never send it from another program.",
       "editor": "textfield",
       "isSecret": true
     }
   },
   "required": [
-    "task",
-    "anthropicApiKey"
+    "task"
   ]
 }

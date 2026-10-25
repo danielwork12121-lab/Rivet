@@ -151,6 +151,7 @@ export const upsertScraped = internalMutation({
     environments: v.array(v.string()),
     specs: v.array(robotSpec),
     assumptions: v.array(v.string()),
+    imageUrl: v.optional(v.string()),
   },
   handler: async (ctx, robot) => {
     const row = { ...robot, sample: false, fetchedAt: Date.now(), provenance: `Read from ${robot.url}` };

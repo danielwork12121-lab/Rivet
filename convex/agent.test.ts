@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 
@@ -22,14 +23,14 @@ const intake = {
 };
 
 async function setup() {
-  const t = convexTest(schema, modules);
+  const base = convexTest(schema, modules);
+  const t = await asClient(base);
   const requestId = await t.mutation(api.requests.create, { ...intake, clientToken: token });
   const scheduled = () => t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
-  return { t, requestId, scheduled };
+  return { t, base, requestId, scheduled };
 }
 
-describe("agent endpoints require the draft token", () => {
-  const wrong = "not-the-owner-token";
+describe("agent endpoints require the owning Client account", () => {
 
   it.each([
     ["generateSpec", (t: any, id: any, clientToken: string) => t.mutation(api.agent.generateSpec, { requestId: id, clientToken })],
@@ -41,22 +42,27 @@ describe("agent endpoints require the draft token", () => {
     ["latestSpec", (t: any, id: any, clientToken: string) => t.query(api.agent.latestSpec, { requestId: id, clientToken })],
     ["latestPicks", (t: any, id: any, clientToken: string) => t.query(api.agent.latestPicks, { requestId: id, clientToken })],
     ["latestBounty", (t: any, id: any, clientToken: string) => t.query(api.agent.latestBounty, { requestId: id, clientToken })],
-  ])("%s rejects a wrong token and schedules or writes nothing", async (_name, call) => {
-    const { t, requestId, scheduled } = await setup();
-    await expect(call(t, requestId, wrong)).rejects.toThrow(/Draft not found/);
+  ])("%s rejects other accounts, even holding the old token, and schedules or writes nothing", async (_name, call) => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key-not-real");
+    const { base, requestId, scheduled } = await setup();
+    const other = await asClient(base, "user_client_b");
+    await expect(call(other, requestId, token)).rejects.toThrow(/Draft not found/);
+    const dev = await asDeveloper(base);
+    await expect(call(dev, requestId, token)).rejects.toThrow(/needs a Client account/);
+    await expect(call(base, requestId, token)).rejects.toThrow(/Please sign in/);
     expect(await scheduled()).toHaveLength(0);
-    const clarifications = await t.run((ctx) => ctx.db.query("clarifications").collect());
+    const clarifications = await base.run((ctx) => ctx.db.query("clarifications").collect());
     expect(clarifications).toHaveLength(0);
   });
 
-  it("generateSpec with the right token schedules exactly one spec extraction", async () => {
+  it("generateSpec by the owner schedules exactly one spec extraction (an old token is ignored)", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "test-key-not-real");
     const { t, requestId, scheduled } = await setup();
-    await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    await t.mutation(api.agent.generateSpec, { requestId, clientToken: "anything-at-all" });
     const jobs = await scheduled();
     expect(jobs).toHaveLength(1);
     expect(jobs[0].name).toContain("extractSpec");
-    expect(await t.query(api.agent.latestSpec, { requestId, clientToken: token })).toBeNull();
+    expect(await t.query(api.agent.latestSpec, { requestId })).toBeNull();
   });
 
   it("answerQuestions stores trimmed answers, skips blanks and validates length", async () => {
@@ -68,17 +74,17 @@ describe("agent endpoints require the draft token", () => {
     const rows = await t.run((ctx) => ctx.db.query("clarifications").collect());
     expect(rows.map((r) => [r.question, r.answer])).toEqual([["What does the task cost per year?", "About $40,000"]]);
     await expect(
-      t.mutation(api.agent.answerQuestions, { requestId, clientToken: token, answers: [{ question: "Q", answer: "x".repeat(1001) }] }),
+      t.mutation(api.agent.answerQuestions, { requestId, answers: [{ question: "Q", answer: "x".repeat(1001) }] }),
     ).rejects.toThrow(/answer must be 1-1000 characters/);
   });
 
   it("rejects a blank bounty gap and a negative max price", async () => {
     const { t, requestId, scheduled } = await setup();
     await expect(
-      t.mutation(api.agent.requestBounty, { requestId, clientToken: token, gap: "   " }),
+      t.mutation(api.agent.requestBounty, { requestId, gap: "   " }),
     ).rejects.toThrow(/gap must be/);
     await expect(
-      t.mutation(api.agent.recommend, { requestId, clientToken: token, maxPrice: -1 }),
+      t.mutation(api.agent.recommend, { requestId, maxPrice: -1 }),
     ).rejects.toThrow(/maxPrice must be/);
     expect(await scheduled()).toHaveLength(0);
   });
@@ -103,73 +109,75 @@ describe("AI job lifecycle", () => {
 
   it("without a key: generateSpec is refused as unavailable and nothing is queued", async () => {
     const { t, requestId, scheduled } = await setup();
-    await expect(t.mutation(api.agent.generateSpec, { requestId, clientToken: token })).rejects.toThrow(
+    await expect(t.mutation(api.agent.generateSpec, { requestId })).rejects.toThrow(
       /AI drafting is unavailable/,
     );
     expect(await scheduled()).toHaveLength(0);
     expect(await t.run((ctx) => ctx.db.query("aiJobs").collect())).toHaveLength(0);
-    expect(await t.query(api.agent.aiStatus, {})).toEqual({ available: false });
-    const status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    expect(await t.query(api.agent.aiStatus, {})).toEqual({
+      available: false, reason: "no_key", message: expect.stringMatching(/AI drafting is unavailable/),
+    });
+    const status = await t.query(api.agent.specStatus, { requestId });
     expect(status).toMatchObject({ available: false, job: null, spec: null, stale: false });
   });
 
   it("answerQuestions without a key keeps the answers and queues nothing", async () => {
     const { t, requestId, scheduled } = await setup();
     const r = await t.mutation(api.agent.answerQuestions, {
-      requestId, clientToken: token, answers: [{ question: "Cost?", answer: "About $40,000" }],
+      requestId, answers: [{ question: "Cost?", answer: "About $40,000" }],
     });
     expect(r).toBeNull();
     expect(await scheduled()).toHaveLength(0);
-    const status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    const status = await t.query(api.agent.specStatus, { requestId });
     expect(status.clarifications).toEqual([{ question: "Cost?", answer: "About $40,000" }]);
   });
 
   it("repeated clicks reuse the queued job: one job, one scheduled call", async () => {
     withKey();
     const { t, requestId, scheduled } = await setup();
-    const a = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
-    const b = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const a = await t.mutation(api.agent.generateSpec, { requestId });
+    const b = await t.mutation(api.agent.generateSpec, { requestId });
     expect(a.reused).toBe(false);
     expect(b).toEqual({ jobId: a.jobId, reused: true });
     expect(await scheduled()).toHaveLength(1);
-    const status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    const status = await t.query(api.agent.specStatus, { requestId });
     expect(status.job?.status).toBe("queued");
   });
 
   it("queued -> running -> succeeded, then becomes stale when the request changes", async () => {
     withKey();
     const { t, requestId } = await setup();
-    const { jobId } = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const { jobId } = await t.mutation(api.agent.generateSpec, { requestId });
     expect(await t.mutation(internal.agent.markJobRunning, { jobId })).toBe(true);
     expect(await t.mutation(internal.agent.markJobRunning, { jobId })).toBe(false); // second pickup refused
-    const draft = await t.query(api.requests.getDraft, { id: requestId, clientToken: token });
+    const draft = await t.query(api.requests.getDraft, { id: requestId });
     const specId = await t.mutation(internal.agent.saveSpec, {
       requestId, ...specFields, jobId, requestVersion: draft.updatedAt ?? draft._creationTime,
     });
     await t.mutation(internal.agent.finishJob, { jobId, status: "succeeded", specId });
-    let status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    let status = await t.query(api.agent.specStatus, { requestId });
     expect(status).toMatchObject({ job: { status: "succeeded" }, stale: false });
     expect(status.spec?._id).toBe(specId);
 
     vi.setSystemTime(Date.now() + 1000);
     await t.mutation(api.requests.saveFollowUps, {
-      id: requestId, clientToken: token, complete: false,
+      id: requestId, complete: false,
       answers: [{ key: "slope", question: "Slopes?", answerLabel: "Some" }],
     });
-    status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    status = await t.query(api.agent.specStatus, { requestId });
     expect(status.stale).toBe(true);
   });
 
   it("a failed job does not block a retry, and its message is safe to show", async () => {
     withKey();
     const { t, requestId, scheduled } = await setup();
-    const { jobId } = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const { jobId } = await t.mutation(api.agent.generateSpec, { requestId });
     await t.mutation(internal.agent.finishJob, {
       jobId, status: "failed", errorKind: "model_error", error: "The AI could not produce a draft this time. You can try again.",
     });
-    const status = await t.query(api.agent.specStatus, { requestId, clientToken: token });
+    const status = await t.query(api.agent.specStatus, { requestId });
     expect(status.job).toMatchObject({ status: "failed", errorKind: "model_error" });
-    const retry = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const retry = await t.mutation(api.agent.generateSpec, { requestId });
     expect(retry.reused).toBe(false);
     expect(retry.jobId).not.toBe(jobId);
     expect(await scheduled()).toHaveLength(2);
@@ -178,16 +186,17 @@ describe("AI job lifecycle", () => {
   it("a run stuck for over 10 minutes no longer blocks a new one", async () => {
     withKey();
     const { t, requestId } = await setup();
-    const first = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const first = await t.mutation(api.agent.generateSpec, { requestId });
     await t.mutation(internal.agent.markJobRunning, { jobId: first.jobId });
     vi.setSystemTime(Date.now() + 11 * 60 * 1000);
-    const second = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+    const second = await t.mutation(api.agent.generateSpec, { requestId });
     expect(second.reused).toBe(false);
   });
 
-  it("specStatus rejects a wrong token", async () => {
-    const { t, requestId } = await setup();
-    await expect(t.query(api.agent.specStatus, { requestId, clientToken: "wrong-token" })).rejects.toThrow(/Draft not found/);
+  it("specStatus rejects another account", async () => {
+    const { base, requestId } = await setup();
+    const other = await asClient(base, "user_client_b");
+    await expect(other.query(api.agent.specStatus, { requestId })).rejects.toThrow(/Draft not found/);
   });
 });
 

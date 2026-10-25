@@ -19,8 +19,23 @@ async function api(path: string, init: RequestInit = {}): Promise<unknown> {
   return res.json();
 }
 
+// Apify stores every run's input, and shows it in the console and API, so an Actor's input must
+// never carry a credential: our own AI calls stay in Convex (see scrape.ts). This refuses any input
+// with a key named like one, at any depth. It names the field, never prints a value.
+const CREDENTIAL_NAME = /api[-_ ]?key|token|secret|password|passwd|credential|authorization|bearer/i;
+export function assertNoCredentials(input: unknown, path = "input"): void {
+  if (Array.isArray(input)) return input.forEach((v, i) => assertNoCredentials(v, `${path}[${i}]`));
+  if (input && typeof input === "object") {
+    for (const [k, v] of Object.entries(input)) {
+      if (CREDENTIAL_NAME.test(k)) throw new Error(`Refusing to send ${path}.${k} to Apify: credentials must not go in Actor input`);
+      assertNoCredentials(v, `${path}.${k}`);
+    }
+  }
+}
+
 // Starts a run and returns at once.
 export async function startActor(actorId: string, input: unknown): Promise<ApifyRun> {
+  assertNoCredentials(input);
   const body = (await api(`/acts/${actorPath(actorId)}/runs`, { method: "POST", body: JSON.stringify(input) })) as { data: ApifyRun };
   return body.data;
 }
