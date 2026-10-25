@@ -152,7 +152,7 @@ describe("api/chat", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ reply: "Got it: mowing 40 lawns." });
     const sent = JSON.parse(calls(ANTHROPIC)[0][1].body);
-    expect(sent).toMatchObject({ model: "claude-opus-5-5", max_tokens: 1024, output_config: { effort: "low" } });
+    expect(sent).toMatchObject({ model: "claude-haiku-5-5", max_tokens: 2000, output_config: { effort: "low" } });
     expect(calls(ANTHROPIC)[0][1].headers["x-api-key"]).toBe("test-key-not-real");
   });
 

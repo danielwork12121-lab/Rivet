@@ -1,8 +1,8 @@
 // Rivet frontend <-> Convex glue. Classic script (no import/export) so it works
 // from file:// as well as http://. Exposes `RivetApi` on the global object.
 //
-// Backend: js/rivet-config.js sets `window.RIVET_BACKEND` ("local" | "cloud") and
-// `window.RIVET_CONVEX_URL` before this script. Without it, the local dev backend is used.
+// Backend: js/rivet-config.js sets `window.RIVET_BACKEND` ("local" | "cloud" | "custom") and, on this
+// machine, `window.RIVET_CONVEX_URL`. A hosted page asks /api/config (CONVEX_URL in Vercel) instead.
 // Fictional demo data only. Accounts: when js/rivet-auth.js is loaded, every call
 // carries the signed-in person's Clerk session token and Convex decides what they
 // may do (convex/lib/auth.ts). Nothing in the browser grants access.
@@ -236,13 +236,30 @@
     });
   }
 
+  // Which backend to talk to: window.RIVET_CONVEX_URL if set (pages on this machine, and tests);
+  // otherwise the hosting site's /api/config, i.e. the CONVEX_URL setting in Vercel. A hosted page
+  // never falls back to a backend on the visitor's own machine (it would send their sign-in token
+  // there) and accepts only an https *.convex.cloud URL; anything else is an error, not a guess.
+  var CONVEX_CLOUD_URL = /^https:\/\/[a-z0-9-]+\.convex\.cloud$/;
+  function backendUrl() {
+    if (root.RIVET_CONVEX_URL) return Promise.resolve(root.RIVET_CONVEX_URL);
+    var loc = root.location || {};
+    var hosted = /^https?:$/.test(loc.protocol || "") && !/^(localhost|127\.0\.0\.1)$/.test(loc.hostname || "");
+    if (!hosted || typeof root.fetch !== "function") return Promise.resolve(DEFAULT_URL);
+    return root.fetch("/api/config")
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .then(function (c) {
+        if (c && typeof c.convexUrl === "string" && CONVEX_CLOUD_URL.test(c.convexUrl)) return c.convexUrl;
+        throw new Error("This site's backend isn't configured.");
+      });
+  }
+
   function getClient() {
     if (injected) return Promise.resolve(injected);
     if (!clientPromise) {
-      var url = root.RIVET_CONVEX_URL || DEFAULT_URL;
-      clientPromise = import(CONVEX_ESM)
-        .then(function (m) {
-          var c = new m.ConvexClient(url);
+      clientPromise = Promise.all([import(CONVEX_ESM), backendUrl()])
+        .then(function (r) {
+          var c = new r[0].ConvexClient(r[1]);
           var mine = clientPromise;
           authenticate(c, function () { if (clientPromise === mine) clientPromise = null; });
           return c;
@@ -285,6 +302,14 @@
   function aiStatus() { return call("query", "agent:aiStatus", {}); }
   function specStatus(id) { return call("query", "agent:specStatus", { requestId: id }); }
   function generateSpec(id) { return call("mutation", "agent:generateSpec", { requestId: id }); }
+  // Robot finder: findRobots starts a paid run (fast read, maybe a web search, then
+  // reasons); latestMatch is free and fills in over a few seconds, so poll it. The backend
+  // refuses unless AI matching is switched on, the caller owns the request, and budget remains.
+  function findRobots(id) { return call("mutation", "agent:findRobots", { requestId: id }); }
+  function latestMatch(id) { return call("query", "agent:latestMatch", { requestId: id }); }
+  function setTaskCost(id, annualTaskCost) {
+    return call("mutation", "agent:setTaskCost", { requestId: id, annualTaskCost: annualTaskCost });
+  }
   function getDraft(id) { return call("query", "requests:getDraft", { id: id }); }
   function listMyRequests(limit) { return call("query", "requests:listMine", { limit: limit || 20 }); }
   function claimLegacyDraft(id, token) { return call("mutation", "requests:claimLegacyDraft", { id: id, clientToken: token }); }
@@ -383,6 +408,9 @@
     aiStatus: aiStatus,
     specStatus: specStatus,
     generateSpec: generateSpec,
+    findRobots: findRobots,
+    latestMatch: latestMatch,
+    setTaskCost: setTaskCost,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadCurrent: loadCurrent,
@@ -395,5 +423,6 @@
     draftKey: DRAFT_KEY,
     _setClient: function (c) { injected = c; }, // tests only
     _authenticate: authenticate, // tests only
+    _backendUrl: backendUrl, // tests only
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

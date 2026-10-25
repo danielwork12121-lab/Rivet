@@ -1,0 +1,63 @@
+{
+  "title": "Robot Spec Finder input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "task": {
+      "title": "Job the robot should do",
+      "type": "string",
+      "description": "A short job name, e.g. \"mowing\", \"gutter cleaning\", \"floor scrubbing\".",
+      "editor": "textfield",
+      "prefill": "commercial mowing"
+    },
+    "searchPhrase": {
+      "title": "Search phrase (optional)",
+      "type": "string",
+      "description": "What a buyer would type into Google, e.g. \"commercial robotic mower\". Defaults to the job plus \"robot\".",
+      "editor": "textfield"
+    },
+    "startUrls": {
+      "title": "Vendor pages (optional)",
+      "type": "array",
+      "description": "Product pages to read instead of searching Google.",
+      "editor": "requestListSources"
+    },
+    "maxSites": {
+      "title": "Max sites from Google",
+      "type": "integer",
+      "description": "How many websites to read (one page each). Fewer is faster: 8 takes about 3 minutes. Each page can list several robots.",
+      "default": 8,
+      "minimum": 1,
+      "maximum": 40
+    },
+    "proxyConfiguration": {
+      "title": "Proxy",
+      "type": "object",
+      "description": "Sites that answer 403 are blocking bots. Residential proxies get past most of them. Switch to automatic (datacenter) proxies if your plan has no residential traffic.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
+      },
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": [
+          "RESIDENTIAL"
+        ]
+      }
+    },
+    "anthropicApiKey": {
+      "title": "Anthropic API key",
+      "type": "string",
+      "description": "Used to read each page with Claude Haiku. Stored encrypted.",
+      "editor": "textfield",
+      "isSecret": true
+    }
+  },
+  "required": [
+    "task",
+    "anthropicApiKey"
+  ]
+}

@@ -1,40 +1,22 @@
 // Which Convex backend the Rivet pages talk to. One fixed, visible rule:
-//   - localhost, 127.0.0.1 or a file:// page -> "local" (npx convex dev on this machine)
-//   - the production site, rivet-rose.vercel.app / any other host -> "cloud" (the shared
-//     Convex Cloud dev deployment)
-//   - TEMPORARY, REMOVE BEFORE MERGING TO PRODUCTION: any other *.vercel.app host, i.e. a
-//     branch preview -> "preview", an isolated Convex deployment, so a preview of the
-//     sign-in work can never read or write the shared backend. Unknown preview hosts fail
-//     safe (isolated), never shared.
-//   - ?backend=local or ?backend=cloud in the page URL overrides, for testing. The page
-//     sends the visitor's sign-in token to its backend, so a link may not point it at their
-//     machine ("local" only on this machine) and a preview may not be pointed at the shared
-//     backend ("cloud" only off preview hosts).
-// The page shows which one it uses ("Saved to Rivet (cloud)"), and each backend keeps
-// its own saved draft, so environments are never mixed silently. Deployment URLs are
-// public, not secrets. Load this before js/rivet-api.js.
+//   - this machine (localhost, 127.0.0.1 or a file:// page) -> "local": http://127.0.0.1:3210
+//     (npx convex dev)
+//   - a hosted site (e.g. Vercel)                            -> "cloud": whatever that site's
+//     /api/config returns, i.e. the CONVEX_URL setting of that Vercel environment. js/rivet-api.js
+//     asks for it at runtime, so the repo names no deployment. Production and Preview each set
+//     their own; a preview should point at an isolated deployment.
+//   - a URL injected before this script (tests only) wins, and is labelled "custom".
+// RIVET_BACKEND names it, for labels ("Saved to Rivet (cloud)") and per-backend storage keys, so
+// environments are never mixed silently. Deployment URLs are public, not secrets. There is no
+// ?backend= override: a page sends the visitor's sign-in token to its backend, so a link must not
+// be able to point it anywhere else. Load this before js/rivet-api.js.
 (function (root) {
   "use strict";
-  var BACKENDS = {
-    local: "http://127.0.0.1:3210",
-    cloud: "https://coordinated-canary-9.convex.cloud",
-    preview: "https://woozy-warbler-733.convex.cloud", // isolated: project rivet-auth-preview
-  };
-  var PRODUCTION_HOSTS = ["rivet-rose.vercel.app"];
-  // A URL injected before this script (tests only) wins, and is labelled "custom".
   if (root.RIVET_CONVEX_URL) { root.RIVET_BACKEND = root.RIVET_BACKEND || "custom"; return; }
-  var loc = root.location || {};
-  var host = loc.hostname || "";
+  var host = (root.location && root.location.hostname) || "";
   var onThisMachine = host === "" || host === "localhost" || host === "127.0.0.1";
-  var onPreviewHost = /\.vercel\.app$/.test(host) && PRODUCTION_HOSTS.indexOf(host) === -1;
-  var requested = null;
-  try { requested = new URLSearchParams(loc.search || "").get("backend"); } catch (e) { /* old browser */ }
-  if (requested === "local" && !onThisMachine) requested = null;
-  if (requested === "cloud" && onPreviewHost) requested = null;
-  if (requested === "preview" && !onPreviewHost) requested = null;
-  var name = Object.prototype.hasOwnProperty.call(BACKENDS, requested) ? requested : onThisMachine ? "local" : onPreviewHost ? "preview" : "cloud";
-  root.RIVET_BACKEND = name;
-  root.RIVET_CONVEX_URL = BACKENDS[name];
+  root.RIVET_BACKEND = onThisMachine ? "local" : "cloud";
+  if (onThisMachine) root.RIVET_CONVEX_URL = "http://127.0.0.1:3210";
 })(typeof globalThis !== "undefined" ? globalThis : window);
 
 // Clerk (sign-in). The publishable key is public by design; it names the Clerk

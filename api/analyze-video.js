@@ -21,6 +21,10 @@
 // and format-checked first, so malformed requests never spend budget. Errors never
 // include Gemini's responses. The Video Input tab shows its "analysis unavailable"
 // error for any non-200; upload/preview still works either way.
+//
+// Note: adding/changing an env var in the Vercel dashboard does not affect
+// deployments that already built before the change -- a new deployment is
+// required to pick it up.
 
 import { createHmac } from "node:crypto";
 

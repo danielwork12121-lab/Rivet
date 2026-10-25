@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // rivet-api.js is a classic browser script that attaches RivetApi to globalThis.
 // @ts-expect-error plain JS, no types
@@ -359,5 +359,46 @@ describe("newClientToken", () => {
     const a = api().newClientToken(), b = api().newClientToken();
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[A-Za-z0-9_-]{8,100}$/);
+  });
+});
+
+describe("backendUrl (hosted pages ask /api/config, never fall back to this machine)", () => {
+  const g = globalThis as any;
+  const at = (protocol: string, hostname: string) => vi.stubGlobal("location", { protocol, hostname });
+  const config = (body: unknown, ok = true) => vi.stubGlobal("fetch", vi.fn(async () => ({ ok, json: async () => body })));
+  let saved: unknown;
+  beforeEach(() => { saved = g.RIVET_CONVEX_URL; delete g.RIVET_CONVEX_URL; });
+  afterEach(() => { vi.unstubAllGlobals(); g.RIVET_CONVEX_URL = saved; });
+
+  it("an injected URL wins and nothing is fetched", async () => {
+    g.RIVET_CONVEX_URL = "http://127.0.0.1:1";
+    config({});
+    await expect(api()._backendUrl()).resolves.toBe("http://127.0.0.1:1");
+    expect(g.fetch).not.toHaveBeenCalled();
+  });
+
+  it("on this machine, the local backend", async () => {
+    at("http:", "localhost");
+    config({});
+    await expect(api()._backendUrl()).resolves.toBe("http://127.0.0.1:3210");
+    expect(g.fetch).not.toHaveBeenCalled();
+  });
+
+  it("a hosted page uses the Convex Cloud URL from /api/config", async () => {
+    at("https:", "rivet-rose.vercel.app");
+    config({ convexUrl: "https://example-name-123.convex.cloud" });
+    await expect(api()._backendUrl()).resolves.toBe("https://example-name-123.convex.cloud");
+    expect(g.fetch).toHaveBeenCalledWith("/api/config");
+  });
+
+  it.each([
+    ["missing", {}, true],
+    ["not Convex Cloud", { convexUrl: "https://evil.example" }, true],
+    ["local", { convexUrl: "http://127.0.0.1:3210" }, true],
+    ["a failed request", { convexUrl: "https://x.convex.cloud" }, false],
+  ])("a hosted page refuses a %s URL instead of falling back", async (_n, body, ok) => {
+    at("https:", "rivet-rose.vercel.app");
+    config(body, ok as boolean);
+    await expect(api()._backendUrl()).rejects.toThrow(/backend isn't configured/);
   });
 });

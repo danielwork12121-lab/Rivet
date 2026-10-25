@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
+import { robotSpec } from "./schema";
 
 // Made-up demo robots so you can build before the Apify import works.
 // Prices are rough placeholders: replace them with real data.
@@ -60,13 +61,26 @@ export const seed = internalMutation({
   },
 });
 
+// Deletes every fictional demo robot, so only robots found on the web remain.
+// Run: npx convex run --prod robots:removeSamples
+export const removeSamples = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const samples = (await ctx.db.query("robots").collect()).filter((r) => r.sample);
+    for (const r of samples) await ctx.db.delete(r._id);
+    return `Removed ${samples.length} sample robots`;
+  },
+});
+
 // The manual-filter side of search (price slider, task).
 export const search = query({
   args: { task: v.optional(v.string()), maxPrice: v.optional(v.number()) },
   handler: async (ctx, { task, maxPrice }) => {
     const all = await ctx.db.query("robots").collect();
+    // Robots without a listed price are kept out of a price filter: their price is unknown.
     return all.filter(
-      (r) => (!task || r.task === task) && (maxPrice === undefined || r.price <= maxPrice),
+      (r) => (!task || r.task === task) &&
+        (maxPrice === undefined || (r.priceStatus !== "quote_only" && r.price <= maxPrice)),
     );
   },
 });
@@ -77,7 +91,8 @@ export const searchInternal = internalQuery({
   handler: async (ctx, { task, maxPrice }) => {
     const all = await ctx.db.query("robots").collect();
     return all
-      .filter((r) => (!task || r.task === task) && (maxPrice === undefined || r.price <= maxPrice))
+      .filter((r) => (!task || r.task === task) &&
+        (maxPrice === undefined || (r.priceStatus !== "quote_only" && r.price <= maxPrice)))
       .map((r) => ({ id: r._id, name: r.name, vendor: r.vendor, task: r.task, price: r.price, environments: r.environments }));
   },
 });
@@ -102,4 +117,48 @@ export const insert = internalMutation({
     yearlyOpex: v.number(), automationShare: v.number(), environments: v.array(v.string()), url: v.string(),
   },
   handler: async (ctx, robot) => ctx.db.insert("robots", { ...robot, sample: false }),
+});
+// ---------- Robots found on the web ----------
+
+// Every robot for one task, real and sample, for the decision layer.
+export const forTask = internalQuery({
+  args: { task: v.string() },
+  handler: async (ctx, { task }) => ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", task)).collect(),
+});
+
+// Task names already in the catalog, so the AI reuses "mowing" instead of inventing "lawn mowing".
+export const knownTasks = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const tasks = new Set<string>();
+    for (const r of await ctx.db.query("robots").collect()) tasks.add(r.task);
+    for (const d of await ctx.db.query("discoveries").collect()) tasks.add(d.task);
+    return [...tasks].sort();
+  },
+});
+
+// Adds a robot found on a vendor page, or updates it if that page was seen before.
+export const upsertScraped = internalMutation({
+  args: {
+    name: v.string(),
+    vendor: v.string(),
+    task: v.string(),
+    url: v.string(),
+    price: v.number(),
+    priceStatus: v.union(v.literal("listed"), v.literal("quote_only")),
+    yearlyOpex: v.number(),
+    automationShare: v.number(),
+    environments: v.array(v.string()),
+    specs: v.array(robotSpec),
+    assumptions: v.array(v.string()),
+  },
+  handler: async (ctx, robot) => {
+    const row = { ...robot, sample: false, fetchedAt: Date.now(), provenance: `Read from ${robot.url}` };
+    const old = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", robot.url)).first();
+    if (old) {
+      await ctx.db.patch(old._id, row);
+      return old._id;
+    }
+    return await ctx.db.insert("robots", row);
+  },
 });

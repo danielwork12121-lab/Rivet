@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
 import { asClient, asDeveloper, signedIn } from "../tests/auth-helpers";
@@ -16,7 +16,12 @@ const intake = {
 const base = { vendor: "V", task: "mowing", environments: [], url: "https://example.com/r" };
 const sample = (name: string, o: object = {}) => ({ ...base, name, price: 20000, yearlyOpex: 1500, automationShare: 0.6, sample: true, ...o });
 
-async function setup() {
+afterEach(() => vi.unstubAllEnvs());
+
+// Most tests use fictional sample robots, so they switch them on (an isolated test deployment
+// does the same with SHOW_SAMPLE_ROBOTS=true). Production hides them.
+async function setup({ samples = true } = {}) {
+  if (samples) vi.stubEnv("SHOW_SAMPLE_ROBOTS", "true");
   const raw = convexTest(schema, modules);
   const t = await asClient(raw);
   const requestId = await t.mutation(api.requests.create, intake);
@@ -196,6 +201,14 @@ describe("matching: provenance", () => {
     expect(v.provenance).toBe("Read from https://example.com/edger");
     expect(v.fetchedAt).toBe(1_700_000_000_000);
     expect(v.assumptions.join(" ")).not.toMatch(/Fictional/);
+  });
+
+  it("fictional robots are hidden unless SHOW_SAMPLE_ROBOTS=true", async () => {
+    const { t, requestId, ids } = await setup({ samples: false });
+    await t.mutation(api.matching.findRobots, { requestId, task: "edging", annualTaskCost: 30000 });
+    const picks = (await t.query(api.matching.latestMatch, { requestId }))!.picks;
+    expect(picks.map((p) => p.robotId).sort()).toEqual([ids.edgeVendor, ids.edgeUnverified].sort());
+    expect(picks.every((p) => p.dataSource !== "fictional_sample")).toBe(true);
   });
 
   it("fictional robots carry the 'not vendor data' note; the others do not", async () => {

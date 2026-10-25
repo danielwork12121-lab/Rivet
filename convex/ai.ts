@@ -10,12 +10,17 @@ import { v } from "convex/values";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { computeRoi, suggestBounty } from "./lib/roi";
+import { nextAction, rankRobots, type Requirement } from "./lib/decide";
+import { cleanIntent, robotFromPage } from "./lib/extract";
+import { isSpecName, SPEC_NAMES } from "./lib/specs";
+import type { Id } from "./_generated/dataModel";
 import { PERSONAS } from "./lib/personas";
 
 // Created per call so a key set later (npx convex env set) is picked up without a
 // redeploy. Reads ANTHROPIC_API_KEY from Convex env vars.
 const client = () => new Anthropic();
-const MODEL = "claude-opus-5-5";
+const MODEL = "claude-opus-5-5"; // deep layer: careful writing and judgment
+const FAST_MODEL = "claude-haiku-5-5"; // fast layer: reading messages and pages
 
 // Quick check that the key works: npx convex run ai:hello
 // Internal so browsers can't spend the API key; `npx convex run` can still call it.
@@ -306,48 +311,227 @@ export const writeBounty = internalAction({
   },
 });
 
-// ---------- 4. Real robot data from Apify (stretch goal) ----------
+// ---------- 4. Robot specs from crawled vendor pages ----------
+// scrape.ts saves pages; this reads each one with the fast model. lib/extract.ts
+// then keeps only numbers whose quote is really on the page.
 
+const EXTRACT_PROMPT = `You read one web page and extract the robot product it describes, for a
+marketplace that helps small trade businesses (lawn care, cleaning, pest control,
+facilities, construction) find robots.
+- isRobotProduct: true only if the page is about one specific robot or autonomous machine
+  that can be bought or leased. Blog posts, news, lists of many products and company
+  home pages without one product: false.
+- For every number, copy the exact sentence or table row from the page into quote, and
+  give value and unit exactly as written there. If the page doesn't state it, use null
+  for value, unit and quote. Never estimate or convert.
+- price: purchase price in USD. If the page says to contact sales or request a quote,
+  priceOnRequest is true and price is null.
+- yearlyRunningCost: a stated yearly subscription, service plan or maintenance cost in USD.
+- laborSavedPercent: a stated share of labor or time saved, e.g. "cuts labor by 60%" is 60.
+- specs: only these names: ${SPEC_NAMES.join(", ")}.`;
+
+const Evidence = z.object({ value: z.number().nullable(), unit: z.string().nullable(), quote: z.string().nullable() });
 const RobotPageSchema = z.object({
   isRobotProduct: z.boolean(),
   name: z.string(),
   vendor: z.string(),
-  task: z.enum(["inspection", "mowing", "spraying", "cleaning", "delivery", "other"]),
-  priceUsd: z.number().nullable(), // null when the page says "contact us"
+  priceOnRequest: z.boolean(),
+  price: Evidence,
+  yearlyRunningCost: Evidence,
+  laborSavedPercent: Evidence,
+  specs: z.array(z.object({ name: z.enum(SPEC_NAMES), value: z.number(), unit: z.string(), quote: z.string() })),
   environments: z.array(z.string()),
 });
 
-// After an Apify Website Content Crawler run finishes, copy its dataset id and run:
-// npx convex run ai:importFromApify '{"datasetId":"abc123"}'
-export const importFromApify = internalAction({
-  args: { datasetId: v.string() },
-  handler: async (ctx, { datasetId }) => {
-    const url = `https://api.apify.com/v2/datasets/${datasetId}/items?clean=true&format=json&token=${process.env.APIFY_TOKEN}`;
-    const pages = (await (await fetch(url)).json()) as { url: string; text?: string }[];
-    let added = 0;
+export const extractPages = internalAction({
+  args: { discoveryId: v.id("discoveries") },
+  handler: async (ctx, { discoveryId }) => {
+    const discovery = await ctx.runQuery(internal.discovery.get, { discoveryId });
+    if (!discovery) return;
+    const pages = await ctx.runQuery(internal.discovery.pagesToExtract, { discoveryId });
+    let robotsFound = 0;
+    // One page at a time keeps this simple; a few pages take about a minute.
     for (const page of pages) {
+      const started = Date.now();
+      try {
+        const res = await client().messages.parse({
+          model: FAST_MODEL,
+          max_tokens: 8000,
+          output_config: { effort: "low", format: zodOutputFormat(RobotPageSchema) },
+          system: [{ type: "text", text: EXTRACT_PROMPT, cache_control: { type: "ephemeral" } }],
+          // Product facts are near the top; the cap keeps one huge page from costing much.
+          messages: [{ role: "user", content: `URL: ${page.url}\n\n${page.markdown.slice(0, 40_000)}` }],
+        });
+        const robot = res.parsed_output && robotFromPage(res.parsed_output, page, discovery.task);
+        if (robot) {
+          await ctx.runMutation(internal.robots.upsertScraped, robot);
+          robotsFound++;
+        }
+        await ctx.runMutation(internal.agent.logRun, {
+          route: "extract", ms: Date.now() - started, ok: true,
+          inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
+          note: robot ? `robot: ${robot.name}` : `not a product: ${page.url}`.slice(0, 300),
+        });
+      } catch (err) {
+        await logFailure(ctx, "extract", err);
+      }
+      await ctx.runMutation(internal.discovery.markExtracted, { pageId: page._id });
+    }
+    await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound });
+  },
+});
+
+// ---------- 5. "Find robots for me": fast read -> decide -> explain ----------
+
+const INTENT_PROMPT = `Read a small trade business's request and pull out what a robot search needs.
+- task: 1 to 3 lowercase words naming the job a robot would do, e.g. "mowing",
+  "gutter cleaning", "weed spraying", "floor scrubbing". If one of knownTasks fits, use it exactly.
+- searchPhrase: 2 to 5 words a buyer would type into Google to find such robots,
+  e.g. "commercial robotic mower".
+- annualTaskCost: what they spend per year on this task in USD, and budget: what they
+  would pay for a robot in USD. Only if the operator wrote the number; otherwise null.
+  Never estimate or calculate.
+- requirements: measurable needs the operator stated or picked, using only these names:
+  ${SPEC_NAMES.join(", ")}. Give value and unit exactly as written; don't convert.
+  op is atLeast for minimums (slope it must handle, runtime) and atMost for maximums
+  (weight limit). mandatory is true unless they said it's a nice-to-have.`;
+
+const IntentSchema = z.object({
+  task: z.string(),
+  searchPhrase: z.string(),
+  annualTaskCost: z.number().nullable(),
+  budget: z.number().nullable(),
+  requirements: z.array(
+    z.object({
+      name: z.enum(SPEC_NAMES),
+      op: z.enum(["atLeast", "atMost"]),
+      value: z.number(),
+      unit: z.string(),
+      mandatory: z.boolean(),
+    }),
+  ),
+});
+
+const REASONS_PROMPT = `You explain robot matches to the owner of a small trade business.
+Code has already ranked the robots, checked each requirement and done the money math.
+Don't change or recompute any of it.
+For each robot write one or two plain sentences on why it does or doesn't fit this
+operator, naming the most important requirement it meets or misses. If you mention
+money or months, copy the exact numbers given. Numbers listed under assumptions are
+estimates: say so if you use them. Use the robotId given for each robot.`;
+
+const ReasonsSchema = z.object({
+  reasons: z.array(z.object({ robotId: z.string(), reason: z.string() })),
+});
+
+export const matchRobots = internalAction({
+  args: { matchId: v.id("matches"), searched: v.optional(v.boolean()) },
+  handler: async (ctx, { matchId, searched }) => {
+    const match = await ctx.runQuery(internal.agent.getMatch, { matchId });
+    if (!match) return;
+    const started = Date.now();
+    try {
+      const context = await ctx.runQuery(internal.agent.requestContext, { requestId: match.requestId });
+
+      // 1. Fast layer: read the message (about a second). Reused after a web search.
+      let intent = match.intent;
+      if (!intent) {
+        const knownTasks = await ctx.runQuery(internal.robots.knownTasks, {});
+        const res = await client().messages.parse({
+          model: FAST_MODEL,
+          max_tokens: 4000,
+          output_config: { effort: "low", format: zodOutputFormat(IntentSchema) },
+          system: [{ type: "text", text: INTENT_PROMPT, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: JSON.stringify({ knownTasks, ...context }) }],
+        });
+        if (!res.parsed_output) throw new Error(`No intent returned (stop_reason: ${res.stop_reason})`);
+        intent = cleanIntent(res.parsed_output, JSON.stringify(context), context.request.cost?.currentAnnualCost);
+        await ctx.runMutation(internal.agent.patchMatch, { matchId, intent });
+        await ctx.runMutation(internal.agent.logRun, {
+          route: "intent", ms: Date.now() - started, ok: true,
+          inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
+        });
+      }
+
+      // 2. Catalog, or a web search when we have no real robots for this task yet.
+      // Only real robots: the fictional demo ones are never shown to operators.
+      const robots = (await ctx.runQuery(internal.robots.forTask, { task: intent.task })).filter((r) => !r.sample);
+      if (!searched && robots.length === 0 && process.env.APIFY_TOKEN) {
+        const search = await ctx.runMutation(internal.discovery.start, {
+          task: intent.task, searchPhrase: intent.searchPhrase, matchId,
+        });
+        if (search === "run" || search === "wait") {
+          // discovery.finish runs this again with searched: true. ("blocked": searching is off
+          // or over budget, so rank what the catalog has.)
+          await ctx.runMutation(internal.agent.patchMatch, { matchId, status: "searching" });
+          return;
+        }
+      }
+
+      // 3. Decision layer: plain code, milliseconds.
+      const typed = { ...intent, requirements: intent.requirements.filter((r) => isSpecName(r.name)) as Requirement[] };
+      const ranked = rankRobots(typed, robots.map((r) => ({ ...r, _id: r._id as string })));
+      const next = nextAction(typed, ranked);
+      const picks = ranked.map((p) => ({ ...p, robotId: p.robotId as Id<"robots"> }));
+      await ctx.runMutation(internal.agent.patchMatch, {
+        matchId, status: "ranked", picks, next, msToRanked: Date.now() - match._creationTime,
+      });
+      if (picks.length === 0) {
+        await ctx.runMutation(internal.agent.patchMatch, { matchId, status: "done" });
+        return;
+      }
+
+      // 4. Deep layer: the strong model explains the decision in one call.
+      const byId = new Map(robots.map((r) => [r._id as string, r]));
+      const allowed = new Set<string>();
+      const forClaude = picks.map((p) => {
+        const r = byId.get(p.robotId)!;
+        const price = r.priceStatus === "quote_only" ? null : r.price;
+        for (const n of [price, p.paybackMonths, p.yearlyNetSavings, p.breakEvenAnnualCost, intent.annualTaskCost, intent.budget]) {
+          if (n !== null && n !== undefined) allowed.add(String(n));
+        }
+        return {
+          robotId: p.robotId, name: r.name, vendor: r.vendor, price: price ?? "price on request",
+          fit: p.fit, paybackMonths: p.paybackMonths, yearlyNetSavings: p.yearlyNetSavings,
+          annualTaskCostToPayBackIn24Months: p.breakEvenAnnualCost, assumptions: p.assumptions,
+          specs: (r.specs ?? []).map((s) => ({ name: s.name, value: s.value })),
+        };
+      });
+      const deepStarted = Date.now();
       const res = await client().messages.parse({
         model: MODEL,
-        max_tokens: 4096,
-        output_config: { effort: "low", format: zodOutputFormat(RobotPageSchema) },
-        system: "Extract the robot product on this page. Copy facts from the page; never guess a price.",
-        messages: [{ role: "user", content: (page.text ?? "").slice(0, 20000) }],
+        max_tokens: 16000,
+        output_config: { effort: "low", format: zodOutputFormat(ReasonsSchema) },
+        system: REASONS_PROMPT,
+        messages: [{ role: "user", content: JSON.stringify({ operator: context.request.description, intent, next, robots: forClaude }) }],
       });
-      const r = res.parsed_output;
-      if (!r || !r.isRobotProduct || r.priceUsd === null) continue; // skip pages without a price
-      await ctx.runMutation(internal.robots.insert, {
-        name: r.name,
-        vendor: r.vendor,
-        task: r.task,
-        price: r.priceUsd,
-        yearlyOpex: Math.round(r.priceUsd * 0.1), // assumption: 10% of price per year
-        automationShare: 0.5, // assumption: replaces half the task's labor
-        environments: r.environments,
-        url: page.url,
+      const dropped: string[] = [];
+      const withReasons = picks.map((p) => {
+        const reason = res.parsed_output?.reasons.find((x) => x.robotId === p.robotId)?.reason;
+        if (!reason) return p;
+        const madeUp = numbersIn(reason).filter((n) => !allowed.has(n));
+        if (madeUp.length) {
+          dropped.push(`${p.robotId}: ${madeUp.join(",")}`);
+          return p;
+        }
+        return { ...p, reason };
       });
-      added++;
+      await ctx.runMutation(internal.agent.patchMatch, { matchId, status: "done", picks: withReasons });
+      await ctx.runMutation(internal.agent.logRun, {
+        route: "reasons", ms: Date.now() - deepStarted, ok: dropped.length === 0,
+        inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens,
+        ...(dropped.length ? { note: "dropped made-up numbers " + dropped.join("; ") } : {}),
+      });
+    } catch (err) {
+      await logFailure(ctx, "match", err);
+      // Keep any picks already shown; only mark failed if nothing was ranked yet.
+      const latest = await ctx.runQuery(internal.agent.getMatch, { matchId });
+      await ctx.runMutation(internal.agent.patchMatch, {
+        matchId,
+        status: latest && latest.picks.length > 0 ? "done" : "failed",
+        error: classify(err).error,
+      });
     }
-    return `Added ${added} of ${pages.length} pages`;
   },
 });
 

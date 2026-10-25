@@ -20,7 +20,9 @@
 
 import { createHmac } from "node:crypto";
 
-const MODEL = "claude-opus-5-5"; // matches convex/ai.ts
+// The fast model: this route writes one short sentence, so speed matters more
+// than depth. convex/ai.ts uses the same model (FAST_MODEL) for its quick steps.
+const MODEL = "claude-haiku-5-5";
 // Vercel's default function timeout (10s on Hobby) was shorter than our old
 // 12s AbortController, so Vercel could kill the function before our own
 // timeout/error-handling ever ran, leaving the frontend with a bare failed
@@ -28,7 +30,8 @@ const MODEL = "claude-opus-5-5"; // matches convex/ai.ts
 // behavior. vercel.json now sets maxDuration: 30 for this function; keep this
 // value comfortably under that so we always get to return our own JSON error.
 const TIMEOUT_MS = 25000;
-const MAX_TOKENS = 1024; // thinking counts toward this on claude-opus-5-5; 150 often left no room for text
+// Haiku thinks briefly before answering, so leave room beyond the ~20-word reply.
+const MAX_TOKENS = 2000;
 
 const SYSTEM_PROMPTS = {
   // First message: the operator just described a job. The app's own form asks
@@ -48,6 +51,18 @@ questions (location, team size, hours, labor cost, safety, budget). They just
 sent another freeform message. Reply briefly and specifically (max ~2 short
 sentences), acknowledging what they said. No markdown, no emoji, no
 re-asking the questions above.`,
+  // Drives the "Top matches" header label — not shown as a chat bubble.
+  // Input is everything the operator has typed so far, joined into one
+  // string. Needs to stay current as the conversation adds detail, so this
+  // is re-run after every message, not just the first.
+  topic: `You are extracting a short topic label from an operator's messages
+to Rivet, a robotics-bounty marketplace. You'll get everything they've said
+about the job so far, in order. Reply with 3 to 6 words summarizing the job
+and the single most defining detail (e.g. "commercial lawn mowing",
+"warehouse floor cleaning, 50k sqft site"). Lowercase unless a proper noun.
+No ending punctuation, no quotes, no markdown. If there isn't enough
+information yet, give your best short guess rather than refusing or asking
+a question.`,
 };
 
 const fail = (res, status, error, message) => res.status(status).json({ error, message });
@@ -108,7 +123,7 @@ export default async function handler(req, res) {
     }
   }
   const message = typeof body?.message === "string" ? body.message.trim().slice(0, 4000) : "";
-  const mode = body?.mode === "followup" ? "followup" : "opening";
+  const mode = ["followup", "topic"].includes(body?.mode) ? body.mode : "opening";
   if (!message) return fail(res, 400, "bad_request", "message is required.");
 
   const budget = await reserveBudget(CONVEX_URL, RIVET_SERVER_SECRET, visitorKey(req, RIVET_SERVER_SECRET), bearer[1]);

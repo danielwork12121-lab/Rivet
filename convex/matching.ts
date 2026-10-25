@@ -28,6 +28,18 @@ const estimateNote = (name: SpecName) =>
 const MAX_REQUIREMENTS = 10;
 const MAX_ROBOTS = 500;
 
+// Fictional demo robots are hidden unless this deployment says otherwise. Only an isolated test
+// deployment should set SHOW_SAMPLE_ROBOTS=true; production never shows them (ai.matchRobots
+// drops them too). When shown, every result labels them (FICTIONAL_NOTE, dataSource).
+const showSamples = () => process.env.SHOW_SAMPLE_ROBOTS === "true";
+
+// This flow's latest row for a request. The AI flow (agent:findRobots) shares the matches table;
+// its rows have no engine or engine "agent", and this file never reads or replaces them.
+async function latestRulesMatch(ctx: QueryCtx, requestId: Doc<"operatorRequests">["_id"]) {
+  const rows = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").take(50);
+  return rows.find((m) => m.engine === "rules") ?? null;
+}
+
 type Basis = "estimate" | "measured";
 type SavedRequirement = { name: string; op: "atLeast" | "atMost"; value: number; mandatory: boolean; basis: Basis };
 type SavedInput = NonNullable<Doc<"operatorRequests">["matchingInput"]>;
@@ -175,7 +187,8 @@ function toFacts(r: Doc<"robots">): RobotFacts {
 async function computeAndStore(ctx: MutationCtx, request: Doc<"operatorRequests">) {
   const task = request.matchingInput!.task;
   const intent = intentFor(request, task);
-  const robots = await ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", task)).take(MAX_ROBOTS);
+  const robots = (await ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", task)).take(MAX_ROBOTS))
+    .filter((r) => showSamples() || !r.sample);
   const notes = requirementsFor(request).notes;
   const picks = rankRobots(intent, robots.map(toFacts)).map((p) => ({
     ...p,
@@ -189,12 +202,12 @@ async function computeAndStore(ctx: MutationCtx, request: Doc<"operatorRequests"
     picks,
     next: nextAction(intent, picks),
   };
-  const latest = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", request._id)).order("desc").first();
+  const latest = await latestRulesMatch(ctx, request._id);
   if (latest) {
     await ctx.db.patch(latest._id, { ...row, error: undefined, msToRanked: undefined });
     return latest._id;
   }
-  return await ctx.db.insert("matches", row);
+  return await ctx.db.insert("matches", { ...row, engine: "rules" as const });
 }
 
 // ---------- public functions (owner only) ----------
@@ -212,7 +225,7 @@ export const saveRequirements = mutation({
   handler: async (ctx, { requestId, ...input }) => {
     const owned = await loadOwnedDraft(ctx, requestId);
     const { request, changed } = await applyInput(ctx, owned, input);
-    const existing = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").first();
+    const existing = await latestRulesMatch(ctx, requestId);
     const matchUpdated = changed && existing !== null;
     if (matchUpdated) await computeAndStore(ctx, request);
     return { changed, matchUpdated, matchId: existing?._id ?? null };
@@ -247,7 +260,7 @@ export const clearRequirements = mutation({
   args: { requestId: v.id("operatorRequests") },
   handler: async (ctx, { requestId }) => {
     const request = await loadOwnedDraft(ctx, requestId);
-    const existing = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").first();
+    const existing = await latestRulesMatch(ctx, requestId);
     const saved = request.matchingInput;
     if (!saved || saved.requirements === undefined) {
       return { changed: false, matchUpdated: false, matchId: existing?._id ?? null };
@@ -291,7 +304,7 @@ function fitSource(r: Doc<"robots">, name: string): "vendor_spec" | "sample_figu
 // is true if the request's inputs have changed since the result was made (e.g. a new annual cost or
 // follow-up answer): run matching again. Null if none was run.
 async function matchView(ctx: QueryCtx, request: Doc<"operatorRequests">) {
-  const match = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", request._id)).order("desc").first();
+  const match = await latestRulesMatch(ctx, request._id);
   if (!match) return null;
   const sig = (i: Intent) => JSON.stringify([i.task, i.annualTaskCost, i.budget, i.requirements.map((r) => [r.name, r.op, r.value, r.mandatory])]);
   const mine = match.intent ? intentFor(request, request.matchingInput?.task ?? match.intent.task) : null;

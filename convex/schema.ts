@@ -231,6 +231,34 @@ export default defineSchema({
     .index("by_task", ["task"])
     .index("by_url", ["url"]),
 
+  // A web search for robots that do one task: Google search -> crawl -> extract.
+  // One row per task; matches waiting for it are re-run when it finishes.
+  discoveries: defineTable({
+    task: v.string(), // normalised, e.g. "gutter cleaning"
+    searchPhrase: v.string(),
+    status: v.union(
+      v.literal("searching"), v.literal("crawling"), v.literal("extracting"),
+      v.literal("done"), v.literal("failed"),
+    ),
+    urls: v.array(v.string()),
+    robotsFound: v.number(),
+    waitingMatches: v.array(v.id("matches")),
+    error: v.optional(v.string()),
+    finishedAt: v.optional(v.number()),
+  }).index("by_task", ["task"]),
+
+  // Raw crawled pages, kept so extraction can be re-run without paying to scrape again.
+  pages: defineTable({
+    discoveryId: v.id("discoveries"),
+    url: v.string(),
+    title: v.string(),
+    markdown: v.string(),
+    extracted: v.boolean(),
+    fetchedAt: v.number(),
+  })
+    .index("by_discovery", ["discoveryId"])
+    .index("by_url", ["url"]),
+
   // "Find robots for me": fast read -> catalog or web search -> decide -> reasons.
   matches: defineTable({
     requestId: v.id("operatorRequests"),
@@ -243,6 +271,10 @@ export default defineSchema({
     next: v.optional(matchNext),
     error: v.optional(v.string()),
     msToRanked: v.optional(v.number()), // how long until picks showed (for the demo)
+    // Which flow made this row: "rules" = matching.ts (saved requirements, plain code, no AI);
+    // absent or "agent" = agent:findRobots (AI read + web search + reasons). Each flow only reads
+    // and replaces its own rows.
+    engine: v.optional(v.union(v.literal("rules"), v.literal("agent"))),
   }).index("by_request", ["requestId"]),
 
   // The AI's "best for you" picks for a request.
@@ -309,7 +341,11 @@ export default defineSchema({
   // One row per paid AI call that was allowed to start (see lib/aiBudget.ts).
   // Used only to enforce the daily limits.
   aiUsage: defineTable({
-    kind: v.union(v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat"), v.literal("video")),
+    kind: v.union(
+      v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat"), v.literal("video"),
+      v.literal("match"), // an AI robot-matching run (agent:findRobots / setTaskCost)
+      v.literal("discovery"), // an Apify web search for robots (discovery.start)
+    ),
     requestId: v.optional(v.id("operatorRequests")),
     clientKey: v.optional(v.string()), // keyed hash of a website visitor's IP, never the IP itself
     userId: v.optional(v.id("users")), // the signed-in account that asked

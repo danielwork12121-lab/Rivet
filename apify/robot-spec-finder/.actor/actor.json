@@ -1,0 +1,12 @@
+{
+  "actorSpecification": 1,
+  "name": "robot-spec-finder",
+  "title": "Robot Spec Finder",
+  "description": "Give it a trade job like \"gutter cleaning\" and get the robots that do it, with price and specs quoted from each vendor's own page.",
+  "version": "0.1",
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile",
+  "storages": {
+    "dataset": "./dataset_schema.json"
+  }
+}

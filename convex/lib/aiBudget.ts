@@ -15,7 +15,10 @@ import type { Id } from "../_generated/dataModel";
 //   AI_USER_DAILY_LIMIT     per signed-in account in the last 24 h (default 10)
 //   VIDEO_DAILY_LIMIT       video analyses (Gemini) in the last 24 h (default 10)
 //   VIDEO_USER_DAILY_LIMIT  video analyses per signed-in account     (default 3)
-// A video analysis also counts toward the all-kinds limits above.
+//   DISCOVERY_DAILY_LIMIT   Apify web searches in the last 24 h      (default 3)
+//   DISCOVERY_USER_DAILY_LIMIT  web searches per signed-in account    (default 1)
+// A video analysis, an AI matching run and a web search each also count toward the
+// all-kinds limits above.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -33,9 +36,13 @@ export const aiLimits = () => ({
   perUser: limit("AI_USER_DAILY_LIMIT", 10),
   video: limit("VIDEO_DAILY_LIMIT", 10),
   videoPerUser: limit("VIDEO_USER_DAILY_LIMIT", 3),
+  discovery: limit("DISCOVERY_DAILY_LIMIT", 3),
+  discoveryPerUser: limit("DISCOVERY_USER_DAILY_LIMIT", 1),
 });
 
-export type AiBlock = "daily_limit" | "request_limit" | "client_limit" | "user_limit" | "video_limit" | "video_user_limit";
+export type AiBlock =
+  | "daily_limit" | "request_limit" | "client_limit" | "user_limit"
+  | "video_limit" | "video_user_limit" | "discovery_limit" | "discovery_user_limit";
 
 export const AI_BLOCK_MESSAGES: Record<AiBlock, string> = {
   daily_limit: "The demo's AI budget for today has been used up. Please try again tomorrow.",
@@ -44,10 +51,12 @@ export const AI_BLOCK_MESSAGES: Record<AiBlock, string> = {
   user_limit: "Your account has reached today's AI limit for this demo.",
   video_limit: "The demo's video analysis budget for today has been used up. Please try again tomorrow.",
   video_user_limit: "Your account has reached today's video analysis limit for this demo.",
+  discovery_limit: "The demo's web search budget for today has been used up.",
+  discovery_user_limit: "Your account has reached today's web search limit for this demo.",
 };
 
 type Scope = { requestId?: Id<"operatorRequests">; clientKey?: string; userId?: Id<"users"> };
-type Kind = "spec" | "recommend" | "bounty" | "chat" | "video";
+type Kind = "spec" | "recommend" | "bounty" | "chat" | "video" | "match" | "discovery";
 
 // Which limit (if any) blocks a new paid call for this scope.
 // `kind: "video"` adds the video-specific limits on top of the all-kinds ones.
@@ -72,6 +81,13 @@ export async function budgetBlock(ctx: QueryCtx, scope: Scope & { kind?: Kind } 
     if (videos.length >= lim.video) return "video_limit";
     if (scope.userId && videos.filter((u) => u.userId === scope.userId).length >= lim.videoPerUser) {
       return "video_user_limit";
+    }
+  }
+  if (scope.kind === "discovery") {
+    const searches = recent.filter((u) => u.kind === "discovery");
+    if (searches.length >= lim.discovery) return "discovery_limit";
+    if (scope.userId && searches.filter((u) => u.userId === scope.userId).length >= lim.discoveryPerUser) {
+      return "discovery_user_limit";
     }
   }
   return null;

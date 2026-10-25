@@ -4,6 +4,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { loadOwnedDraft, withoutToken } from "./lib/drafts";
 import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./lib/aiBudget";
+import { intentInfo, matchNext, matchPick } from "./schema";
+import { dataSourceOf } from "./matching";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -344,5 +346,129 @@ export const logRun = internalMutation({
   },
   handler: async (ctx, run) => {
     await ctx.db.insert("agentRuns", run);
+  },
+});
+// ---------- 4. "Find robots for me" (fast read -> decide -> explain) ----------
+// Paid: a run is one fast Claude read plus one Claude explanation, and may start an Apify web
+// search (gated separately in discovery.start). Off unless AI_MATCH_ENABLED=true and a key is
+// set; only the owning Client; one unit of AI budget per new run (reusing one in progress is free).
+// matching.ts (saved requirements, no AI) shares the matches table; its rows carry engine "rules"
+// and this flow neither reads nor replaces them.
+
+const matchEnabled = () => process.env.AI_MATCH_ENABLED === "true" && aiAvailable();
+const MATCH_OFF = "AI robot matching is turned off on this backend.";
+
+// The latest row this flow made for a request (rows from before `engine` existed count as ours).
+async function latestAgentMatch(ctx: QueryCtx, requestId: Id<"operatorRequests">) {
+  const rows = await ctx.db
+    .query("matches")
+    .withIndex("by_request", (q) => q.eq("requestId", requestId))
+    .order("desc")
+    .take(50);
+  return rows.find((m) => m.engine !== "rules") ?? null;
+}
+
+// Starts a paid run, or (with reuse) returns the one still in progress so repeated clicks never
+// start a second. Throws a safe message if a daily limit is reached. Mutations are serializable,
+// so concurrent clicks can't both pass the budget check.
+async function startAgentMatch(ctx: MutationCtx, request: Doc<"operatorRequests">, reuse: boolean) {
+  if (reuse) {
+    const latest = await latestAgentMatch(ctx, request._id);
+    if (latest && (latest.status === "reading" || latest.status === "searching") &&
+        Date.now() - latest._creationTime < STUCK_JOB_MS) {
+      return latest._id;
+    }
+  }
+  await spendAiBudget(ctx, "match", { requestId: request._id, userId: request.ownerId });
+  const matchId = await ctx.db.insert("matches", { requestId: request._id, status: "reading", picks: [], engine: "agent" });
+  await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
+  return matchId;
+}
+
+// Frontend calls this once the operator has described the job. Returns the match
+// id right away; agent:latestMatch fills in over the next few seconds.
+export const findRobots = mutation({
+  args: owner,
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
+    if (!matchEnabled()) throw new ConvexError(MATCH_OFF);
+    return await startAgentMatch(ctx, request, true);
+  },
+});
+
+// The operator answers "how much does this task cost you a year?"; matching is redone.
+// The cost is saved either way; a new run starts only when matching is on and within budget.
+export const setTaskCost = mutation({
+  args: { ...owner, annualTaskCost: v.number() },
+  handler: async (ctx, { requestId, annualTaskCost }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
+    if (!(Number.isFinite(annualTaskCost) && annualTaskCost > 0 && annualTaskCost < 100_000_000)) {
+      throw new ConvexError("annualTaskCost must be a positive number of dollars");
+    }
+    await ctx.db.patch(requestId, {
+      cost: { ...(request.cost ?? { currency: "USD" }), currentAnnualCost: annualTaskCost },
+      updatedAt: Date.now(),
+    });
+    if (!matchEnabled() || (await budgetBlock(ctx, { requestId, userId: request.ownerId, kind: "match" }))) return null;
+    return await startAgentMatch(ctx, request, false);
+  },
+});
+
+// Everything the page needs to show the latest match, with each robot's details
+// and sources, and the web search's progress while one is running.
+export const latestMatch = query({
+  args: owner,
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
+    const match = await latestAgentMatch(ctx, requestId);
+    if (!match) return null;
+    const robots = [];
+    for (const p of match.picks) {
+      const r = await ctx.db.get(p.robotId);
+      if (!r) continue;
+      robots.push({
+        ...p,
+        name: r.name, vendor: r.vendor, url: r.url, sample: r.sample,
+        price: r.priceStatus === "quote_only" ? null : r.price,
+        specs: r.specs ?? [],
+        fetchedAt: r.fetchedAt ?? null,
+        dataSource: dataSourceOf(r),
+      });
+    }
+    const search = match.intent && match.status === "searching"
+      ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
+      : null;
+    return {
+      _id: match._id,
+      status: match.status,
+      intent: match.intent ?? null,
+      next: match.next ?? null,
+      error: match.error ?? null,
+      msToRanked: match.msToRanked ?? null,
+      picks: robots,
+      search: search && { status: search.status, sitesFound: search.urls.length },
+    };
+  },
+});
+
+export const getMatch = internalQuery({
+  args: { matchId: v.id("matches") },
+  handler: async (ctx, { matchId }) => ctx.db.get(matchId),
+});
+
+export const patchMatch = internalMutation({
+  args: {
+    matchId: v.id("matches"),
+    status: v.optional(
+      v.union(v.literal("reading"), v.literal("searching"), v.literal("ranked"), v.literal("done"), v.literal("failed")),
+    ),
+    intent: v.optional(intentInfo),
+    picks: v.optional(v.array(matchPick)),
+    next: v.optional(matchNext),
+    error: v.optional(v.string()),
+    msToRanked: v.optional(v.number()),
+  },
+  handler: async (ctx, { matchId, ...patch }) => {
+    await ctx.db.patch(matchId, patch);
   },
 });

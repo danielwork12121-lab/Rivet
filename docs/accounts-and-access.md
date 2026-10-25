@@ -60,6 +60,7 @@ already has an owner can't be claimed by anyone else.
 | `bounties:post`, `bounties:getMine` | the owning Client |
 | `bounties:listPosted` | approved Developer (a live query: subscribe with `RivetApi.watchPostedBounties`) |
 | `agent:*` except `aiStatus` | the owning Client (`clientToken` is still accepted, for older callers, and ignored) |
+| `discovery:forTask` | Client |
 | `agent:aiStatus`, `robots:search`, `robots:get` | anyone (no private data) |
 | `aiBudget:reserveChat`, `aiBudget:reserveVideo` | server only: need `RIVET_SERVER_SECRET` **and** a forwarded Client session |
 
@@ -139,17 +140,22 @@ users in the Clerk Dashboard afterwards.
   that, `users:list` shows only the Clerk user id (plus the name and organization the person
   typed), so approve Developers by checking that id in the Clerk Dashboard.
 
-## Vercel branch previews
+## Which backend a page uses
 
-`js/rivet-config.js` sends the production host (`rivet-rose.vercel.app`) and non-Vercel hosts to the
-shared Convex deployment, and **every other `*.vercel.app` host (a branch preview) to the isolated
-`woozy-warbler-733`**, so a preview can never reach the shared backend. `?backend=` cannot override
-this. **Remove the preview rule before merging this branch to production** (and when the isolated
-deployment expires). For a preview, set these in Vercel for the **Preview** environment only:
-`CONVEX_URL=https://woozy-warbler-733.convex.cloud` and a `RIVET_SERVER_SECRET` equal to the isolated
-deployment's, and leave `CHAT_ENABLED`, `VIDEO_ENABLED`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`
-unset for Preview. `HEADED=1 PREVIEW_HOST=<name>.vercel.app npm run e2e:clerk` simulates a preview
-over HTTPS (real Clerk, isolated deployment).
+`js/rivet-config.js` sends this machine (localhost, 127.0.0.1, file://) to the local backend.
+Every hosted page asks `/api/config`, which returns that Vercel environment's `CONVEX_URL`, and
+`js/rivet-api.js` accepts only an `https://*.convex.cloud` answer (no fallback, no `?backend=`).
+So Production and Preview each choose their backend in Vercel. Set `CONVEX_URL` for **Preview**
+to an isolated deployment, with a matching `RIVET_SERVER_SECRET`, and leave `CHAT_ENABLED`,
+`VIDEO_ENABLED`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` unset there.
+
+## Robot finder, web search and sample robots (Convex switches)
+
+| Name | Default | Effect |
+|---|---|---|
+| `AI_MATCH_ENABLED` | off | `agent:findRobots` / `setTaskCost` start the paid Claude finder (also needs `ANTHROPIC_API_KEY`); each run spends one AI budget unit |
+| `DISCOVERY_ENABLED` | off | a finder run may start a paid Apify web search (also needs `APIFY_TOKEN`); `DISCOVERY_DAILY_LIMIT` (3) and `DISCOVERY_USER_DAILY_LIMIT` (1) per 24 h |
+| `SHOW_SAMPLE_ROBOTS` | off | `matching:*` includes fictional sample robots (labelled). Set it only on isolated test deployments |
 
 ## Known behaviour
 
