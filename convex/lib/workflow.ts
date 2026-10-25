@@ -16,6 +16,7 @@ export type AiVerdict = "automatable" | "possible" | "person";
 export type StepVerdict = "today" | "possible" | "person" | "checking" | "unchecked" | "failed" | "skipped";
 
 export const MAX_STEPS = 7;
+export const MAX_OPTIONS = 3; // alternatives ("or") at one stage
 export const SEARCH_CAP = 3; // searches started per breakdown
 
 export type RawStep = {
@@ -25,6 +26,9 @@ export type RawStep = {
   why: string;
   task: string;
   searchPhrase: string;
+  // Steps run in stage order (A -> B -> C). Steps that share a stage are alternatives: the crew
+  // does one of them (A -> B1 or B2 -> C). Missing = its own stage, in list order.
+  stage?: number | null;
 };
 
 // Whole-number shares that add up to 100, keeping the AI's proportions.
@@ -49,11 +53,47 @@ function evenSplit(n: number): number[] {
   return out;
 }
 
-// Cleans the AI's steps: at most MAX_STEPS, trimmed text, normalised tasks, shares summing to 100.
+// Stages renumbered 1, 2, 3... in order, at most MAX_OPTIONS steps per stage; steps sorted by stage.
+export function orderStages<T extends { stage?: number | null }>(steps: T[]): (T & { stage: number })[] {
+  const keyed = steps.map((s, i) => ({ s, i, key: Number.isFinite(s.stage) ? (s.stage as number) : Number.POSITIVE_INFINITY }));
+  // A step without a stage stays where it was listed, as its own stage.
+  let last = 0;
+  for (const k of keyed) {
+    if (k.key === Number.POSITIVE_INFINITY) k.key = last + 0.5;
+    last = k.key;
+  }
+  keyed.sort((a, b) => a.key - b.key || a.i - b.i);
+  const out: (T & { stage: number })[] = [];
+  let stage = 0, prev: number | null = null, inStage = 0;
+  for (const k of keyed) {
+    if (k.key !== prev) { stage++; prev = k.key; inStage = 0; }
+    if (++inStage > MAX_OPTIONS) continue;
+    out.push({ ...k.s, stage });
+  }
+  return out;
+}
+
+// Shares that add up to 100 along one path through the job: the first option at each stage
+// counts toward the 100; other options are scaled the same way (the time that option would take).
+export function pathShares(steps: { sharePct: number; stage: number }[]): number[] {
+  const firsts = steps.map((s, i) => steps.findIndex((x) => x.stage === s.stage) === i);
+  const primary = normalizeShares(steps.filter((_, i) => firsts[i]).map((s) => s.sharePct));
+  const rawTotal = steps.filter((_, i) => firsts[i]).reduce((a, s) => a + (Number.isFinite(s.sharePct) && s.sharePct > 0 ? s.sharePct : 0), 0);
+  let k = 0;
+  return steps.map((s, i) => {
+    if (firsts[i]) return primary[k++];
+    const v = Number.isFinite(s.sharePct) && s.sharePct > 0 ? s.sharePct : 0;
+    return rawTotal > 0 ? Math.min(100, Math.round((v / rawTotal) * 100)) : 0;
+  });
+}
+
+// Cleans the AI's steps: at most MAX_STEPS, in stage order, trimmed text, normalised tasks,
+// shares summing to 100 along one path.
 export function cleanSteps(raw: RawStep[]) {
-  const steps = raw.filter((s) => s.name.trim()).slice(0, MAX_STEPS);
-  const shares = normalizeShares(steps.map((s) => s.sharePct));
+  const steps = orderStages(raw.filter((s) => s.name.trim()).slice(0, MAX_STEPS));
+  const shares = pathShares(steps);
   return steps.map((s, i) => ({
+    stage: s.stage,
     name: s.name.trim().slice(0, 80),
     sharePct: shares[i],
     aiVerdict: s.verdict,
@@ -96,10 +136,16 @@ export function stepVerdict(aiVerdict: AiVerdict, match: MatchSummary): StepVerd
   return "possible";
 }
 
-// The header line: how many steps can be automated today and what that saves a year.
-export function workflowSummary(steps: { verdict: StepVerdict; bestSavings: number | null }[]) {
+// The header line: how many steps can be automated today and what that saves a year. Where a
+// stage has options ("or"), only its best option's savings count, since the crew does one.
+export function workflowSummary(steps: { verdict: StepVerdict; bestSavings: number | null; stage?: number }[]) {
   const today = steps.filter((s) => s.verdict === "today");
-  const savings = today.reduce((sum, s) => sum + Math.max(0, s.bestSavings ?? 0), 0);
+  const bestPerStage = new Map<string, number>();
+  today.forEach((s, i) => {
+    const key = s.stage !== undefined ? `s${s.stage}` : `i${i}`;
+    bestPerStage.set(key, Math.max(bestPerStage.get(key) ?? 0, Math.max(0, s.bestSavings ?? 0)));
+  });
+  const savings = [...bestPerStage.values()].reduce((a, b) => a + b, 0);
   return {
     steps: steps.length,
     automatable: today.length,

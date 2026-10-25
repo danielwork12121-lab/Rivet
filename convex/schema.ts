@@ -87,6 +87,8 @@ export const matchPick = v.object({
 
 // What the page should do next, from lib/decide.ts nextAction.
 export const workflowStep = v.object({
+  // Order of the job (1, 2, 3...). Steps with the same stage are alternatives: the crew does one.
+  stage: v.optional(v.number()),
   name: v.string(),
   sharePct: v.number(), // share of the job's week, 0..100 (the AI's guess until the Client moves it)
   aiVerdict: v.union(v.literal("automatable"), v.literal("possible"), v.literal("person")),

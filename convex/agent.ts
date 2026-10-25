@@ -614,7 +614,7 @@ export const latestWorkflow = query({
         ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
         : null;
       steps.push({
-        index, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
+        index, stage: s.stage ?? index + 1, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
         verdict,
         annualCost: stepCost(wf.laborCost, s.sharePct),
         matchStatus: match?.status ?? null,

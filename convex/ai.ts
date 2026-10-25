@@ -537,9 +537,14 @@ const WORKFLOW_PROMPT = `A small trade business (lawn care, cleaning, pest contr
 facilities and similar) describes a job. Split it into the 3 to 7 steps a crew actually does,
 in order, so the owner can see which steps a robot could take over.
 For each step:
+- stage: its place in the order, 1 for the first thing the crew does, then 2, 3... When the crew
+  does a part of the job one of two or three different ways (e.g. "Bag the clippings" or "Mulch
+  them in place"), give those options the same stage. Most stages have one step; use options only
+  when the operator's job really has a choice.
 - name: 2 to 6 plain words, e.g. "Mow the lawn", "Load the trailer", "Talk to the customer".
 - sharePct: your best guess of the share of the crew's time on this job the step takes. Use
-  the operator's own numbers if they gave any. The shares should add up to about 100.
+  the operator's own numbers if they gave any. Counting one option per stage, the shares should
+  add up to about 100; give each option the share it would take if the crew did it that way.
 - verdict: "automatable" if robots that do this step are sold today (mowing, floor scrubbing,
   window or solar panel cleaning, pallet moving, spraying, inspection drones and similar);
   "possible" if a robot could plausibly do it but few or no products exist; "person" if it
@@ -560,6 +565,7 @@ Also pull out, for the whole job:
 const WorkflowSchema = z.object({
   steps: z.array(
     z.object({
+      stage: z.number().int(),
       name: z.string(),
       sharePct: z.number(),
       verdict: z.enum(["automatable", "possible", "person"]),
