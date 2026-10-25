@@ -1,0 +1,254 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Rivet — Order</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{color-scheme:light;box-sizing:border-box}
+*{box-sizing:inherit}
+body{margin:0;font:15px/1.5 "Public Sans",-apple-system,BlinkMacSystemFont,sans-serif;background:#F3F5F8;color:#13243D}
+img{max-width:100%}
+header.top{background:#13243D;display:flex;align-items:center;min-height:64px;padding:0 20px;gap:16px}
+header.top a.logo{display:flex;align-items:center;gap:8px;text-decoration:none}
+header.top .wordmark{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-size:20px;letter-spacing:.22em;color:#D3D9E2}
+header.top nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap;font-size:15px;font-weight:600}
+header.top nav a{display:flex;align-items:center;min-height:64px;padding:0 12px;color:#9FACC2;text-decoration:none}
+header.top nav a:hover{color:#D3D9E2}
+.wrap{max-width:760px;margin:0 auto;padding:28px 20px 64px}
+.back{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#4A5668;text-decoration:none;margin-bottom:16px}
+.back:hover{color:#13243D}
+h1{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-size:26px;margin:0 0 4px;letter-spacing:.01em}
+.sub{color:#4A5668;margin:0 0 24px;font-size:14px}
+.card{background:#FFFFFF;border:1px solid #CBD3DE;border-radius:12px;padding:20px;margin-bottom:16px}
+.robot-row{display:flex;gap:16px;align-items:flex-start}
+.robot-row img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8}
+.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8;flex:none}
+.robot-name{font-weight:700;font-size:18px;margin:0}
+.robot-vendor{color:#4A5668;font-size:13px;margin:2px 0 0}
+.robot-price{font-weight:800;font-size:18px;margin-top:8px;font-variant-numeric:tabular-nums}
+.robot-price.unknown{font-weight:700;font-size:14px;color:#4A5668}
+dl.summary{display:grid;grid-template-columns:1fr auto;gap:8px 12px;margin:16px 0 0;padding-top:16px;border-top:1px solid #CBD3DE}
+dl.summary dt{color:#4A5668;font-size:13px}
+dl.summary dd{margin:0;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+dl.summary.total dt,dl.summary.total dd{font-size:16px;font-weight:800;color:#13243D}
+.qty-row{display:flex;align-items:center;gap:12px;margin-top:14px}
+.qty-row label{font-size:13px;font-weight:700;color:#4A5668}
+.qty-ctl{display:inline-flex;align-items:center;border:1px solid #CBD3DE;border-radius:8px;overflow:hidden}
+.qty-ctl button{width:36px;height:36px;border:none;background:#F3F5F8;font-size:16px;font-weight:700;cursor:pointer;color:#13243D}
+.qty-ctl button:hover{background:#E6EAF1}
+.qty-ctl span{width:40px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+h2.section{font-size:14px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#4A5668;margin:0 0 10px}
+textarea,input[type=text]{width:100%;font:inherit;border:1px solid #CBD3DE;border-radius:8px;padding:10px 12px;resize:vertical}
+textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1px}
+.negotiate-toggle{background:none;border:none;color:#1660CE;font-weight:700;font-size:13px;cursor:pointer;padding:0}
+.negotiate-body{margin-top:12px;display:none;gap:10px;flex-direction:column}
+.negotiate-body.open{display:flex}
+.field label{display:block;font-size:12px;font-weight:700;color:#4A5668;margin-bottom:4px}
+.cta-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 20px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;text-decoration:none;border:1px solid transparent;font:inherit}
+.btn-primary{background:#1660CE;color:#FFFFFF;flex:1 1 auto}
+.btn-primary:hover{background:#1452AE}
+.btn-primary[disabled]{background:#9FB4D6;cursor:not-allowed}
+.btn-ghost{background:#FFFFFF;border-color:#13243D;color:#13243D}
+.btn-ghost:hover{background:#F3F5F8}
+.trust{margin-top:14px;font-size:12px;color:#4A5668;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.trust .badge{display:inline-flex;align-items:center;gap:4px;border:1px solid #CBD3DE;border-radius:6px;padding:2px 8px;font-weight:700;color:#13243D}
+.confirm{display:none;text-align:center;padding:28px 20px}
+.confirm.open{display:block}
+.confirm .check{width:52px;height:52px;border-radius:50%;background:#E1F1E7;color:#2E7D4F;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:26px}
+.confirm h2{font-family:Castellar,Cinzel,'Times New Roman',serif;font-size:20px;margin:0 0 6px}
+.confirm p{color:#4A5668;margin:0 0 4px;font-size:14px}
+.confirm .ref{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#13243D;background:#F3F5F8;border:1px solid #CBD3DE;border-radius:6px;padding:4px 10px;display:inline-block;margin:10px 0}
+.missing{padding:40px 20px;text-align:center;color:#4A5668}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="logo" href="find-solution.html"><span class="wordmark">RIVET</span></a>
+  <nav aria-label="Main">
+    <a href="find-solution.html">Find a solution</a>
+    <a href="engineers.html">For engineers</a>
+    <a href="messages.html">Messages</a>
+    <a href="login.html">Log in</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  <a class="back" href="find-solution.html">&larr; Back to matches</a>
+
+  <div id="order-app">
+    <div id="missing-state" class="missing" hidden>
+      <p>We couldn't find a robot to order — go back to Top Matches and click Buy on a result.</p>
+    </div>
+
+    <div id="order-state">
+      <h1>Confirm your order</h1>
+      <p class="sub">Review the details, then send the order to the vendor. A rep confirms final pricing, delivery and payment with you directly — this doesn't charge a card.</p>
+
+      <div class="card">
+        <div class="robot-row">
+          <img id="r-img" alt="" hidden>
+          <div id="r-noimg" class="noimg" hidden></div>
+          <div>
+            <p class="robot-name" id="r-name">—</p>
+            <p class="robot-vendor" id="r-vendor">—</p>
+            <p class="robot-price" id="r-price">—</p>
+          </div>
+        </div>
+
+        <div class="qty-row">
+          <label for="qty-display">Quantity</label>
+          <div class="qty-ctl">
+            <button type="button" id="qty-minus" aria-label="Decrease quantity">&minus;</button>
+            <span id="qty-display">1</span>
+            <button type="button" id="qty-plus" aria-label="Increase quantity">+</button>
+          </div>
+        </div>
+
+        <dl class="summary">
+          <dt>Unit price</dt><dd id="s-unit">—</dd>
+          <dt>Quantity</dt><dd id="s-qty">1</dd>
+        </dl>
+        <dl class="summary total">
+          <dt>Estimated total</dt><dd id="s-total">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2 class="section">Negotiate</h2>
+        <button type="button" class="negotiate-toggle" id="negotiate-toggle">Propose a different price or add a note &rarr;</button>
+        <div class="negotiate-body" id="negotiate-body">
+          <div class="field">
+            <label for="n-price">Your proposed price (optional)</label>
+            <input type="text" id="n-price" inputmode="decimal" placeholder="e.g. 9,500">
+          </div>
+          <div class="field">
+            <label for="n-note">Note to the seller (optional)</label>
+            <textarea id="n-note" rows="3" placeholder="e.g. Can you do this price for 2 units, delivered by December?"></textarea>
+          </div>
+        </div>
+
+        <div class="cta-row">
+          <button type="button" class="btn btn-primary" id="place-order-btn">Place order</button>
+          <a class="btn btn-ghost" id="message-vendor-link" href="message-vendor.html">Message vendor instead</a>
+        </div>
+        <div class="trust">
+          <span class="badge">Visa</span><span class="badge">Mastercard</span><span class="badge">Amex</span>
+          <span>Payment is finalized with the vendor once they confirm your order — nothing is charged here.</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-state" class="confirm card">
+      <div class="check">&#10003;</div>
+      <h2>Order sent</h2>
+      <p id="c-line">Your request for <strong id="c-name">—</strong> went to <strong id="c-vendor">—</strong>.</p>
+      <div class="ref" id="c-ref">RVT-000000</div>
+      <p>A vendor rep will follow up in <a href="messages.html" style="color:#1660CE;font-weight:700;text-decoration:none">Messages</a> to confirm final pricing, delivery and payment.</p>
+      <div class="cta-row" style="justify-content:center;margin-top:18px">
+        <a class="btn btn-ghost" href="find-solution.html">Back to matches</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  function qp(name) {
+    return new URLSearchParams(location.search).get(name) || '';
+  }
+  function money(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return null;
+    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+
+  var name = qp('name') || 'this robot';
+  var vendor = qp('vendor') || 'the vendor';
+  var priceRaw = qp('price');
+  var price = priceRaw === '' ? null : Number(priceRaw);
+  if (price !== null && !isFinite(price)) price = null;
+  var img = qp('img');
+  var robotId = qp('robotId');
+
+  if (!qp('name')) {
+    document.getElementById('missing-state').hidden = false;
+    document.getElementById('order-state').hidden = true;
+    return;
+  }
+
+  document.getElementById('r-name').textContent = name;
+  document.getElementById('r-vendor').textContent = vendor;
+  if (img) {
+    var imgEl = document.getElementById('r-img');
+    imgEl.src = img;
+    imgEl.alt = 'Photo of ' + name;
+    imgEl.hidden = false;
+  } else {
+    document.getElementById('r-noimg').hidden = false;
+  }
+
+  var priceEl = document.getElementById('r-price');
+  var unitEl = document.getElementById('s-unit');
+  var totalEl = document.getElementById('s-total');
+  var placeBtn = document.getElementById('place-order-btn');
+
+  function renderPrice() {
+    var qty = Number(document.getElementById('qty-display').textContent) || 1;
+    document.getElementById('s-qty').textContent = String(qty);
+    if (price === null) {
+      priceEl.textContent = 'Price on request';
+      priceEl.classList.add('unknown');
+      unitEl.textContent = 'On request';
+      totalEl.textContent = 'Ask vendor';
+      placeBtn.textContent = 'Request order (price TBD)';
+    } else {
+      var unit = money(price);
+      priceEl.textContent = unit + ' / unit';
+      unitEl.textContent = unit;
+      totalEl.textContent = money(price * qty);
+      placeBtn.textContent = 'Place order · ' + money(price * qty);
+    }
+  }
+  renderPrice();
+
+  var qty = 1;
+  document.getElementById('qty-minus').addEventListener('click', function () {
+    qty = Math.max(1, qty - 1);
+    document.getElementById('qty-display').textContent = String(qty);
+    renderPrice();
+  });
+  document.getElementById('qty-plus').addEventListener('click', function () {
+    qty = Math.min(99, qty + 1);
+    document.getElementById('qty-display').textContent = String(qty);
+    renderPrice();
+  });
+
+  document.getElementById('negotiate-toggle').addEventListener('click', function () {
+    document.getElementById('negotiate-body').classList.toggle('open');
+  });
+
+  // The vendor-contact link mirrors the same static page Top Matches links
+  // to today (message-vendor.html carries no query context yet there
+  // either) -- kept as a fallback for anyone who'd rather not go through
+  // checkout at all.
+
+  placeBtn.addEventListener('click', function () {
+    var ref = 'RVT-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    document.getElementById('c-name').textContent = name;
+    document.getElementById('c-vendor').textContent = vendor;
+    document.getElementById('c-ref').textContent = ref;
+    document.getElementById('order-state').hidden = true;
+    document.getElementById('confirm-state').classList.add('open');
+    try {
+      var orders = JSON.parse(localStorage.getItem('rivet-orders') || '[]');
+      orders.push({
+        ref: ref, name: name, vendor: vendor, robotId: robotId,
+        qty: qty, price: price, proposedPrice: document.getElementById('n-price').value || null,
+        note: document.getElementById('n-note').value || null,
+        at: new Date().toISOString()
+      });
+      localStorage.setItem('rivet-orders', JSON.stringify(orders));
+    } catch (e) {}
+  });
+})();
+</script>
+</body></html>
