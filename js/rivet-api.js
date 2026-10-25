@@ -322,6 +322,10 @@
     return call("mutation", "agent:setWorkflowLabor", { requestId: id, laborCost: laborCost });
   }
   function checkStep(id, step) { return call("mutation", "agent:checkStep", { requestId: id, step: step }); }
+  // What the video analysis saw, saved on the request so the job breakdown uses it (null clears).
+  function setVideoNotes(id, notes) { return call("mutation", "requests:setVideoNotes", { id: id, notes: notes }); }
+  // Bounties other businesses posted for the same tasks, pooled (free).
+  function pooledDemand(id, taskKeys) { return call("query", "bounties:pooledDemand", { requestId: id, taskKeys: taskKeys }); }
   function getDraft(id) { return call("query", "requests:getDraft", { id: id }); }
   function listMyRequests(limit) { return call("query", "requests:listMine", { limit: limit || 20 }); }
   function claimLegacyDraft(id, token) { return call("mutation", "requests:claimLegacyDraft", { id: id, clientToken: token }); }
@@ -428,6 +432,8 @@
     setStepShare: setStepShare,
     setWorkflowLabor: setWorkflowLabor,
     checkStep: checkStep,
+    pooledDemand: pooledDemand,
+    setVideoNotes: setVideoNotes,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
     loadCurrent: loadCurrent,

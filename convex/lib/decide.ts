@@ -1,7 +1,8 @@
 // The decision layer: plain functions that decide everything the AI used to.
 // Fast (milliseconds), testable, and they can't make anything up. Claude only
 // reads the operator's message before this and explains the result after.
-import { breakEvenAnnualCost, computeRoi } from "./roi";
+import { breakEvenAnnualCost, computeRoi, lifetimeValue, type Lifetime } from "./roi";
+import { matchScore, scoreParts, type ScoreParts } from "./score";
 import { SPEC_LABELS, type SpecName } from "./specs";
 
 export type Requirement = {
@@ -35,11 +36,13 @@ export type FitRow = { requirement: string; status: "meets" | "misses" | "unknow
 
 export type RankedRobot = {
   robotId: string;
-  score: number;
+  score: number; // 0..100, lib/score.ts
+  scoreParts: ScoreParts;
   fit: FitRow[];
   paybackMonths: number | null;
   yearlyNetSavings: number | null;
   breakEvenAnnualCost: number | null;
+  lifetime: Lifetime | null; // NPV / TCO / ROI over the robot's life, when price and yearly cost are known
   assumptions: string[];
 };
 
@@ -76,9 +79,10 @@ export function fitCheck(intent: Intent, robot: RobotFacts): FitRow[] {
   return rows;
 }
 
-// Scores every robot for this operator and returns the best three.
-// Score: +10 per requirement met, -40 per mandatory miss, -10 per optional miss,
-// -2 per unknown, plus up to +30 for a fast payback. Tune with the personas.
+// Scores every robot for this operator (lib/score.ts) and returns the best three.
+// Robots that miss a must-have all score 0; among those (and on ties) the closest one comes first
+// (+10 per requirement met, -40 per mandatory miss, -10 per optional miss, -2 per unknown, up to
+// +30 for a fast payback), so the bounty suggestion names the fewest gaps.
 export function rankRobots(intent: Intent, robots: RobotFacts[], limit = 3): RankedRobot[] {
   return robots
     .map((robot) => {
@@ -88,25 +92,41 @@ export function rankRobots(intent: Intent, robots: RobotFacts[], limit = 3): Ran
       const roi = priced && intent.annualTaskCost !== null
         ? computeRoi({ currentAnnualCost: intent.annualTaskCost, ...roiInput })
         : null;
-      let score = 0;
+      let closeness = 0;
       for (const f of fit) {
-        if (f.status === "meets") score += 10;
-        else if (f.status === "misses") score -= f.mandatory ? 40 : 10;
-        else score -= 2;
+        if (f.status === "meets") closeness += 10;
+        else if (f.status === "misses") closeness -= f.mandatory ? 40 : 10;
+        else closeness -= 2;
       }
-      if (roi?.paybackMonths != null) score += Math.max(0, 30 - roi.paybackMonths / 2);
+      if (roi?.paybackMonths != null) closeness += Math.max(0, 30 - roi.paybackMonths / 2);
+      const parts = scoreParts({
+        fit, requirementCount: intent.requirements.length, price: robot.price,
+        sourcedSpecs: intent.requirements.filter((r) => robot.specs?.some((s) => s.name === r.name)).length,
+        priceListed: priced, priceSourced: robot.priceStatus === "listed",
+        budget: intent.budget, paybackMonths: roi?.paybackMonths ?? null, hasRoi: roi !== null,
+      });
+      const exact = matchScore(parts);
       return {
-        robotId: robot._id,
-        score: Math.round(score),
-        fit,
-        paybackMonths: roi?.paybackMonths ?? null,
-        yearlyNetSavings: roi?.yearlyNetSavings ?? null,
-        breakEvenAnnualCost: priced ? breakEvenAnnualCost(roiInput) : null,
-        assumptions: robot.assumptions ?? [],
+        exact,
+        ranked: {
+          robotId: robot._id,
+          score: Math.round(exact),
+          scoreParts: parts,
+          fit,
+          paybackMonths: roi?.paybackMonths ?? null,
+          yearlyNetSavings: roi?.yearlyNetSavings ?? null,
+          breakEvenAnnualCost: priced ? breakEvenAnnualCost(roiInput) : null,
+          lifetime: roi
+            ? lifetimeValue({ robotPrice: robot.price, yearlyLaborSaved: roi.yearlyLaborSaved, yearlyOpex: robot.yearlyOpex })
+            : null,
+          assumptions: robot.assumptions ?? [],
+        },
+        closeness,
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.exact - a.exact || b.closeness - a.closeness)
+    .slice(0, limit)
+    .map((r) => r.ranked);
 }
 
 // What the page should do next.

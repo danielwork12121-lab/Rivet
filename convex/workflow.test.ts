@@ -32,10 +32,10 @@ function stubClaude(fast: unknown, deep: unknown = { reasons: [] }) {
 
 const split = { // TEST FIXTURE
   steps: [
-    { name: "Mow the lawns", sharePct: 50, verdict: "automatable", why: "Robot mowers are sold today.", task: "Mowing", searchPhrase: "commercial robotic mower" },
-    { name: "Edge the beds", sharePct: 20, verdict: "possible", why: "Few edging robots exist.", task: "edging", searchPhrase: "robotic lawn edger" },
-    { name: "Talk to customers", sharePct: 20, verdict: "person", why: "Needs a person.", task: "customer service", searchPhrase: "n/a" },
-    { name: "Blow clippings", sharePct: 10, verdict: "automatable", why: "Some robots do this.", task: "leaf blowing", searchPhrase: "robot leaf blower" },
+    { stage: 1, seenInVideo: false, name: "Mow the lawns", sharePct: 50, verdict: "automatable", why: "Robot mowers are sold today.", task: "Mowing", searchPhrase: "commercial robotic mower" },
+    { stage: 2, seenInVideo: false, name: "Edge the beds", sharePct: 20, verdict: "possible", why: "Few edging robots exist.", task: "edging", searchPhrase: "robotic lawn edger" },
+    { stage: 3, seenInVideo: false, name: "Talk to customers", sharePct: 20, verdict: "person", why: "Needs a person.", task: "customer service", searchPhrase: "n/a" },
+    { stage: 4, seenInVideo: false, name: "Blow clippings", sharePct: 10, verdict: "automatable", why: "Some robots do this.", task: "leaf blowing", searchPhrase: "robot leaf blower" },
   ],
   annualLaborCost: 80000, budget: null, requirements: [],
 };
@@ -79,6 +79,7 @@ describe("workflow breakdown", () => {
 
     const view = (await t.query(api.agent.latestWorkflow, { requestId }))!;
     expect(view.steps.map((s) => s.verdict)).toEqual(["today", "checking", "person", "checking"]);
+    expect(view.steps.map((s) => s.stage)).toEqual([1, 2, 3, 4]);
     expect(view.steps[0].picks[0]).toMatchObject({ name: "Fictional Mower", imageUrl: "https://example.com/mower.jpg" });
     expect(view.steps[0].bestSavings).toBeGreaterThan(0);
     expect(view.summary).toMatchObject({ steps: 4, automatable: 1, yearlySavings: view.steps[0].bestSavings });
@@ -116,5 +117,68 @@ describe("workflow breakdown", () => {
     const view = (await t.query(api.agent.latestWorkflow, { requestId }))!;
     expect(view.status).toBe("failed");
     expect(view.error).not.toContain("internal detail");
+  });
+});
+
+describe("workflow breakdown with a work video", () => {
+  const notes = { // TEST FIXTURE: what the video analysis returned
+    taskSummary: "A worker pushes a mower across a sloped lawn, then edges along a flower bed.",
+    repetitiveActions: ["Mowing the lawn in rows", "Edging along the bed"],
+    environment: ["Residential lawn", "Gentle slope"],
+    obstacles: ["Flower beds", "Garden hose"],
+    observedObjects: ["Push mower", "String trimmer"],
+    requirements: ["Handle slopes around 35 degrees"],
+    robotCapabilitiesNeeded: ["Slope mowing"],
+  };
+
+  it("sends the video's observations to Claude, marks steps seen in it, and never trusts its numbers", async () => {
+    const { raw, t, requestId, workflowId } = await setup();
+    await t.mutation(api.requests.setVideoNotes, { id: requestId, notes });
+    const sent: string[] = [];
+    const fromVideo = { // TEST FIXTURE: Claude used the video, and copied its 35 into a requirement
+      ...split,
+      steps: split.steps.map((s, i) => ({ ...s, seenInVideo: i < 2 })),
+      requirements: [{ name: "max_slope_deg", op: "atLeast", value: 35, unit: "deg", mandatory: true }],
+    };
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      sent.push(JSON.stringify(body.messages));
+      return message(body.model, fromVideo);
+    }));
+    vi.useFakeTimers();
+    await raw.action(internal.ai.splitWorkflow, { workflowId });
+    vi.useRealTimers();
+
+    expect(sent[0]).toContain("videoObservations");
+    expect(sent[0]).toContain("Mowing the lawn in rows");
+    const wf = (await raw.run((ctx) => ctx.db.get(workflowId)))!;
+    expect(wf.steps.map((s) => s.seenInVideo)).toEqual([true, true, false, false]);
+    expect(wf.requirements).toEqual([]); // 35 came from the video, not the operator's words
+    const view = (await t.query(api.agent.latestWorkflow, { requestId }))!;
+    expect(view.fromVideo).toBe(true);
+    expect(view.steps[0].seenInVideo).toBe(true);
+  });
+
+  it("only the owner can attach notes; null clears them; sizes are capped", async () => {
+    const { raw, t, requestId } = await setup();
+    const other = await asClient(raw, "user_client_b");
+    await expect(other.mutation(api.requests.setVideoNotes, { id: requestId, notes })).rejects.toThrow(/Draft not found/);
+    await t.mutation(api.requests.setVideoNotes, { id: requestId, notes: { ...notes, obstacles: Array(30).fill("x".repeat(500)) } });
+    let row = (await raw.run((ctx) => ctx.db.get(requestId)))!;
+    expect(row.video!.obstacles).toHaveLength(12);
+    expect(row.video!.obstacles[0]).toHaveLength(160);
+    await t.mutation(api.requests.setVideoNotes, { id: requestId, notes: null });
+    row = (await raw.run((ctx) => ctx.db.get(requestId)))!;
+    expect(row.video).toBeUndefined();
+  });
+
+  it("marks no step as seen in a video when there wasn't one", async () => {
+    const { raw, workflowId } = await setup();
+    stubClaude({ ...split, steps: split.steps.map((s) => ({ ...s, seenInVideo: true })) });
+    vi.useFakeTimers();
+    await raw.action(internal.ai.splitWorkflow, { workflowId });
+    vi.useRealTimers();
+    const wf = (await raw.run((ctx) => ctx.db.get(workflowId)))!;
+    expect(wf.steps.every((s) => s.seenInVideo === false)).toBe(true);
   });
 });

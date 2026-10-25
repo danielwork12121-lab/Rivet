@@ -142,9 +142,12 @@ export const requestContext = internalQuery({
       .query("clarifications")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
+    const { video, ...rest } = withoutToken(request); // never send the draft token to Claude
     return {
-      request: withoutToken(request), // never send the draft token to Claude
+      request: rest,
       answers: clarifications.map((c) => ({ question: c.question, answer: c.answer })),
+      // What a vision model saw in the operator's work video, if they uploaded one.
+      ...(video ? { videoObservations: { ...video, analyzedAt: undefined } } : {}),
     };
   },
 });
@@ -457,6 +460,7 @@ export const latestMatch = query({
       next: match.next ?? null,
       error: match.error ?? null,
       msToRanked: match.msToRanked ?? null,
+      searchNote: match.searchNote ?? null,
       picks: robots,
       search: search && { status: search.status, sitesFound: search.urls.length },
     };
@@ -604,6 +608,7 @@ export const latestWorkflow = query({
       const picks = match ? await picksWithRobots(ctx, match.picks) : [];
       const verdict = stepVerdict(s.aiVerdict, match && {
         status: match.status, pickCount: match.picks.length, next: match.next ?? null,
+        searchSkipped: !!match.searchNote && /^Web search (is turned off|skipped|failed)/.test(match.searchNote),
       });
       const fits = picks.filter((p) => !p.fit.some((f) => f.mandatory && f.status === "misses"));
       const savings = fits.map((p) => p.yearlyNetSavings).filter((n): n is number => n !== null);
@@ -612,10 +617,11 @@ export const latestWorkflow = query({
         ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
         : null;
       steps.push({
-        index, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
+        index, stage: s.stage ?? index + 1, seenInVideo: s.seenInVideo ?? false, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
         verdict,
         annualCost: stepCost(wf.laborCost, s.sharePct),
         matchStatus: match?.status ?? null,
+        searchNote: match?.searchNote ?? null,
         next: match?.next ?? null,
         search: search && { status: search.status, sitesFound: search.urls.length },
         picks,
@@ -623,8 +629,10 @@ export const latestWorkflow = query({
         bestPaybackMonths: paybacks.length ? Math.min(...paybacks) : null,
       });
     }
+    const request = await ctx.db.get(requestId);
     return {
       _id: wf._id, status: wf.status, error: wf.error ?? null, laborCost: wf.laborCost,
+      fromVideo: !!request?.video,
       steps, summary: workflowSummary(steps),
     };
   },
@@ -676,7 +684,8 @@ export const checkStep = mutation({
     const s = wf.steps[step];
     if (!s) throw new ConvexError("No such step.");
     const existing = s.matchId ? await ctx.db.get(s.matchId) : null;
-    if (existing && existing.status !== "failed") return existing._id;
+    const skipped = existing?.status === "done" && existing.picks.length === 0 && /^Web search (is turned off|skipped|failed)/.test(existing.searchNote ?? "");
+    if (existing && existing.status !== "failed" && !skipped) return existing._id;
     await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
     const matchId = await startStepMatch(ctx, wf, step);
     await ctx.db.patch(wf._id, { steps: wf.steps.map((x, k) => (k === step ? { ...x, matchId } : x)) });

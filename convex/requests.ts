@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { costInfo, followUpAnswer, profileInfo } from "./schema";
-import { validateFollowUps, validateRequestInput } from "./lib/validation";
+import { cleanVideoNotes, validateFollowUps, validateRequestInput } from "./lib/validation";
 import { DRAFT_NOT_FOUND, loadOwnedDraft, withoutToken } from "./lib/drafts";
 import { requireClient } from "./lib/auth";
 
@@ -60,6 +60,29 @@ export const updateIntake = mutation({
       ...clean,
       cost: clean.cost, // explicit so an omitted cost/profile is removed, not kept
       profile: clean.profile,
+      updatedAt: Date.now(),
+    });
+    return id;
+  },
+});
+
+// Saves what the video analysis saw on the caller's own draft (or clears it with null), so the
+// job breakdown can use it. Free: the Gemini call itself was budgeted by aiBudget:reserveVideo.
+const videoArg = v.object({
+  taskSummary: v.string(),
+  repetitiveActions: v.array(v.string()),
+  environment: v.array(v.string()),
+  obstacles: v.array(v.string()),
+  observedObjects: v.array(v.string()),
+  requirements: v.array(v.string()),
+  robotCapabilitiesNeeded: v.array(v.string()),
+});
+export const setVideoNotes = mutation({
+  args: { id: v.id("operatorRequests"), notes: v.union(videoArg, v.null()) },
+  handler: async (ctx, { id, notes }) => {
+    await loadOwnedDraft(ctx, id);
+    await ctx.db.patch(id, {
+      video: notes ? { ...cleanVideoNotes(notes), analyzedAt: Date.now() } : undefined,
       updatedAt: Date.now(),
     });
     return id;

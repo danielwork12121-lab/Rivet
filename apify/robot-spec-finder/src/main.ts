@@ -71,6 +71,22 @@ const RobotSchema = z.object({
 });
 const PageSchema = z.object({ robots: z.array(RobotSchema) });
 
+// Actor.call, but waits out Apify's "too many runs at once" refusal (the free plan allows 5
+// concurrent runs, and several searches can start together) instead of failing the whole run.
+async function callWhenFree(actorId: string, runInput: Record<string, unknown>) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await Actor.call(actorId, runInput);
+    } catch (err) {
+      const e = err as { statusCode?: number; type?: string };
+      const busy = e?.statusCode === 402 || e?.type === "concurrent-runs-limit-exceeded";
+      if (!busy || attempt >= 30) throw err;
+      log.info(`Apify is at its concurrent-run limit; retrying ${actorId} in 20 s (attempt ${attempt})`);
+      await new Promise((r) => setTimeout(r, 20_000));
+    }
+  }
+}
+
 await Actor.init();
 const input = await Actor.getInputOrThrow<Input>();
 const task = input.task?.trim();
@@ -84,7 +100,7 @@ const maxSites = Math.min(Math.max(input.maxSites ?? 8, 1), 40);
 let urls = (input.startUrls ?? []).map((u) => u.url).filter(Boolean);
 if (urls.length === 0) {
   await Actor.setStatusMessage(`Searching Google for ${task} robots`);
-  const run = await Actor.call("apify/google-search-scraper", {
+  const run = await callWhenFree("apify/google-search-scraper", {
     queries: searchQueries(task!, input.searchPhrase || `${task} robot`).join("\n"),
     maxPagesPerQuery: 1,
     countryCode: "us",
@@ -96,7 +112,7 @@ log.info(`Reading ${urls.length} pages`, { urls });
 
 // 2. Page text
 await Actor.setStatusMessage(`Crawling ${urls.length} vendor pages`);
-const crawl = await Actor.call("apify/website-content-crawler", {
+const crawl = await callWhenFree("apify/website-content-crawler", {
   startUrls: urls.map((url) => ({ url })),
   maxCrawlDepth: 0,
   maxCrawlPages: urls.length,

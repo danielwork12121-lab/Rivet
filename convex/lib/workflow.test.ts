@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bountyTaskKey, cleanSteps, normalizeShares, stepCost, stepsToSearch, stepVerdict, workflowSummary } from "./workflow";
+import { bountyTaskKey, cleanSteps, normalizeShares, orderStages, pathShares, stepCost, stepsToSearch, stepVerdict, workflowSummary } from "./workflow";
 
 describe("normalizeShares", () => {
   it("keeps proportions and always adds up to 100", () => {
@@ -57,6 +57,7 @@ describe("stepVerdict", () => {
     expect(stepVerdict("automatable", done(2, "ask"))).toBe("today");
     expect(stepVerdict("automatable", done(2, "suggest_bounty"))).toBe("possible");
     expect(stepVerdict("automatable", done(0, "suggest_bounty"))).toBe("possible");
+    expect(stepVerdict("automatable", { ...done(0, "suggest_bounty"), searchSkipped: true })).toBe("skipped");
   });
 });
 
@@ -78,5 +79,36 @@ describe("bountyTaskKey", () => {
     expect(bountyTaskKey("3d scanning!")).toBe("d-scanning");
     expect(bountyTaskKey("!!!")).toBe("custom-task");
     expect(bountyTaskKey("a".repeat(29) + " b c")).toMatch(/^[a-z][a-z0-9_-]{0,29}$/);
+  });
+});
+
+describe("stages: A -> (B1 or B2) -> C", () => {
+  const step = (name: string, stage: number | null | undefined, sharePct = 20) => ({
+    name, stage, sharePct, verdict: "automatable" as const, why: "w", task: name, searchPhrase: name,
+  });
+  it("orders by stage, renumbers from 1, keeps options together", () => {
+    const out = orderStages([step("C", 7), step("A", 2), step("B2", 5), step("B1", 5)]);
+    expect(out.map((s) => [s.name, s.stage])).toEqual([["A", 1], ["B2", 2], ["B1", 2], ["C", 3]]);
+  });
+  it("keeps a step without a stage where it was listed", () => {
+    const out = orderStages([step("A", 1), step("loose", null), step("B", 2)]);
+    expect(out.map((s) => [s.name, s.stage])).toEqual([["A", 1], ["loose", 2], ["B", 3]]);
+  });
+  it("allows at most three options per stage", () => {
+    expect(orderStages(["a", "b", "c", "d"].map((n) => step(n, 1)))).toHaveLength(3);
+  });
+  it("makes one path add up to 100; other options scale the same way", () => {
+    // A 30, B1 50 or B2 25, C 20 -> path A + B1 + C = 100
+    expect(pathShares([{ sharePct: 30, stage: 1 }, { sharePct: 50, stage: 2 }, { sharePct: 25, stage: 2 }, { sharePct: 20, stage: 3 }])).toEqual([30, 50, 25, 20]);
+    const steps = cleanSteps([step("A", 1, 60), step("B1", 2, 60), step("B2", 2, 30), step("C", 3, 80)]);
+    expect(steps.map((s) => [s.name, s.stage, s.sharePct])).toEqual([["A", 1, 30], ["B1", 2, 30], ["B2", 2, 15], ["C", 3, 40]]);
+  });
+  it("counts savings once per stage: the best option", () => {
+    const sm = workflowSummary([
+      { verdict: "today", bestSavings: 10000, stage: 1 },
+      { verdict: "today", bestSavings: 8000, stage: 2 },
+      { verdict: "today", bestSavings: 12000, stage: 2 },
+    ]);
+    expect(sm).toMatchObject({ automatable: 3, yearlySavings: 22000 });
   });
 });

@@ -166,7 +166,7 @@ describe("bounties:listPosted (Developer board)", () => {
     await t.mutation(api.bounties.post, { requestId, ...bounty });
     const [pub] = await dev.query(api.bounties.listPosted, {});
     expect(Object.keys(pub).sort()).toEqual(
-      ["_creationTime", "_id", "goal", "industry", "pledged", "region", "specLines", "taskKey", "title"].sort(),
+      ["_creationTime", "_id", "goal", "industry", "pledged", "pooledBusinesses", "pooledPledged", "region", "specLines", "taskKey", "title"].sort(),
     );
     const text = JSON.stringify(pub);
     expect(text).not.toContain(requestId);
@@ -205,5 +205,22 @@ describe("bounties:listPosted (Developer board)", () => {
     }
     expect((await dev.query(api.bounties.listPosted, { limit: 2 })).map((b) => b.taskKey)).toEqual(["trim", "spray"]);
     expect(await dev.query(api.bounties.listPosted, { limit: 0 })).toHaveLength(1);
+  });
+});
+
+describe("bounties:pooledDemand", () => {
+  it("adds up every business's pledges for a task, without naming them", async () => {
+    const { t, base, dev, requestId } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    const other = await asClient(base, "user_client_b");
+    const otherRequest = await other.mutation(api.requests.create, { ...intake, clientToken: "other-token" });
+    await other.mutation(api.bounties.post, { requestId: otherRequest, ...bounty, pledged: 3000 });
+    await other.mutation(api.bounties.post, { requestId: otherRequest, ...bounty, taskKey: "edge", pledged: 100 });
+
+    const pools = await t.query(api.bounties.pooledDemand, { requestId, taskKeys: ["mow", "spray"] });
+    expect(pools).toEqual([{ taskKey: "mow", businesses: 2, bounties: 2, pledged: 7500, goal: 300000 }]);
+    const board = await dev.query(api.bounties.listPosted, {});
+    expect(board.find((b) => b.taskKey === "mow")).toMatchObject({ pooledBusinesses: 2, pooledPledged: 7500 });
+    await expect(other.query(api.bounties.pooledDemand, { requestId, taskKeys: ["mow"] })).rejects.toThrow(/Draft not found/);
   });
 });

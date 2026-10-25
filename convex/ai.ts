@@ -379,6 +379,13 @@ export const extractPages = internalAction({
 
 // ---------- 5. "Find robots for me": fast read -> decide -> explain ----------
 
+// The operator's own words, for checking numbers: a number the AI returns must appear here. The
+// video's observations are left out, so a number a vision model read off a frame never counts.
+function operatorText(context: { videoObservations?: unknown }) {
+  const { videoObservations: _video, ...own } = context;
+  return JSON.stringify(own);
+}
+
 const INTENT_PROMPT = `Read a small trade business's request and pull out what a robot search needs.
 - task: 1 to 3 lowercase words naming the job a robot would do, e.g. "mowing",
   "gutter cleaning", "weed spraying", "floor scrubbing". If one of knownTasks fits, use it exactly.
@@ -441,7 +448,7 @@ export const matchRobots = internalAction({
           messages: [{ role: "user", content: JSON.stringify({ knownTasks, ...context }) }],
         });
         if (!res.parsed_output) throw new Error(`No intent returned (stop_reason: ${res.stop_reason})`);
-        intent = cleanIntent(res.parsed_output, JSON.stringify(context), context.request.cost?.currentAnnualCost);
+        intent = cleanIntent(res.parsed_output, operatorText(context), context.request.cost?.currentAnnualCost);
         await ctx.runMutation(internal.agent.patchMatch, { matchId, intent });
         await ctx.runMutation(internal.agent.logRun, {
           route: "intent", ms: Date.now() - started, ok: true,
@@ -452,7 +459,7 @@ export const matchRobots = internalAction({
       // 2. Catalog, or a web search when we have no real robots for this task yet.
       // Only real robots: the fictional demo ones are never shown to operators.
       const robots = (await ctx.runQuery(internal.robots.forTask, { task: intent.task })).filter((r) => !r.sample);
-      if (!searched && robots.length === 0 && process.env.APIFY_TOKEN) {
+      if (!searched && robots.length === 0) {
         const search = await ctx.runMutation(internal.discovery.start, {
           task: intent.task, searchPhrase: intent.searchPhrase, matchId,
         });
@@ -537,17 +544,28 @@ const WORKFLOW_PROMPT = `A small trade business (lawn care, cleaning, pest contr
 facilities and similar) describes a job. Split it into the 3 to 7 steps a crew actually does,
 in order, so the owner can see which steps a robot could take over.
 For each step:
+- stage: its place in the order, 1 for the first thing the crew does, then 2, 3... When the crew
+  does a part of the job one of two or three different ways (e.g. "Bag the clippings" or "Mulch
+  them in place"), give those options the same stage. Most stages have one step; use options only
+  when the operator's job really has a choice.
 - name: 2 to 6 plain words, e.g. "Mow the lawn", "Load the trailer", "Talk to the customer".
 - sharePct: your best guess of the share of the crew's time on this job the step takes. Use
-  the operator's own numbers if they gave any. The shares should add up to about 100.
+  the operator's own numbers if they gave any. Counting one option per stage, the shares should
+  add up to about 100; give each option the share it would take if the crew did it that way.
 - verdict: "automatable" if robots that do this step are sold today (mowing, floor scrubbing,
   window or solar panel cleaning, pallet moving, spraying, inspection drones and similar);
   "possible" if a robot could plausibly do it but few or no products exist; "person" if it
   needs judgment, talking to people, driving on public roads, or fine handwork no robot does.
 - why: one short sentence explaining the verdict, in plain words.
+- seenInVideo: true if the step is one of the actions in videoObservations, else false.
 - task: 1 to 3 lowercase words naming the step's job for a robot search. If one of knownTasks
   fits, use it exactly.
 - searchPhrase: 2 to 5 words a buyer would type into Google to find robots for this step.
+If videoObservations is present, the operator also uploaded a short video of the work and a
+vision model described it. Use its repetitiveActions to name and order the steps (they are what
+the crew actually does), and its environment and obstacles in your why sentences. It describes
+what was visible, not the whole job, so keep steps the operator mentioned that the video doesn't
+show. Never take a number from it: numbers must come from the operator's own words.
 Also pull out, for the whole job:
 - annualLaborCost: what they spend per year on this job's labor in USD, and budget: what they
   would pay per robot in USD. Only if the operator wrote the number; otherwise null. Never
@@ -560,6 +578,8 @@ Also pull out, for the whole job:
 const WorkflowSchema = z.object({
   steps: z.array(
     z.object({
+      stage: z.number().int(),
+      seenInVideo: z.boolean(),
       name: z.string(),
       sharePct: z.number(),
       verdict: z.enum(["automatable", "possible", "person"]),
@@ -591,11 +611,11 @@ export const splitWorkflow = internalAction({
       });
       const out = res.parsed_output;
       if (!out || out.steps.length === 0) throw new Error(`No steps returned (stop_reason: ${res.stop_reason})`);
-      const steps = cleanSteps(out.steps);
+      const steps = cleanSteps(out.steps, !!context.videoObservations);
       // Same checks as a single match: only numbers the operator wrote survive.
       const clean = cleanIntent(
         { task: steps[0].task, searchPhrase: steps[0].searchPhrase, annualTaskCost: out.annualLaborCost, budget: out.budget, requirements: out.requirements },
-        JSON.stringify(context),
+        operatorText(context),
         context.request.cost?.currentAnnualCost,
       );
       await ctx.runMutation(internal.agent.saveWorkflowSteps, {

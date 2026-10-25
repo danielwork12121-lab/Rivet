@@ -4,6 +4,8 @@ import type { Doc } from "./_generated/dataModel";
 import { loadOwnedDraft } from "./lib/drafts";
 import { requireApprovedDeveloper } from "./lib/auth";
 import { validateBountyPost } from "./lib/validation";
+import { poolByTask } from "./lib/pool";
+import type { QueryCtx } from "./_generated/server";
 
 // Operator-posted bounties (status "posted", source "client"). AI-written drafts
 // live in the same table but are private: see agent.ts. Money is illustrative.
@@ -72,7 +74,7 @@ export const getMine = query({
 // What an approved developer may see. Deliberately excludes requestId and ownerId
 // (which would let someone target the private draft or account), company
 // identity, gaps and drafts.
-function toPublic(b: Doc<"bounties">) {
+function toPublic(b: Doc<"bounties">, pool?: { businesses: number; pledged: number }) {
   return {
     _id: b._id,
     _creationTime: b._creationTime,
@@ -83,7 +85,21 @@ function toPublic(b: Doc<"bounties">) {
     specLines: b.specLines ?? [],
     goal: b.goal,
     pledged: b.pledged,
+    // Every business asking for this task, pooled (lib/pool.ts)
+    pooledBusinesses: pool?.businesses ?? 1,
+    pooledPledged: pool?.pledged ?? b.pledged,
   };
+}
+
+// Posted bounties whose request is still shared (not switched to anonymous).
+async function visiblePosted(ctx: QueryCtx) {
+  const rows = await ctx.db.query("bounties").withIndex("by_status", (q) => q.eq("status", "posted")).collect();
+  const visible = [];
+  for (const b of rows) {
+    const request = await ctx.db.get(b.requestId);
+    if (request && request.profile?.visibility !== "anonymous") visible.push(b);
+  }
+  return visible;
 }
 
 // The Developer board: posted bounties only, newest first. A reactive query, so
@@ -93,19 +109,27 @@ export const listPosted = query({
   handler: async (ctx, { limit }) => {
     await requireApprovedDeveloper(ctx);
     const n = Math.min(Math.max(Math.floor(limit ?? 50), 1), 100);
-    const rows = await ctx.db
-      .query("bounties")
-      .withIndex("by_status", (q) => q.eq("status", "posted"))
-      .order("desc")
-      .take(n);
     // A request switched to "anonymous" after posting takes its bounties off the board
     // (posting itself refuses anonymous requests). Reading the request also makes the
     // board update live when that happens.
-    const visible = [];
-    for (const b of rows) {
-      const request = await ctx.db.get(b.requestId);
-      if (request && request.profile?.visibility !== "anonymous") visible.push(b);
-    }
-    return visible.map(toPublic);
+    const visible = await visiblePosted(ctx);
+    const pools = poolByTask(visible.map((b) => ({ ...b, requestId: b.requestId as string })));
+    return visible
+      .sort((a, b) => b._creationTime - a._creationTime)
+      .slice(0, n)
+      .map((b) => toPublic(b, b.taskKey ? pools.get(b.taskKey) : undefined));
+  },
+});
+
+// For a Client's page: how many businesses have posted bounties for these tasks, and the total
+// pledged (B_k), including the Client's own. No other business is named.
+export const pooledDemand = query({
+  args: { requestId: v.id("operatorRequests"), taskKeys: v.array(v.string()) },
+  handler: async (ctx, { requestId, taskKeys }) => {
+    await loadOwnedDraft(ctx, requestId);
+    const wanted = new Set(taskKeys.slice(0, 20));
+    const visible = (await visiblePosted(ctx)).filter((b) => b.taskKey && wanted.has(b.taskKey));
+    const pools = poolByTask(visible.map((b) => ({ ...b, requestId: b.requestId as string })));
+    return [...pools.values()];
   },
 });
