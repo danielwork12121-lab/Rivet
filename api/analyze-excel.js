@@ -37,13 +37,16 @@ import {
 import { buildCorrectedWorkbook } from "./lib/corrected-workbook.js";
 import { readWorkbookSheets } from "./lib/workbook.js";
 
-// Deep layer: careful reading of real financial figures, so this uses the
-// same careful-judgment model convex/ai.ts's MODEL constant does, not the
-// fast one api/chat.js uses for a one-line reply.
-const MODEL = "claude-opus-5-5";
-// Keep comfortably under vercel.json's maxDuration: 30 for this function, so
-// we always get to return our own JSON error instead of a bare Vercel 504.
-const TIMEOUT_MS = 25000;
+// Sonnet 5.5 is the right pick here: fast enough to fit inside Vercel
+// Hobby's hard 10-second function limit (Opus 5.5 regularly exceeds it),
+// and more than accurate enough for spreadsheet transcription — every
+// number it returns is grounded against the sheet anyway, so the model's
+// job is reading comprehension, not reasoning.
+const MODEL = "claude-sonnet-5-5";
+// Vercel Hobby caps maxDuration at 10s regardless of vercel.json, so keep
+// our own abort comfortably inside that to return a clean JSON error
+// instead of Vercel's bare 504 HTML page.
+const TIMEOUT_MS = 9000;
 // Vercel's Node.js functions cap the request body at ~4.5MB; base64 inflates
 // a file by about a third, so this leaves headroom for that plus the rest
 // of the JSON envelope. The frontend enforces the same limit before upload.
