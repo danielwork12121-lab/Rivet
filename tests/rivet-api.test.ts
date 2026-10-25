@@ -150,7 +150,7 @@ describe("network calls with a fake client", () => {
   it("homeFor routes by the role Convex returned", () => {
     expect(api().homeFor(null)).toBe("signup");
     expect(api().homeFor({ role: null })).toBe("signup");
-    expect(api().homeFor({ role: "client" })).toBe("robot-bounty-client-flow");
+    expect(api().homeFor({ role: "client" })).toBe("find-solution");
     expect(api().homeFor({ role: "developer", developerStatus: "pending" })).toBe("engineers");
   });
 

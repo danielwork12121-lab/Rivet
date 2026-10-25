@@ -258,7 +258,9 @@ async function main() {
     await c.typeInto("input[type=password]", PASSWORD);
     await c.ev(`document.getElementById("login-submit-btn").click()`);
     await sleep(20000);
-    check("1c. real Clerk login routes the Client to their page", await c.waitFor(`${pathIs("/robot-bounty-client-flow.html")} && typeof S === "object" && S.gate === "ready"`, 45000), await c.ev(text("[role=alert]")).catch(() => ""));
+    check("1c. real Clerk login routes the Client to Find a solution", await c.waitFor(`${pathIs("/find-solution.html")} && typeof RivetApi === "object"`, 45000), await c.ev(text("[role=alert]")).catch(() => ""));
+    await c.go(`${base}/pages/robot-bounty-client-flow.html`); // the Client checks below run on the client-flow page
+    await c.waitFor(`typeof S === "object" && S.gate === "ready"`, 45000);
     check("4a. the Client sees only the Client view", await c.ev(`S.role === "client" && document.querySelector('#role [data-role=dev]').hidden`));
 
     // navbar: does the header reflect the signed-in user? (report only; the nav is a teammate's)
