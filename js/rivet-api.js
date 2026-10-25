@@ -1,8 +1,8 @@
 // Rivet frontend <-> Convex glue. Classic script (no import/export) so it works
 // from file:// as well as http://. Exposes `RivetApi` on the global object.
 //
-// Backend URL: set `window.RIVET_CONVEX_URL` before this script to override.
-// The default is the local dev deployment. Fictional demo data only: there are no
+// Backend URL: `window.RIVET_CONVEX_URL` if set, else what /api/config returns
+// (CONVEX_URL in Vercel), else the local dev deployment. Fictional demo data only: there are no
 // accounts. A draft is protected only by its client token, kept in localStorage.
 (function (root) {
   "use strict";
@@ -184,12 +184,24 @@
   var injected = null;
   var clientPromise = null;
 
+  // Asks the hosting site which backend to use; any failure (file://, a local
+  // static server with no /api) means the local dev deployment.
+  function backendUrl() {
+    if (root.RIVET_CONVEX_URL) return Promise.resolve(root.RIVET_CONVEX_URL);
+    if (typeof fetch !== "function" || !/^https?:$/.test((root.location || {}).protocol || "")) {
+      return Promise.resolve(DEFAULT_URL);
+    }
+    return fetch("/api/config")
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .then(function (c) { return (c && c.convexUrl) || DEFAULT_URL; })
+      .catch(function () { return DEFAULT_URL; });
+  }
+
   function getClient() {
     if (injected) return Promise.resolve(injected);
     if (!clientPromise) {
-      var url = root.RIVET_CONVEX_URL || DEFAULT_URL;
-      clientPromise = import(CONVEX_ESM)
-        .then(function (m) { return new m.ConvexHttpClient(url); })
+      clientPromise = Promise.all([import(CONVEX_ESM), backendUrl()])
+        .then(function (r) { return new r[0].ConvexHttpClient(r[1]); })
         .catch(function (e) { clientPromise = null; throw e; });
     }
     return clientPromise;

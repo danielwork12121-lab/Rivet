@@ -1,4 +1,4 @@
-// Where the hosted site finds the Convex backend. Paste your cloud URL from
-// `npx convex deploy` (or the Convex dashboard), e.g. "https://happy-otter-123.convex.cloud".
-// Left empty, pages use a local backend (npx convex dev) at http://127.0.0.1:3210.
-window.RIVET_CONVEX_URL = window.RIVET_CONVEX_URL || "https://adept-chipmunk-608.convex.cloud";
+// Optional override for which Convex backend the pages use. Leave it empty: hosted
+// sites get the URL from /api/config (the CONVEX_URL setting in Vercel), and local
+// pages fall back to `npx convex dev` at http://127.0.0.1:3210.
+window.RIVET_CONVEX_URL = window.RIVET_CONVEX_URL || "";
