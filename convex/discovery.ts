@@ -10,7 +10,7 @@ import { requireClient } from "./lib/auth";
 // and the extraction in ai.ts; these functions track progress and store pages.
 
 const RECENT_MS = 7 * 24 * 60 * 60 * 1000; // don't search the same task twice in a week
-const STUCK_MS = 15 * 60 * 1000; // a search older than this has crashed
+export const STUCK_MS = 15 * 60 * 1000; // a search older than this has crashed (maintenance.sweepStuck ends it)
 
 // A new web search costs Apify (and Claude, which reads the pages), so it is off unless
 // DISCOVERY_ENABLED=true and APIFY_TOKEN are set, and each one spends a unit of a small daily
@@ -60,9 +60,11 @@ export const start = internalMutation({
       return "blocked" as const;
     }
     await ctx.db.insert("aiUsage", { kind: "discovery", ...(scope.userId ? { userId: scope.userId } : {}) });
-    if (existing) await ctx.db.delete(existing._id); // stale or stuck: start over
+    // Stale or stuck: start over, keeping any matches still waiting on the old search.
+    const carried = existing ? existing.waitingMatches.filter((id) => !waiting.includes(id)) : [];
+    if (existing) await ctx.db.delete(existing._id);
     const discoveryId = await ctx.db.insert("discoveries", {
-      task: key, searchPhrase, status: "searching", urls: [], robotsFound: 0, waitingMatches: waiting,
+      task: key, searchPhrase, status: "searching", urls: [], robotsFound: 0, waitingMatches: [...carried, ...waiting],
     });
     await ctx.scheduler.runAfter(0, internal.scrape.discover, { discoveryId });
     return "run";
@@ -134,20 +136,28 @@ export const finish = internalMutation({
     robotsFound: v.number(),
     error: v.optional(v.string()),
   },
-  handler: async (ctx, { discoveryId, ...result }) => {
-    const d = await ctx.db.get(discoveryId);
-    if (!d) return;
-    await ctx.db.patch(discoveryId, { ...result, waitingMatches: [], finishedAt: Date.now() });
-    // Tell each waiting match how the search went, so an empty result isn't read as "no product".
-    const note = result.status === "failed"
-      ? `Web search failed: ${(result.error ?? "unknown error").replace(/\s+/g, " ").slice(0, 200)}`
-      : result.robotsFound === 0 ? `The web search for "${d.task}" robots read the pages it found but none described a robot.` : null;
-    for (const matchId of d.waitingMatches) {
-      if (note && (await ctx.db.get(matchId))) await ctx.db.patch(matchId, { searchNote: note });
-      await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId, searched: true });
-    }
-  },
+  handler: async (ctx, { discoveryId, ...result }) => finishDiscovery(ctx, discoveryId, result),
 });
+
+type SearchResult = { status: "done" | "failed"; robotsFound: number; error?: string };
+
+// Shared by finish and maintenance.sweepStuck (a search that crashed or ran out of time).
+export async function finishDiscovery(ctx: MutationCtx, discoveryId: Id<"discoveries">, result: SearchResult) {
+  const d = await ctx.db.get(discoveryId);
+  if (!d) return;
+  // A late finish after the sweeper gave up: keep the robots it saved, nobody is waiting any more.
+  const lateFinish = (d.status === "done" || d.status === "failed") && d.waitingMatches.length === 0;
+  await ctx.db.patch(discoveryId, { ...result, waitingMatches: [], finishedAt: Date.now() });
+  if (lateFinish) return;
+  // Tell each waiting match how the search went, so an empty result isn't read as "no product".
+  const note = result.status === "failed"
+    ? `Web search failed: ${(result.error ?? "unknown error").replace(/\s+/g, " ").slice(0, 200)}`
+    : result.robotsFound === 0 ? `The web search for "${d.task}" robots read the pages it found but none described a robot.` : null;
+  for (const matchId of d.waitingMatches) {
+    if (note && (await ctx.db.get(matchId))) await ctx.db.patch(matchId, { searchNote: note });
+    await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId, searched: true });
+  }
+}
 
 // For the page: is a search running for this task, and what has it found? Signed-in Clients
 // only, so what other operators asked to search for isn't public.

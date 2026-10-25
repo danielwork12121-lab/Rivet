@@ -143,3 +143,43 @@ describe("Robot Spec Finder runs", () => {
     expect(sent.some((r) => (r.url + r.body + r.headers).includes(SENTINEL))).toBe(false);
   });
 });
+
+describe("checking on a finder run", () => {
+  const crawling = (t: ReturnType<typeof convexTest>) => t.run((ctx) => ctx.db.insert("discoveries", {
+    task: "mowing", searchPhrase: "robot mower", status: "crawling", urls: [], robotsFound: 0, waitingMatches: [],
+  }));
+  const scheduled = (t: ReturnType<typeof convexTest>) => t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+
+  it("tries again later when Apify's status check fails, instead of crashing", async () => {
+    vi.stubEnv("APIFY_TOKEN", "tok");
+    vi.stubGlobal("fetch", async () => new Response("bad gateway", { status: 502 }));
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const discoveryId = await crawling(t);
+    await t.action(internal.scrape.checkFinderRun, { discoveryId, runId: "run1", startedAt: Date.now() });
+    expect((await t.run((ctx) => ctx.db.get(discoveryId)))?.status).toBe("crawling");
+    expect((await scheduled(t)).some((f) => f.name.includes("checkFinderRun"))).toBe(true);
+  });
+
+  it("gives up in time for the whole search, counting the wait for a free Apify slot", async () => {
+    vi.stubEnv("APIFY_TOKEN", "tok");
+    vi.stubGlobal("fetch", async () => json({ data: { id: "run1", status: "RUNNING", defaultDatasetId: "ds1" } }));
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const discoveryId = await crawling(t);
+    vi.setSystemTime(Date.now() + 14.5 * 60 * 1000); // the run itself only started a minute ago
+    await t.action(internal.scrape.checkFinderRun, { discoveryId, runId: "run1", startedAt: Date.now() - 60 * 1000 });
+    expect(await t.run((ctx) => ctx.db.get(discoveryId))).toMatchObject({ status: "failed" });
+  });
+
+  it("does nothing once the search has ended elsewhere", async () => {
+    vi.stubEnv("APIFY_TOKEN", "tok");
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const t = convexTest(schema, modules);
+    const discoveryId = await crawling(t);
+    await t.run((ctx) => ctx.db.patch(discoveryId, { status: "failed" }));
+    await t.action(internal.scrape.checkFinderRun, { discoveryId, runId: "run1", startedAt: Date.now() });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

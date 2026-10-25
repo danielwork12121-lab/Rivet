@@ -339,6 +339,8 @@ const RobotPageSchema = z.object({
   imageUrl: z.string().nullable(),
 });
 
+const EXTRACT_PARALLEL = 4;
+
 export const extractPages = internalAction({
   args: { discoveryId: v.id("discoveries") },
   handler: async (ctx, { discoveryId }) => {
@@ -346,8 +348,8 @@ export const extractPages = internalAction({
     if (!discovery) return;
     const pages = await ctx.runQuery(internal.discovery.pagesToExtract, { discoveryId });
     let robotsFound = 0;
-    // One page at a time keeps this simple; a few pages take about a minute.
-    for (const page of pages) {
+    // A few pages at a time: about four times faster than one by one, and well under rate limits.
+    const readPage = async (page: (typeof pages)[number]) => {
       const started = Date.now();
       try {
         const res = await client().messages.parse({
@@ -372,6 +374,9 @@ export const extractPages = internalAction({
         await logFailure(ctx, "extract", err);
       }
       await ctx.runMutation(internal.discovery.markExtracted, { pageId: page._id });
+    };
+    for (let i = 0; i < pages.length; i += EXTRACT_PARALLEL) {
+      await Promise.all(pages.slice(i, i + EXTRACT_PARALLEL).map(readPage));
     }
     await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound });
   },

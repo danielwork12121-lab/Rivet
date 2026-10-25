@@ -31,6 +31,15 @@ describe("numberAppears", () => {
     expect(numberAppears(25, "slopes of 250 feet")).toBe(false);
     expect(numberAppears(5, "about 2.5 hours")).toBe(false);
   });
+
+  it("reads prices written with cents", () => {
+    expect(numberAppears(2399, "From$2,399.00")).toBe(true);
+    expect(numberAppears(8750, "Now: $8,750.00")).toBe(true);
+    expect(numberAppears(599.99, "$599.99")).toBe(true);
+    expect(numberAppears(2.5, "2.50 acres")).toBe(true);
+    expect(numberAppears(2399, "$2,399.50")).toBe(false);
+    expect(numberAppears(2399, "$2,399.001")).toBe(false);
+  });
 });
 
 describe("toCanonical", () => {
