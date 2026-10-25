@@ -232,17 +232,9 @@ const COMPANY = {
   },
 };
 
-const PRODUCTS = [
-  { id: "p1", task: "mow", name: "TurfRover R2", maker: "Sample Robotics Co. A", price: 18500, opex: 1200, share: .7, slope: 20, regions: ["West", "South"], trl: 9 },
-  { id: "p2", task: "mow", name: "Fieldline AutoMow Pro", maker: "Sample Robotics Co. B", price: 32000, opex: 2000, share: .8, slope: 30, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
-  { id: "p3", task: "mow", name: "GreenPath Compact", maker: "Sample Robotics Co. C", price: 6900, opex: 600, share: .4, slope: 15, regions: ["West", "Midwest", "Northeast"], trl: 9 },
-  { id: "p4", task: "trim", name: "EdgeBot E1", maker: "Sample Robotics Co. D", price: 14000, opex: 1500, share: .3, slope: 10, regions: ["West", "South", "Midwest", "Northeast"], trl: 6 },
-  { id: "p5", task: "spray", name: "SprayScout S", maker: "Sample Robotics Co. E", price: 21000, opex: 1800, share: .6, slope: 15, regions: ["West", "South"], trl: 7 },
-  { id: "p6", task: "spray", name: "TankWalker T3", maker: "Sample Robotics Co. F", price: 27500, opex: 2400, share: .65, slope: 25, regions: ["West", "South", "Midwest"], trl: 7 },
-  { id: "p7", task: "perim", name: "PerimeterPro Rover", maker: "Sample Robotics Co. G", price: 24000, opex: 2200, share: .5, slope: 20, regions: ["West", "South", "Midwest", "Northeast"], trl: 7 },
-  { id: "p8", task: "crawl", name: "CrawlEye C2", maker: "Sample Robotics Co. H", price: 9800, opex: 700, share: .7, slope: 35, regions: ["West", "South", "Midwest", "Northeast"], trl: 8 },
-  { id: "p9", task: "crawl", name: "UnderView Mini", maker: "Sample Robotics Co. I", price: 4200, opex: 300, share: .45, slope: 25, regions: ["South", "Midwest"], trl: 9 },
-];
+// No built-in robots: the fictional sample products were removed. Robots come only
+// from the Convex catalog; with none, every task shows "nothing fits yet" and offers a bounty.
+const PRODUCTS = [];
 
 const QUESTIONS = [
   { key: "slope", q: "How many of your properties have slopes steeper than about 20°?", opts: [["Very few", 15], ["Some", 20], ["A lot of them", 28]] },
@@ -578,16 +570,15 @@ function aiPanel() {
       <div><button class="btn" id="ai-draft" ${a.available !== true || busy ? "disabled" : ""}>${busy ? "Drafting\u2026" : sp ? "Draft again with AI" : "Draft requirements with AI"}</button></div>
     </div>`;
 }
-// Catalog: Convex is the canonical source. The PRODUCTS array above stays as an
-// offline fallback copy (kept identical by tests/catalog.test.ts).
+// Catalog: Convex is the only source of products (the built-in list is empty).
 async function loadCatalog() {
   try {
     const products = RivetApi.robotsToProducts(await RivetApi.listRobots());
-    if (!products.length) return; // not seeded yet: keep the built-in copy
+    if (!products.length) return; // nothing in the catalog yet
     PRODUCTS.splice(0, PRODUCTS.length, ...products);
     S.catalog.source = "convex";
     if (S.role === "client" && S.step >= 2) render();
-  } catch (e) { /* backend unreachable: keep the built-in copy */ }
+  } catch (e) { /* backend unreachable: no products */ }
 }
 // Mirrors the sample goal the bounty page shows; stored as an illustrative figure.
 const DEMO_BOUNTY_GOAL = 150000;

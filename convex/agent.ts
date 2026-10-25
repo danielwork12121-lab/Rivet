@@ -388,6 +388,7 @@ export const latestMatch = query({
         ...p,
         name: r.name, vendor: r.vendor, url: r.url, sample: r.sample,
         price: r.priceStatus === "quote_only" ? null : r.price,
+        yearlyOpex: r.priceStatus === "quote_only" ? null : r.yearlyOpex,
         specs: r.specs ?? [],
         fetchedAt: r.fetchedAt ?? null,
       });
