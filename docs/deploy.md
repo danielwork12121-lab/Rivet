@@ -85,3 +85,11 @@ still work but are slower. The free Apify plan runs 5 jobs at once; extra search
   "In your video") and Excel Input.
 - If a step says "Web search skipped", a daily limit or `DISCOVERY_ENABLED` is the cause; "Web search
   failed" shows Apify's error.
+
+## 6. Self-healing
+
+`convex/crons.ts` runs `sweep:sweepStuck` every 2 minutes. It ends searches stuck for 15 minutes,
+matches stuck reading for 10 (or searching for 20) and breakdowns stuck splitting for 10, so the page
+always shows a result or a "try again" message instead of spinning. `npx convex deploy` installs the
+cron; nothing else to set up. The page itself polls with backoff, stops after 25 minutes, and doesn't
+re-run the paid breakdown when the job text hasn't changed or the message is just a question.
