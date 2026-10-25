@@ -265,6 +265,23 @@ async function main() {
     const mb = await call("b", "query", "matching:latestMatch", { requestId: reqB });
     const sb = await call("b", "query", "matching:savedRequirements", { requestId: reqB });
     check("10b. an old-style findRobots call still works: slope answer derived, task saved, requirements stay 'derived'", mb.status === "done" && mb.requirementBases?.[0] === "derived_from_answers" && sb.requirements === null && sb.task === "spraying");
+    // 10c-e. clearRequirements and overview (Phase 3C) on the deployed backend
+    await call("b", "mutation", "matching:saveRequirements", { requestId: reqB, task: "spraying", requirements: [slope(35)] });
+    const cleared = await call("b", "mutation", "matching:clearRequirements", { requestId: reqB });
+    const ob = await call("b", "query", "matching:overview", { requestId: reqB });
+    check("10c. clearRequirements restores the answer-derived requirement and refreshes the stored result",
+      cleared.changed === true && ob.saved.requirements === null && ob.saved.task === "spraying" && ob.state === "current" && ob.match.requirementBases?.[0] === "derived_from_answers" && storedMatches(reqB).length === 1);
+    const ovB = { requestId: reqB };
+    check("10d. overview and clearRequirements: other Client, Developer and anonymous are rejected",
+      await rejects(call("a", "query", "matching:overview", ovB), /Draft not found/) && await rejects(call("dev", "query", "matching:overview", ovB), /Client account/) &&
+      await rejects(call(null, "query", "matching:overview", ovB), /Please sign in/) && await rejects(call("a", "mutation", "matching:clearRequirements", ovB), /Draft not found/));
+    // 10e. the paid AI finder and web search are off on this deployment (AI_MATCH_ENABLED / DISCOVERY_ENABLED unset)
+    const matchesBefore = rows("matches").length;
+    check("10e. AI finder is off for the owner, and closed to Developers and anonymous callers; web search status needs a Client",
+      await rejects(call("b", "mutation", "agent:findRobots", ovB), /turned off/) && (await call("b", "mutation", "agent:setTaskCost", { ...ovB, annualTaskCost: 40000 })) === null &&
+      await rejects(call("dev", "mutation", "agent:findRobots", ovB), /Client account/) && await rejects(call(null, "mutation", "agent:findRobots", ovB), /Please sign in/) &&
+      await rejects(call(null, "query", "discovery:forTask", { task: "spraying" }), /Please sign in/) && await rejects(call("dev", "query", "discovery:forTask", { task: "spraying" }), /Client account/) &&
+      rows("matches").length === matchesBefore);
     // 11. existing functions
     check("11a. existing account and request functions work", (await call("a", "query", "users:me", {})).account?.role === "client" && (await call("a", "query", "requests:listMine", {})).some((r) => r._id === reqA));
     await call("a", "mutation", "requests:updateIntake", { id: reqA, ...intake, profile: { companyName: "E2E-TEST Requirements Co", businessType: "lawn", region: "West", crewCount: 2, hourlyLaborCost: 24, visibility: "shared" } });
