@@ -9,6 +9,12 @@
     },
     "api/analyze-video.js": {
       "maxDuration": 30
+    },
+    "api/analyze-excel.js": {
+      "maxDuration": 30
+    },
+    "api/analyze-excel-text.js": {
+      "maxDuration": 30
     }
   },
   "git": {
