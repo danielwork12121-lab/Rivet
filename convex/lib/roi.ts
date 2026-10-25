@@ -50,3 +50,42 @@ export function breakEvenAnnualCost(input: Omit<RoiInput, "currentAnnualCost">, 
   const neededNetSavings = (input.robotPrice * 12) / months;
   return Math.round((neededNetSavings + input.yearlyOpex) / input.automationShare);
 }
+
+// The longer view for an owner deciding on a robot: what it costs and saves over its life,
+// and what that's worth in today's money.
+//   NPV = -C0 + sum over t = 1..N of (B - O) / (1 + r)^t
+//   TCO = C0 + N * O            (price plus every year's running cost)
+//   ROI = (N * (B - O) - C0) / C0
+// B = yearly labor saved, O = yearly running cost, C0 = price, r = discount rate, N = years.
+export const LIFE_YEARS = 5;
+export const DISCOUNT_RATE = 0.08;
+
+export type Lifetime = {
+  years: number;
+  ratePct: number;
+  upfront: number;
+  totalCost: number; // TCO
+  totalSavings: number; // labor saved minus running cost, all years
+  npv: number;
+  roiPct: number | null; // null when the robot is free (no price to divide by)
+};
+
+export function lifetimeValue(
+  input: { robotPrice: number; yearlyLaborSaved: number; yearlyOpex: number },
+  years = LIFE_YEARS,
+  rate = DISCOUNT_RATE,
+): Lifetime {
+  const net = input.yearlyLaborSaved - input.yearlyOpex;
+  let npv = -input.robotPrice;
+  for (let t = 1; t <= years; t++) npv += net / (1 + rate) ** t;
+  const totalSavings = net * years;
+  return {
+    years,
+    ratePct: Math.round(rate * 100),
+    upfront: Math.round(input.robotPrice),
+    totalCost: Math.round(input.robotPrice + input.yearlyOpex * years),
+    totalSavings: Math.round(totalSavings),
+    npv: Math.round(npv),
+    roiPct: input.robotPrice > 0 ? Math.round(((totalSavings - input.robotPrice) / input.robotPrice) * 100) : null,
+  };
+}

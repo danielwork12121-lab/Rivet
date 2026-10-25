@@ -56,3 +56,24 @@ step's search phrase and its share of the job's yearly labor, so `ai.matchRobots
 - `agent:checkStep` searches a step that wasn't searched up front (one unit of budget).
 - Robot photos (`robots.imageUrl`) come from the vendor page only: a photo link in the page text,
   else its Product JSON-LD image or `og:image` (`lib/images.ts`).
+
+## Match score, lifetime value and pooled bounties
+
+All plain code; Claude never computes these.
+
+- **Match score** (`convex/lib/score.ts`), 0 to 100: `S = F × (0.4 C + 0.3 R + 0.3 E)`.
+  F is 1 only if the robot meets every must-have. C is cost fit (payback: instant = 1, 5 years or
+  never = 0; without a payback, price against budget; unknown price = 0.5). R is the share of
+  requirements met. E is the share of judged figures (each requirement's spec, and the price) read
+  from the vendor's page with a quote; fictional sample robots get 0. Robots are ranked by S; ties
+  and zero scores fall back to the old closeness points so bounty gaps stay the fewest.
+- **Lifetime value** (`convex/lib/roi.ts` `lifetimeValue`): over 5 years at an 8% discount rate,
+  `NPV = −C0 + Σ (B − O)/(1 + r)^t`, `TCO = C0 + N·O`, `ROI = (N(B − O) − C0)/C0`. Stored on each
+  pick as `lifetime` and shown on the page as one plain sentence.
+- **Pooled bounties** (`convex/lib/pool.ts`): `B_k = Σ pledged` over posted, shared bounties with
+  the same `taskKey`. `bounties:pooledDemand` gives a Client the totals for their steps' tasks
+  (counts and money only, no names); the Developer board shows `pooledBusinesses` / `pooledPledged`.
+
+The Find a solution page shows the breakdown as a map: the job, its steps (slider, verdict,
+buttons), and what hangs off each step (robots with score and payback, a bounty with pooled
+pledges, or why it wasn't searched).

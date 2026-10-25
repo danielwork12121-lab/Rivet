@@ -74,6 +74,13 @@ export const matchPick = v.object({
   paybackMonths: v.union(v.number(), v.null()),
   yearlyNetSavings: v.union(v.number(), v.null()),
   breakEvenAnnualCost: v.union(v.number(), v.null()),
+  // S = F(0.4C + 0.3R + 0.3E), lib/score.ts. Optional: older rows were scored the old way.
+  scoreParts: v.optional(v.object({ fit: v.number(), cost: v.number(), requirements: v.number(), evidence: v.number() })),
+  // Over the robot's life (lib/roi.ts lifetimeValue): NPV, TCO, ROI.
+  lifetime: v.optional(v.union(v.null(), v.object({
+    years: v.number(), ratePct: v.number(), upfront: v.number(), totalCost: v.number(),
+    totalSavings: v.number(), npv: v.number(), roiPct: v.union(v.number(), v.null()),
+  }))),
   assumptions: v.array(v.string()),
   reason: v.optional(v.string()),
 });
