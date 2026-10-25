@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { loadOwnedDraft } from "./lib/drafts";
 import { nextAction, normalizeTask, rankRobots, type Intent, type Requirement, type RobotFacts } from "./lib/decide";
@@ -219,20 +219,43 @@ export const saveRequirements = mutation({
   },
 });
 
+// The saved matching input as the Client sees it, or null if none was saved.
+// `requirements: null` means "derived from the follow-up answers" (as opposed to an empty list, which
+// means "no requirements").
+function savedView(request: Doc<"operatorRequests">) {
+  const saved = request.matchingInput;
+  if (!saved) return null;
+  return {
+    task: saved.task,
+    requirements: saved.requirements ?? null,
+    annualTaskCost: request.cost?.currentAnnualCost ?? null,
+    updatedAt: saved.updatedAt,
+  };
+}
+
 // The saved matching input for the caller's own request, or null if none was saved.
-// `requirements: null` means "derived from the follow-up answers".
 export const savedRequirements = query({
+  args: { requestId: v.id("operatorRequests") },
+  handler: async (ctx, { requestId }) => savedView(await loadOwnedDraft(ctx, requestId)),
+});
+
+// Forgets the custom requirements on the caller's own request, so matching derives them from the
+// follow-up answers again. The saved task and annual cost stay. If a result exists it is recomputed on
+// the spot, so it never shows requirements that are gone. Calling it again (or when nothing custom was
+// saved) changes nothing. An empty saved list counts as saved: it is cleared too.
+export const clearRequirements = mutation({
   args: { requestId: v.id("operatorRequests") },
   handler: async (ctx, { requestId }) => {
     const request = await loadOwnedDraft(ctx, requestId);
+    const existing = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").first();
     const saved = request.matchingInput;
-    if (!saved) return null;
-    return {
-      task: saved.task,
-      requirements: saved.requirements ?? null,
-      annualTaskCost: request.cost?.currentAnnualCost ?? null,
-      updatedAt: saved.updatedAt,
-    };
+    if (!saved || saved.requirements === undefined) {
+      return { changed: false, matchUpdated: false, matchId: existing?._id ?? null };
+    }
+    await ctx.db.patch(requestId, { matchingInput: { task: saved.task, updatedAt: Date.now() } });
+    const matchUpdated = existing !== null;
+    if (matchUpdated) await computeAndStore(ctx, (await ctx.db.get(requestId))!);
+    return { changed: true, matchUpdated, matchId: existing?._id ?? null };
   },
 });
 
@@ -264,50 +287,67 @@ function fitSource(r: Doc<"robots">, name: string): "vendor_spec" | "sample_figu
   return "unknown";
 }
 
-// The caller's own latest result for a request, each pick with its robot's details and where those
-// numbers come from. `stale` is true if the request's inputs have changed since the result was made
-// (e.g. a new annual cost or follow-up answer): run matching again. Null if none was run.
+// The request's latest result with each pick's robot details and where those numbers come from. `stale`
+// is true if the request's inputs have changed since the result was made (e.g. a new annual cost or
+// follow-up answer): run matching again. Null if none was run.
+async function matchView(ctx: QueryCtx, request: Doc<"operatorRequests">) {
+  const match = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", request._id)).order("desc").first();
+  if (!match) return null;
+  const sig = (i: Intent) => JSON.stringify([i.task, i.annualTaskCost, i.budget, i.requirements.map((r) => [r.name, r.op, r.value, r.mandatory])]);
+  const mine = match.intent ? intentFor(request, request.matchingInput?.task ?? match.intent.task) : null;
+  const stale = match.intent && mine
+    ? sig(mine) !== sig({ task: match.intent.task, annualTaskCost: match.intent.annualTaskCost, budget: match.intent.budget, requirements: match.intent.requirements as Requirement[] })
+    : false;
+  const bases = requirementsFor(request).bases;
+  const picks = [];
+  for (const p of match.picks) {
+    const r = await ctx.db.get(p.robotId);
+    if (!r) continue;
+    picks.push({
+      ...p,
+      name: r.name,
+      vendor: r.vendor,
+      url: r.url,
+      price: r.priceStatus === "quote_only" ? null : r.price,
+      specs: r.specs ?? [],
+      fetchedAt: r.fetchedAt ?? null,
+      dataSource: dataSourceOf(r),
+      provenance: r.provenance ?? null,
+      // aligned with intent.requirements: where this robot's figure for each requirement comes from
+      fitSources: (match.intent?.requirements ?? []).map((q) => fitSource(r, q.name)),
+    });
+  }
+  return {
+    _id: match._id,
+    status: match.status,
+    intent: match.intent ?? null,
+    // aligned with intent.requirements: "estimate" | "measured" (the Client's words) | "derived_from_answers"
+    requirementBases: match.intent && !stale ? bases : null,
+    next: match.next ?? null,
+    stale,
+    picks,
+  };
+}
+
+// The caller's own latest result for a request (see matchView). Never reachable by another account.
 export const latestMatch = query({
+  args: { requestId: v.id("operatorRequests") },
+  handler: async (ctx, { requestId }) => matchView(ctx, await loadOwnedDraft(ctx, requestId)),
+});
+
+// Everything the page needs in one owner-only read: the saved matching input and the latest result,
+// each exactly as savedRequirements and latestMatch return them. `state` says what to do next:
+// "no_result" (nothing run yet), "stale" (inputs changed since the last run: run matching again) or
+// "current".
+export const overview = query({
   args: { requestId: v.id("operatorRequests") },
   handler: async (ctx, { requestId }) => {
     const request = await loadOwnedDraft(ctx, requestId);
-    const match = await ctx.db.query("matches").withIndex("by_request", (q) => q.eq("requestId", requestId)).order("desc").first();
-    if (!match) return null;
-    const sig = (i: Intent) => JSON.stringify([i.task, i.annualTaskCost, i.budget, i.requirements.map((r) => [r.name, r.op, r.value, r.mandatory])]);
-    const mine = match.intent
-      ? intentFor(request, request.matchingInput?.task ?? match.intent.task)
-      : null;
-    const stale = match.intent && mine
-      ? sig(mine) !== sig({ task: match.intent.task, annualTaskCost: match.intent.annualTaskCost, budget: match.intent.budget, requirements: match.intent.requirements as Requirement[] })
-      : false;
-    const bases = requirementsFor(request).bases;
-    const picks = [];
-    for (const p of match.picks) {
-      const r = await ctx.db.get(p.robotId);
-      if (!r) continue;
-      picks.push({
-        ...p,
-        name: r.name,
-        vendor: r.vendor,
-        url: r.url,
-        price: r.priceStatus === "quote_only" ? null : r.price,
-        specs: r.specs ?? [],
-        fetchedAt: r.fetchedAt ?? null,
-        dataSource: dataSourceOf(r),
-        provenance: r.provenance ?? null,
-        // aligned with intent.requirements: where this robot's figure for each requirement comes from
-        fitSources: (match.intent?.requirements ?? []).map((q) => fitSource(r, q.name)),
-      });
-    }
+    const match = await matchView(ctx, request);
     return {
-      _id: match._id,
-      status: match.status,
-      intent: match.intent ?? null,
-      // aligned with intent.requirements: "estimate" | "measured" (the Client's words) | "derived_from_answers"
-      requirementBases: match.intent && !stale ? bases : null,
-      next: match.next ?? null,
-      stale,
-      picks,
+      saved: savedView(request),
+      match,
+      state: match === null ? ("no_result" as const) : match.stale ? ("stale" as const) : ("current" as const),
     };
   },
 });

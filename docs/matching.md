@@ -33,4 +33,11 @@ The verified side is the robots' vendor-page specs (`fitSources`: `vendor_spec`,
   the saved input. Anything passed is saved first. Old callers that always sent `task` keep working.
 - `matching:latestMatch`: adds `stale` (the request changed elsewhere since the result: a new annual cost
   or follow-up answer; run matching again), `requirementBases` and per-pick `fitSources`.
+- `matching:clearRequirements({ requestId })`: forgets the saved custom requirements so matching derives them
+  from the follow-up answers again. The task and annual cost stay. An existing result is recomputed on the
+  spot. Clearing twice (or with nothing custom saved) changes nothing. An empty saved list counts as saved:
+  `requirements: []` means "none, on purpose", while `null` means "derived".
+- `matching:overview({ requestId })`: `{ saved, match, state }` in one read, with `saved` and `match`
+  exactly as `savedRequirements` and `latestMatch` return them. `state` is `no_result`, `stale` (inputs
+  changed since the last run: run matching again) or `current`.
 - All of them are owner-only (`loadOwnedDraft`). Bad input is rejected before anything is written.

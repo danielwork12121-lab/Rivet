@@ -450,3 +450,208 @@ describe("matching: saved requirements", () => {
     vi.unstubAllEnvs();
   });
 });
+
+describe("matching: clearRequirements", () => {
+  const answer = (value: number) => ({ key: "slope", question: "Slopes?", answerLabel: "x", assumption: { value, unit: "degrees" } });
+  const runtime = { name: "runtime_hours", op: "atLeast" as const, value: 2, mandatory: false };
+  const withAnswer = async () => {
+    const ctx = await setup();
+    await ctx.t.mutation(api.requests.saveFollowUps, { id: ctx.requestId, complete: false, answers: [answer(28)] });
+    return ctx;
+  };
+  const save = (t: any, requestId: any, o: object = {}) =>
+    t.mutation(api.matching.saveRequirements, { requestId, task: "mowing", requirements: [runtime], annualTaskCost: 60000, ...o });
+  const clear = (t: any, requestId: any) => t.mutation(api.matching.clearRequirements, { requestId });
+
+  it("clearing restores answer-derived requirements, keeps the task and annual cost, and refreshes the result", async () => {
+    const { t, requestId, matchRows } = await withAnswer();
+    await save(t, requestId);
+    const id = await t.mutation(api.matching.findRobots, { requestId });
+    const custom = (await t.query(api.matching.latestMatch, { requestId }))!;
+    expect(custom.intent!.requirements.map((r) => r.name)).toEqual(["runtime_hours"]);
+    expect(custom.requirementBases).toEqual(["estimate"]);
+
+    expect(await clear(t, requestId)).toEqual({ changed: true, matchUpdated: true, matchId: id });
+    const saved = (await t.query(api.matching.savedRequirements, { requestId }))!;
+    expect(saved).toMatchObject({ task: "mowing", annualTaskCost: 60000, requirements: null }); // null = derived, not []
+    const derived = (await t.query(api.matching.latestMatch, { requestId }))!;
+    expect(derived.stale).toBe(false);
+    expect(derived.intent!.requirements).toEqual([{ name: "max_slope_deg", op: "atLeast", value: 28, mandatory: false }]);
+    expect(derived.intent).toMatchObject({ task: "mowing", annualTaskCost: 60000 });
+    expect(derived.requirementBases).toEqual(["derived_from_answers"]);
+    expect(derived.picks.every((p) => /illustrative/.test(p.assumptions.join(" ")))).toBe(true);
+    expect(await matchRows()).toHaveLength(1); // replaced in place
+    // and custom requirements can be saved again afterwards
+    expect((await save(t, requestId)).changed).toBe(true);
+    expect((await t.query(api.matching.savedRequirements, { requestId }))!.requirements).toHaveLength(1);
+  });
+
+  it("an intentionally empty list is different from none: clearing it brings the derived requirement back", async () => {
+    const { t, requestId } = await withAnswer();
+    await save(t, requestId, { requirements: [] }); // "no requirements, on purpose"
+    await t.mutation(api.matching.findRobots, { requestId });
+    expect((await t.query(api.matching.latestMatch, { requestId }))!.intent!.requirements).toEqual([]);
+    expect((await t.query(api.matching.savedRequirements, { requestId }))!.requirements).toEqual([]);
+    expect((await clear(t, requestId)).changed).toBe(true);
+    expect((await t.query(api.matching.savedRequirements, { requestId }))!.requirements).toBeNull();
+    expect((await t.query(api.matching.latestMatch, { requestId }))!.intent!.requirements).toHaveLength(1);
+    // an empty list can be saved again after clearing: it is a real change
+    expect((await save(t, requestId, { requirements: [] })).changed).toBe(true);
+  });
+
+  it("is idempotent: a second clear changes nothing, including the stored result and timestamps", async () => {
+    const { t, requestId, matchRows } = await withAnswer();
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    await clear(t, requestId);
+    const saved = await t.query(api.matching.savedRequirements, { requestId });
+    const rows = JSON.stringify(await matchRows());
+    const again = await clear(t, requestId);
+    expect(again).toMatchObject({ changed: false, matchUpdated: false });
+    expect(await t.query(api.matching.savedRequirements, { requestId })).toEqual(saved);
+    expect(JSON.stringify(await matchRows())).toBe(rows);
+  });
+
+  it("with nothing custom saved it is a harmless no-op that creates nothing", async () => {
+    const { t, requestId, matchRows } = await setup();
+    expect(await clear(t, requestId)).toEqual({ changed: false, matchUpdated: false, matchId: null }); // nothing saved at all
+    expect(await t.query(api.matching.savedRequirements, { requestId })).toBeNull();
+    await t.mutation(api.matching.findRobots, { requestId, task: "mowing" }); // task saved, requirements still derived
+    const rows = JSON.stringify(await matchRows());
+    expect((await clear(t, requestId)).changed).toBe(false);
+    expect(JSON.stringify(await matchRows())).toBe(rows);
+    expect((await t.query(api.matching.savedRequirements, { requestId }))!.task).toBe("mowing");
+  });
+
+  it("with no result yet, clearing only updates the saved input (no result is created)", async () => {
+    const { t, requestId, matchRows } = await setup();
+    await save(t, requestId);
+    expect(await clear(t, requestId)).toEqual({ changed: true, matchUpdated: false, matchId: null });
+    expect(await matchRows()).toHaveLength(0);
+  });
+
+  it("only the owning Client can clear; everyone else is rejected and nothing changes", async () => {
+    const { raw, t, requestId, matchRows } = await withAnswer();
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    const before = { saved: await t.query(api.matching.savedRequirements, { requestId }), rows: JSON.stringify(await matchRows()), draft: await t.query(api.requests.getDraft, { id: requestId }) };
+    const other = await asClient(raw, "user_client_b");
+    await expect(clear(other, requestId)).rejects.toThrow(/Draft not found/);
+    await expect(clear(raw, requestId)).rejects.toThrow(/Please sign in/);
+    await expect(clear(signedIn(raw, "user_new"), requestId)).rejects.toThrow(/Finish setting up/);
+    for (const approved of [true, false]) {
+      const dev = await asDeveloper(raw, approved ? "user_dev_ok" : "user_dev_pending", approved);
+      await expect(clear(dev, requestId)).rejects.toThrow(/needs a Client account/);
+    }
+    expect(await t.query(api.matching.savedRequirements, { requestId })).toEqual(before.saved);
+    expect(JSON.stringify(await matchRows())).toBe(before.rows);
+    expect(await t.query(api.requests.getDraft, { id: requestId })).toEqual(before.draft);
+  });
+
+  it("leaves other requests untouched, the same Client's and other Clients'", async () => {
+    const { raw, t, requestId, matchRows } = await setup();
+    const second = await t.mutation(api.requests.create, { ...intake, title: "Second request" });
+    const other = await asClient(raw, "user_client_b");
+    const theirs = await other.mutation(api.requests.create, { ...intake, title: "Bob's request" });
+    for (const [who, id] of [[t, requestId], [t, second], [other, theirs]] as const) {
+      await save(who, id, { annualTaskCost: 55000 });
+      await who.mutation(api.matching.findRobots, { requestId: id });
+    }
+    const snap = async () => JSON.stringify([
+      await t.query(api.requests.getDraft, { id: second }), await other.query(api.requests.getDraft, { id: theirs }),
+      (await matchRows()).filter((r) => r.requestId !== requestId),
+    ]);
+    const before = await snap();
+    await clear(t, requestId);
+    expect(await snap()).toBe(before);
+    expect((await t.query(api.matching.savedRequirements, { requestId: second }))!.requirements).toHaveLength(1);
+    expect((await other.query(api.matching.savedRequirements, { requestId: theirs }))!.requirements).toHaveLength(1);
+  });
+
+  it("uses no AI and schedules nothing", async () => {
+    const { raw, t, requestId, scheduled } = await withAnswer();
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    await clear(t, requestId);
+    expect(await scheduled()).toHaveLength(0);
+    expect(await raw.run((ctx) => ctx.db.query("aiUsage").collect())).toHaveLength(0);
+  });
+});
+
+describe("matching: overview", () => {
+  const save = (t: any, requestId: any, o: object = {}) =>
+    t.mutation(api.matching.saveRequirements, { requestId, task: "mowing", annualTaskCost: 60000,
+      requirements: [{ name: "max_slope_deg", op: "atLeast", value: 25, mandatory: true, basis: "measured" }], ...o });
+
+  it("returns the saved input and the latest result in one call, exactly as the separate queries do", async () => {
+    const { t, requestId } = await setup();
+    expect(await t.query(api.matching.overview, { requestId })).toEqual({ saved: null, match: null, state: "no_result" });
+    await save(t, requestId);
+    const saved = await t.query(api.matching.overview, { requestId });
+    expect(saved.saved).toMatchObject({ task: "mowing", annualTaskCost: 60000 });
+    expect(saved.match).toBeNull();
+    expect(saved.state).toBe("no_result");
+    await t.mutation(api.matching.findRobots, { requestId });
+    const o = await t.query(api.matching.overview, { requestId });
+    expect(o.state).toBe("current");
+    expect(o.saved).toEqual(await t.query(api.matching.savedRequirements, { requestId }));
+    expect(o.match).toEqual(await t.query(api.matching.latestMatch, { requestId }));
+  });
+
+  it("carries staleness and provenance information", async () => {
+    const { t, requestId, ids } = await setup();
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    let o = await t.query(api.matching.overview, { requestId });
+    expect(o.match!.stale).toBe(false);
+    expect(o.match!.requirementBases).toEqual(["measured"]);
+    const top = o.match!.picks[0];
+    expect(top.robotId).toBe(ids.vendor); // 35 degrees meets 25: a vendor-page figure
+    expect([top.dataSource, top.fitSources]).toEqual(["vendor_sourced", ["vendor_spec"]]);
+    // every other pick has a consistent label: fictional robots show a sample figure (or none), unverified ones none
+    for (const p of o.match!.picks.slice(1)) {
+      expect(["fictional_sample", "unverified"]).toContain(p.dataSource);
+      expect(p.dataSource === "unverified" ? ["unknown"] : ["sample_figure", "unknown"]).toContain(p.fitSources[0]);
+    }
+    await t.mutation(api.requests.updateIntake, { id: requestId, ...intake, cost: { currency: "USD", currentAnnualCost: 90000 } });
+    o = await t.query(api.matching.overview, { requestId });
+    expect(o.state).toBe("stale");
+    expect(o.match!.stale).toBe(true);
+    expect(o.saved!.annualTaskCost).toBe(90000);
+  });
+
+  it("reflects clearRequirements immediately", async () => {
+    const { t, requestId } = await setup();
+    await t.mutation(api.requests.saveFollowUps, { id: requestId, complete: false, answers: [{ key: "slope", question: "Slopes?", answerLabel: "x", assumption: { value: 28 } }] });
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    await t.mutation(api.matching.clearRequirements, { requestId });
+    const o = await t.query(api.matching.overview, { requestId });
+    expect(o.saved!.requirements).toBeNull();
+    expect(o.match!.requirementBases).toEqual(["derived_from_answers"]);
+    expect(o.state).toBe("current");
+  });
+
+  it("is owner-only, and exposes no owner id or token", async () => {
+    const { raw, t, requestId } = await setup();
+    await save(t, requestId);
+    await t.mutation(api.matching.findRobots, { requestId });
+    const other = await asClient(raw, "user_client_b");
+    await expect(other.query(api.matching.overview, { requestId })).rejects.toThrow(/Draft not found/);
+    await expect(raw.query(api.matching.overview, { requestId })).rejects.toThrow(/Please sign in/);
+    await expect(signedIn(raw, "user_new").query(api.matching.overview, { requestId })).rejects.toThrow(/Finish setting up/);
+    for (const approved of [true, false]) {
+      const dev = await asDeveloper(raw, approved ? "user_dev_ok" : "user_dev_pending", approved);
+      await expect(dev.query(api.matching.overview, { requestId })).rejects.toThrow(/needs a Client account/);
+    }
+    expect(JSON.stringify(await t.query(api.matching.overview, { requestId }))).not.toMatch(/ownerId|clientToken/);
+  });
+
+  it("works for an older request that never saved requirements", async () => {
+    const { t, requestId } = await setup();
+    await t.mutation(api.matching.findRobots, { requestId, task: "mowing", annualTaskCost: 60000 }); // old-style call
+    const o = await t.query(api.matching.overview, { requestId });
+    expect(o.saved).toMatchObject({ task: "mowing", requirements: null });
+    expect(o.match!.status).toBe("done");
+  });
+});
