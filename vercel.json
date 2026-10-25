@@ -32,7 +32,6 @@
     { "source": "/message-vendor", "destination": "/pages/message-vendor.html" },
     { "source": "/engineer-claims", "destination": "/pages/engineer-claims.html" },
     { "source": "/client-bounty-journey", "destination": "/pages/client-bounty-journey.html" },
-    { "source": "/robot-bounty-client-flow", "destination": "/pages/robot-bounty-client-flow.html" },
     { "source": "/robot-finder", "destination": "/pages/robot-finder.html" }
   ],
   "headers": [
