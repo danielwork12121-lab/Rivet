@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 
@@ -21,20 +22,22 @@ const bounty = {
 };
 
 async function seed() {
-  const t = convexTest(schema, modules);
+  const root = convexTest(schema, modules);
+  const t = await asClient(root);
+  const dev = await asDeveloper(root);
   const make = async (name: string | null, title = "Request", token?: string) =>
     t.mutation(api.requests.create, {
       ...base, title, ...(name ? { profile: profile(name) } : {}), ...(token ? { clientToken: token } : {}),
     });
   const testId = await make("E2E-TEST Lawn abc123", "Request", "tok-test-0001");
-  await t.mutation(api.bounties.post, { requestId: testId, clientToken: "tok-test-0001", ...bounty });
+  await t.mutation(api.bounties.post, { requestId: testId, ...bounty });
   await t.run((ctx) => ctx.db.insert("aiJobs", { requestId: testId, kind: "spec", status: "failed" }));
   await make("Fictional E2E Pest xyz");
   await make(null, "[verify] culvert");
   const keepId = await make("Green Acres Lawn Co.", "Request", "tok-keep-0001");
-  await t.mutation(api.bounties.post, { requestId: keepId, clientToken: "tok-keep-0001", ...bounty });
+  await t.mutation(api.bounties.post, { requestId: keepId, ...bounty });
   await make("Real-looking Co. E2E-TEST"); // marker not at the start: not test data
-  return { t, keepId };
+  return { t, dev, keepId };
 }
 
 describe("maintenance:testData", () => {
@@ -59,12 +62,12 @@ describe("maintenance:testData", () => {
   });
 
   it("delete removes only matched requests and their bounties", async () => {
-    const { t, keepId } = await seed();
+    const { t, dev, keepId } = await seed();
     const r = await t.mutation(internal.maintenance.testData, { action: "delete", confirm: "delete-test-data" });
     expect(r).toMatchObject({ deleted: true, matchedRequests: 3 });
     const left = await t.query(internal.requests.list, {});
     expect(left.map((x) => x.profile?.companyName).sort()).toEqual(["Green Acres Lawn Co.", "Real-looking Co. E2E-TEST"]);
-    const board = await t.query(api.bounties.listPosted, {});
+    const board = await dev.query(api.bounties.listPosted, {});
     expect(board).toHaveLength(1);
     const remaining = await t.run((ctx) => ctx.db.query("bounties").collect());
     expect(remaining.map((b) => b.requestId)).toEqual([keepId]);

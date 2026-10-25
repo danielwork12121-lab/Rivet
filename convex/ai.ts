@@ -460,8 +460,9 @@ export const matchRobots = internalAction({
         const search = await ctx.runMutation(internal.discovery.start, {
           task: intent.task, searchPhrase: intent.searchPhrase, matchId,
         });
-        if (search !== "done") {
-          // discovery.finish runs this again with searched: true.
+        if (search === "run" || search === "wait") {
+          // discovery.finish runs this again with searched: true. ("blocked": searching is off
+          // or over budget, so rank what the catalog has.)
           await ctx.runMutation(internal.agent.patchMatch, { matchId, status: "searching" });
           return;
         }

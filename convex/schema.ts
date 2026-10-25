@@ -32,6 +32,9 @@ export const followUpAnswer = v.object({
   assumption: v.optional(v.object({ value: v.number(), unit: v.optional(v.string()) })),
 });
 
+export const role = v.union(v.literal("client"), v.literal("developer"));
+export const developerStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("revoked"));
+
 // A robot spec found on a vendor page, in the canonical unit from lib/specs.ts,
 // with the sentence it came from so the page can show its source.
 export const robotSpec = v.object({
@@ -82,17 +85,70 @@ export const matchNext = v.union(
   v.object({ kind: v.literal("suggest_bounty"), gaps: v.array(v.string()) }),
 );
 
+// What a Client wants matched, saved on their request (see matching.ts). `basis` says where a
+// requirement's number comes from: "estimate" (the Client's own rough figure) or "measured" (a figure
+// the Client says they measured). Both are the Client's words; Rivet verifies neither. Robot specs read
+// from vendor pages are the only verified figures (see robots.specs).
+export const matchingRequirement = v.object({
+  name: v.string(), // a SPEC_NAMES entry, checked on write
+  op: v.union(v.literal("atLeast"), v.literal("atMost")),
+  value: v.number(),
+  mandatory: v.boolean(),
+  basis: v.union(v.literal("estimate"), v.literal("measured")),
+});
+export const matchingInput = v.object({
+  task: v.string(), // normalised, e.g. "mowing"
+  // Absent: derive from the follow-up answers. Present (even empty): exactly these.
+  requirements: v.optional(v.array(matchingRequirement)),
+  updatedAt: v.number(),
+});
+
 export default defineSchema({
+  // One row per signed-in person. Clerk proves who they are; this row says what
+  // they may do (see lib/auth.ts). Created on first sign-in by users:ensureAccount.
+  // - role: chosen once at onboarding (users:chooseRole); only an admin changes it.
+  // - developerStatus: developers start "pending" and can do nothing developer-only
+  //   until an admin approves them or they redeem an invite (users.ts).
+  users: defineTable({
+    tokenIdentifier: v.string(), // "<issuer>|<Clerk user id>" from the verified token, never from the browser
+    clerkUserId: v.string(), // the token's subject
+    email: v.optional(v.string()), // only if the token carries it; informational, never used for access
+    name: v.optional(v.string()),
+    organization: v.optional(v.string()),
+    role: v.optional(role),
+    developerStatus: v.optional(developerStatus),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["tokenIdentifier"])
+    .index("by_clerk_user", ["clerkUserId"])
+    .index("by_developer_status", ["developerStatus"]),
+
+  // Single-use codes an admin hands to a developer (users:createDeveloperInvite).
+  // Only a hash is stored: the code itself is shown once, to the admin.
+  developerInvites: defineTable({
+    codeHash: v.string(), // SHA-256 hex of the code
+    note: v.optional(v.string()), // who it was for, for the admin's records
+    expiresAt: v.number(), // ms since epoch
+    usedBy: v.optional(v.id("users")),
+    usedAt: v.optional(v.number()),
+  }).index("by_code_hash", ["codeHash"]),
+
   // A problem submitted by an infrastructure operator.
   operatorRequests: defineTable({
+    // The Client account that owns this request. Every public function checks it
+    // (lib/drafts.ts). Rows from before accounts have none until claimed
+    // (requests:claimLegacyDraft) and are unreachable from browsers until then.
+    ownerId: v.optional(v.id("users")),
     title: v.string(),
     description: v.string(),
     environment: v.string(),
     constraints: v.array(v.string()),
     cost: v.optional(costInfo),
     profile: v.optional(profileInfo),
+    matchingInput: v.optional(matchingInput), // saved by matching:saveRequirements / findRobots
     // Client-generated id that makes retries safe: create() with a token that
     // already exists returns the existing request instead of inserting again.
+    // Before accounts it was also the draft's password; now it grants nothing.
     clientToken: v.optional(v.string()),
     // Only questions the user actually answered; never the page's defaults.
     followUps: v.optional(v.array(followUpAnswer)),
@@ -101,7 +157,8 @@ export default defineSchema({
     status: v.union(v.literal("submitted"), v.literal("specified")),
   })
     .index("by_status", ["status"])
-    .index("by_client_token", ["clientToken"]),
+    .index("by_client_token", ["clientToken"])
+    .index("by_owner", ["ownerId"]),
 
   // AI-extracted structured requirements for a request. Schema only for now:
   // no functions write to this table until the AI integration exists.
@@ -214,6 +271,10 @@ export default defineSchema({
     next: v.optional(matchNext),
     error: v.optional(v.string()),
     msToRanked: v.optional(v.number()), // how long until picks showed (for the demo)
+    // Which flow made this row: "rules" = matching.ts (saved requirements, plain code, no AI);
+    // absent or "agent" = agent:findRobots (AI read + web search + reasons). Each flow only reads
+    // and replaces its own rows.
+    engine: v.optional(v.union(v.literal("rules"), v.literal("agent"))),
   }).index("by_request", ["requestId"]),
 
   // The AI's "best for you" picks for a request.
@@ -237,6 +298,7 @@ export default defineSchema({
   // Money fields are illustrative demo figures in USD, not commitments.
   bounties: defineTable({
     requestId: v.id("operatorRequests"),
+    ownerId: v.optional(v.id("users")), // copied from the request when posted; never public
     status: v.union(v.literal("draft"), v.literal("posted")),
     source: v.union(v.literal("ai"), v.literal("client")),
     title: v.string(),
@@ -275,6 +337,19 @@ export default defineSchema({
     startedAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
   }).index("by_request_kind", ["requestId", "kind"]),
+
+  // One row per paid AI call that was allowed to start (see lib/aiBudget.ts).
+  // Used only to enforce the daily limits.
+  aiUsage: defineTable({
+    kind: v.union(
+      v.literal("spec"), v.literal("recommend"), v.literal("bounty"), v.literal("chat"), v.literal("video"),
+      v.literal("match"), // an AI robot-matching run (agent:findRobots / setTaskCost)
+      v.literal("discovery"), // an Apify web search for robots (discovery.start)
+    ),
+    requestId: v.optional(v.id("operatorRequests")),
+    clientKey: v.optional(v.string()), // keyed hash of a website visitor's IP, never the IP itself
+    userId: v.optional(v.id("users")), // the signed-in account that asked
+  }),
 
   // One row per Claude call: your cost tracker and test history.
   agentRuns: defineTable({

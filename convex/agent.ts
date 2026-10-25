@@ -1,24 +1,35 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { loadOwnedDraft, withoutToken } from "./lib/drafts";
+import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./lib/aiBudget";
 import { intentInfo, matchNext, matchPick } from "./schema";
+import { dataSourceOf } from "./matching";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
 //
-// Every public function here belongs to one operator request, so each takes
-// the draft's clientToken and checks it (lib/drafts.ts) before reading or
-// scheduling anything. Nothing calls these automatically: the frontend must
-// trigger them deliberately, since each one starts a paid Claude call.
+// Every public function here belongs to one operator request, so each checks
+// that the signed-in Client owns it (lib/drafts.ts) before reading or scheduling
+// anything. Nothing calls these automatically: the frontend must trigger them
+// deliberately, since each one starts a paid Claude call.
 
-const owner = { requestId: v.id("operatorRequests"), clientToken: v.string() };
+// clientToken is accepted for compatibility with callers written before accounts,
+// and ignored: ownership comes only from the verified sign-in.
+const owner = { requestId: v.id("operatorRequests"), clientToken: v.optional(v.string()) };
 
 // AI calls need an Anthropic key in the backend's environment (npx convex env set
 // ANTHROPIC_API_KEY ...). It never reaches the browser; only this yes/no does.
 const aiAvailable = () => !!process.env.ANTHROPIC_API_KEY;
 const AI_UNAVAILABLE = "AI drafting is unavailable: no Anthropic API key is configured on the backend.";
+
+// Why a new paid call can't start right now (no key, or a daily limit), or null.
+async function aiUnavailable(ctx: QueryCtx, scope: { requestId?: Id<"operatorRequests">; userId?: Id<"users"> } = {}) {
+  if (!aiAvailable()) return { reason: "no_key" as const, message: AI_UNAVAILABLE };
+  const block: AiBlock | null = await budgetBlock(ctx, scope);
+  return block && { reason: block, message: AI_BLOCK_MESSAGES[block] };
+}
 
 // A request's version: changes on every edit to the intake or follow-up answers.
 export const requestVersion = (r: Doc<"operatorRequests">) => r.updatedAt ?? r._creationTime;
@@ -38,15 +49,19 @@ async function enqueueSpecJob(ctx: MutationCtx, request: Doc<"operatorRequests">
   if (active && Date.now() - (latest.startedAt ?? latest._creationTime) < STUCK_JOB_MS) {
     return { jobId: latest._id, reused: true };
   }
+  await spendAiBudget(ctx, "spec", { requestId: request._id, userId: request.ownerId }); // throws if a daily limit is reached
   const jobId = await ctx.db.insert("aiJobs", { requestId: request._id, kind: "spec", status: "queued" });
   await ctx.scheduler.runAfter(0, internal.ai.extractSpec, { requestId: request._id, jobId });
   return { jobId, reused: false };
 }
 
-// Whether AI features can run at all. No secrets: just a yes/no.
+// Whether a new AI call could start right now, and if not, why. No secrets.
 export const aiStatus = query({
   args: {},
-  handler: async () => ({ available: aiAvailable() }),
+  handler: async (ctx) => {
+    const blocked = await aiUnavailable(ctx);
+    return blocked ? { available: false, reason: blocked.reason, message: blocked.message } : { available: true };
+  },
 });
 
 function requireText(label: string, value: string, max: number) {
@@ -61,8 +76,8 @@ function requireText(label: string, value: string, max: number) {
 // appears in agent:latestSpec a few seconds later.
 export const generateSpec = mutation({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
     return await enqueueSpecJob(ctx, request);
   },
@@ -74,8 +89,8 @@ export const answerQuestions = mutation({
     ...owner,
     answers: v.array(v.object({ question: v.string(), answer: v.string() })),
   },
-  handler: async (ctx, { requestId, clientToken, answers }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, answers }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (answers.length > 10) throw new ConvexError("At most 10 answers at a time");
     for (const a of answers) {
       if (!a.answer.trim()) continue;
@@ -85,15 +100,16 @@ export const answerQuestions = mutation({
         answer: requireText("answer", a.answer, 1000),
       });
     }
-    // Answers are kept either way; the spec is redone only when AI is available.
-    return aiAvailable() ? await enqueueSpecJob(ctx, request) : null;
+    // Answers are kept either way; the spec is redone only when AI is available
+    // and within budget.
+    return (await aiUnavailable(ctx, { requestId, userId: request.ownerId })) ? null : await enqueueSpecJob(ctx, request);
   },
 });
 
 export const latestSpec = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     return ctx.db
       .query("requirementSpecs")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
@@ -192,8 +208,8 @@ export const finishJob = internalMutation({
 // stale, and the AI's own clarification Q&A (separate from the fixed follow-ups).
 export const specStatus = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     const job = await ctx.db
       .query("aiJobs")
       .withIndex("by_request_kind", (q) => q.eq("requestId", requestId).eq("kind", "spec"))
@@ -209,8 +225,11 @@ export const specStatus = query({
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
     const currentVersion = requestVersion(request);
+    const blocked = await aiUnavailable(ctx, { requestId, userId: request.ownerId });
     return {
-      available: aiAvailable(),
+      available: !blocked,
+      unavailableReason: blocked?.reason,
+      unavailableMessage: blocked?.message,
       job: job && {
         _id: job._id, status: job.status, errorKind: job.errorKind, error: job.error,
         queuedAt: job._creationTime, startedAt: job.startedAt, finishedAt: job.finishedAt,
@@ -227,19 +246,21 @@ export const specStatus = query({
 
 export const recommend = mutation({
   args: { ...owner, maxPrice: v.optional(v.number()) },
-  handler: async (ctx, { requestId, clientToken, maxPrice }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, maxPrice }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (maxPrice !== undefined && !(Number.isFinite(maxPrice) && maxPrice >= 0)) {
       throw new ConvexError("maxPrice must be a non-negative number");
     }
+    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
+    await spendAiBudget(ctx, "recommend", { requestId, userId: request.ownerId });
     await ctx.scheduler.runAfter(0, internal.ai.recommendRobots, { requestId, maxPrice });
   },
 });
 
 export const latestPicks = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     return ctx.db
       .query("recommendations")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
@@ -269,20 +290,23 @@ export const savePicks = internalMutation({
 
 export const requestBounty = mutation({
   args: { ...owner, robotId: v.optional(v.id("robots")), gap: v.string() },
-  handler: async (ctx, { requestId, clientToken, robotId, gap }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, robotId, gap }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
+    const cleanGap = requireText("gap", gap, 1000);
+    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
+    await spendAiBudget(ctx, "bounty", { requestId, userId: request.ownerId });
     await ctx.scheduler.runAfter(0, internal.ai.writeBounty, {
       requestId,
       ...(robotId ? { robotId } : {}),
-      gap: requireText("gap", gap, 1000),
+      gap: cleanGap,
     });
   },
 });
 
 export const latestBounty = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
     // The latest AI-written draft; posted bounties are read via bounties:getMine.
     return ctx.db
       .query("bounties")
@@ -325,35 +349,59 @@ export const logRun = internalMutation({
   },
 });
 // ---------- 4. "Find robots for me" (fast read -> decide -> explain) ----------
+// Paid: a run is one fast Claude read plus one Claude explanation, and may start an Apify web
+// search (gated separately in discovery.start). Off unless AI_MATCH_ENABLED=true and a key is
+// set; only the owning Client; one unit of AI budget per new run (reusing one in progress is free).
+// matching.ts (saved requirements, no AI) shares the matches table; its rows carry engine "rules"
+// and this flow neither reads nor replaces them.
+
+const matchEnabled = () => process.env.AI_MATCH_ENABLED === "true" && aiAvailable();
+const MATCH_OFF = "AI robot matching is turned off on this backend.";
+
+// The latest row this flow made for a request (rows from before `engine` existed count as ours).
+async function latestAgentMatch(ctx: QueryCtx, requestId: Id<"operatorRequests">) {
+  const rows = await ctx.db
+    .query("matches")
+    .withIndex("by_request", (q) => q.eq("requestId", requestId))
+    .order("desc")
+    .take(50);
+  return rows.find((m) => m.engine !== "rules") ?? null;
+}
+
+// Starts a paid run, or (with reuse) returns the one still in progress so repeated clicks never
+// start a second. Throws a safe message if a daily limit is reached. Mutations are serializable,
+// so concurrent clicks can't both pass the budget check.
+async function startAgentMatch(ctx: MutationCtx, request: Doc<"operatorRequests">, reuse: boolean) {
+  if (reuse) {
+    const latest = await latestAgentMatch(ctx, request._id);
+    if (latest && (latest.status === "reading" || latest.status === "searching") &&
+        Date.now() - latest._creationTime < STUCK_JOB_MS) {
+      return latest._id;
+    }
+  }
+  await spendAiBudget(ctx, "match", { requestId: request._id, userId: request.ownerId });
+  const matchId = await ctx.db.insert("matches", { requestId: request._id, status: "reading", picks: [], engine: "agent" });
+  await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
+  return matchId;
+}
 
 // Frontend calls this once the operator has described the job. Returns the match
 // id right away; agent:latestMatch fills in over the next few seconds.
 export const findRobots = mutation({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
-    if (!aiAvailable()) throw new ConvexError(AI_UNAVAILABLE);
-    const latest = await ctx.db
-      .query("matches")
-      .withIndex("by_request", (q) => q.eq("requestId", requestId))
-      .order("desc")
-      .first();
-    // Repeated clicks reuse a match that is still being worked on.
-    if (latest && (latest.status === "reading" || latest.status === "searching") &&
-        Date.now() - latest._creationTime < STUCK_JOB_MS) {
-      return latest._id;
-    }
-    const matchId = await ctx.db.insert("matches", { requestId, status: "reading", picks: [] });
-    await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
-    return matchId;
+  handler: async (ctx, { requestId }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
+    if (!matchEnabled()) throw new ConvexError(MATCH_OFF);
+    return await startAgentMatch(ctx, request, true);
   },
 });
 
 // The operator answers "how much does this task cost you a year?"; matching is redone.
+// The cost is saved either way; a new run starts only when matching is on and within budget.
 export const setTaskCost = mutation({
   args: { ...owner, annualTaskCost: v.number() },
-  handler: async (ctx, { requestId, clientToken, annualTaskCost }) => {
-    const request = await loadOwnedDraft(ctx, requestId, clientToken);
+  handler: async (ctx, { requestId, annualTaskCost }) => {
+    const request = await loadOwnedDraft(ctx, requestId);
     if (!(Number.isFinite(annualTaskCost) && annualTaskCost > 0 && annualTaskCost < 100_000_000)) {
       throw new ConvexError("annualTaskCost must be a positive number of dollars");
     }
@@ -361,10 +409,8 @@ export const setTaskCost = mutation({
       cost: { ...(request.cost ?? { currency: "USD" }), currentAnnualCost: annualTaskCost },
       updatedAt: Date.now(),
     });
-    if (!aiAvailable()) return null;
-    const matchId = await ctx.db.insert("matches", { requestId, status: "reading", picks: [] });
-    await ctx.scheduler.runAfter(0, internal.ai.matchRobots, { matchId });
-    return matchId;
+    if (!matchEnabled() || (await budgetBlock(ctx, { requestId, userId: request.ownerId, kind: "match" }))) return null;
+    return await startAgentMatch(ctx, request, false);
   },
 });
 
@@ -372,13 +418,9 @@ export const setTaskCost = mutation({
 // and sources, and the web search's progress while one is running.
 export const latestMatch = query({
   args: owner,
-  handler: async (ctx, { requestId, clientToken }) => {
-    await loadOwnedDraft(ctx, requestId, clientToken);
-    const match = await ctx.db
-      .query("matches")
-      .withIndex("by_request", (q) => q.eq("requestId", requestId))
-      .order("desc")
-      .first();
+  handler: async (ctx, { requestId }) => {
+    await loadOwnedDraft(ctx, requestId);
+    const match = await latestAgentMatch(ctx, requestId);
     if (!match) return null;
     const robots = [];
     for (const p of match.picks) {
@@ -391,6 +433,7 @@ export const latestMatch = query({
         yearlyOpex: r.priceStatus === "quote_only" ? null : r.yearlyOpex,
         specs: r.specs ?? [],
         fetchedAt: r.fetchedAt ?? null,
+        dataSource: dataSourceOf(r),
       });
     }
     const search = match.intent && match.status === "searching"

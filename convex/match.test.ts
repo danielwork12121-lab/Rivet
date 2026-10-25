@@ -6,6 +6,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 const token = "match-test-token-01";
@@ -38,22 +39,26 @@ const intentFixture = { // TEST FIXTURE
   requirements: [{ name: "max_slope_deg", op: "atLeast", value: 25, unit: "degrees", mandatory: true }],
 };
 
+// Runs as a signed-in Client who owns the request, with AI matching switched on (it is off
+// by default). Security behaviour (accounts, switches, budgets) is tested in agentSecurity.test.ts.
 async function setup() {
-  const t = convexTest(schema, modules);
+  const raw = convexTest(schema, modules);
+  const t = await asClient(raw);
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key-not-real");
+  vi.stubEnv("AI_MATCH_ENABLED", "true");
   const requestId = await t.mutation(api.requests.create, {
     title: "Fictional Hill Lawns — mowing",
     description: "Fictional: we mow steep lawns, slopes up to 25 degrees, and mowing costs about $90,000 a year.",
     environment: "Lawn care, West region.", constraints: [], clientToken: token,
   });
   vi.useFakeTimers(); // scheduled functions stay queued; each test runs what it needs
-  const matchId = await t.mutation(api.agent.findRobots, { requestId, clientToken: token });
+  const matchId = await t.mutation(api.agent.findRobots, { requestId });
   vi.useRealTimers();
-  const latest = () => t.query(api.agent.latestMatch, { requestId, clientToken: token });
-  return { t, requestId, matchId, latest };
+  const latest = () => t.query(api.agent.latestMatch, { requestId });
+  return { raw, t, requestId, matchId, latest };
 }
 
-async function addRobot(t: ReturnType<typeof convexTest>, name: string, slope: number, sample = false) {
+async function addRobot(t: { run: ReturnType<typeof convexTest>["run"] }, name: string, slope: number, sample = false) {
   return await t.run((ctx) => ctx.db.insert("robots", {
     name, vendor: "Fictional Vendor", task: "mowing", price: 40000, yearlyOpex: 3000, automationShare: 0.6,
     environments: [], url: `https://example.com/${name}`, sample,
@@ -62,9 +67,12 @@ async function addRobot(t: ReturnType<typeof convexTest>, name: string, slope: n
 }
 
 describe("findRobots", () => {
-  it("rejects a wrong token", async () => {
-    const { t, requestId } = await setup();
-    await expect(t.mutation(api.agent.findRobots, { requestId, clientToken: "wrong" })).rejects.toThrow(/Draft not found/);
+  it("rejects another account, even one holding the old token; and Developers", async () => {
+    const { raw, requestId } = await setup();
+    const other = await asClient(raw, "user_client_b");
+    await expect(other.mutation(api.agent.findRobots, { requestId, clientToken: token })).rejects.toThrow(/Draft not found/);
+    const dev = await asDeveloper(raw);
+    await expect(dev.mutation(api.agent.findRobots, { requestId })).rejects.toThrow(/needs a Client account/);
   });
 });
 
@@ -98,6 +106,7 @@ describe("matchRobots (real action, stubbed transport)", () => {
     const { t, matchId, latest } = await setup();
     await addRobot(t, "sample-mower", 30, true);
     vi.stubEnv("APIFY_TOKEN", "test-apify-token");
+    vi.stubEnv("DISCOVERY_ENABLED", "true");
     stubClaude(intentFixture);
     vi.useFakeTimers(); // keep the scheduled Apify call from running
     await t.action(internal.ai.matchRobots, { matchId });
@@ -122,6 +131,7 @@ describe("matchRobots (real action, stubbed transport)", () => {
   it("asks a second operator with the same task to wait for the same search", async () => {
     const { t, matchId } = await setup();
     vi.stubEnv("APIFY_TOKEN", "test-apify-token");
+    vi.stubEnv("DISCOVERY_ENABLED", "true");
     stubClaude(intentFixture);
     vi.useFakeTimers();
     await t.action(internal.ai.matchRobots, { matchId });
@@ -132,6 +142,8 @@ describe("matchRobots (real action, stubbed transport)", () => {
 
   it("retries a search that failed or found nothing, but not one that found robots", async () => {
     const { t } = await setup();
+    vi.stubEnv("APIFY_TOKEN", "test-apify-token");
+    vi.stubEnv("DISCOVERY_ENABLED", "true");
     vi.useFakeTimers();
     const insert = (status: "done" | "failed", robotsFound: number) =>
       t.run((ctx) => ctx.db.insert("discoveries", {

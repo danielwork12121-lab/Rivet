@@ -1,18 +1,34 @@
 // Rivet frontend <-> Convex glue. Classic script (no import/export) so it works
 // from file:// as well as http://. Exposes `RivetApi` on the global object.
 //
-// Backend URL: `window.RIVET_CONVEX_URL` if set, else what /api/config returns
-// (CONVEX_URL in Vercel), else the local dev deployment. Fictional demo data only: there are no
-// accounts. A draft is protected only by its client token, kept in localStorage.
+// Backend: js/rivet-config.js sets `window.RIVET_BACKEND` ("local" | "cloud" | "custom") and, on this
+// machine, `window.RIVET_CONVEX_URL`. A hosted page asks /api/config (CONVEX_URL in Vercel) instead.
+// Fictional demo data only. Accounts: when js/rivet-auth.js is loaded, every call
+// carries the signed-in person's Clerk session token and Convex decides what they
+// may do (convex/lib/auth.ts). Nothing in the browser grants access.
 (function (root) {
   "use strict";
 
   var CONVEX_ESM = "https://esm.sh/convex@1.48.0/browser"; // pinned, matches package.json
   var DEFAULT_URL = "http://127.0.0.1:3210";
-  var DRAFT_KEY = "rivet.intake.draft"; // {"id": "...", "token": "..."}
-  var LEGACY_KEY = "rivet.intake.requestId"; // id only; unusable now that reads need the token
+  var BACKEND = root.RIVET_BACKEND || "local";
+  // One saved draft per backend, so a cloud draft is never sent to a local backend.
+  // Which of the account's requests this browser is editing: {"id": "..."}. Only a
+  // UI choice (without it the page opens the newest one): the backend checks ownership.
+  var CURRENT_KEY = "rivet.intake.current." + BACKEND;
+  // A draft saved before accounts ({"id", "token"}): claimed once into the account.
+  var DRAFT_KEY = "rivet.intake.draft." + BACKEND;
+  // Older keys: an id-only key and an un-namespaced draft that can't be tied to a backend.
+  var LEGACY_KEYS = ["rivet.intake.requestId", "rivet.intake.draft"];
   var TIMEOUT_MS = 15000;
-  var DRAFT_NOT_FOUND = "Draft not found"; // backend error text for unknown id or wrong token
+  var DRAFT_NOT_FOUND = "Draft not found"; // backend error text for an unknown id or someone else's request
+  // Backend access errors (convex/lib/auth.ts), shown as-is.
+  var AUTH_ERRORS = {
+    signIn: "Please sign in to continue.",
+    noAccount: "Finish setting up your account first.",
+    clientOnly: "This needs a Client account.",
+    developerOnly: "This needs an approved Developer account.",
+  };
 
   var BUSINESS_LABELS = { lawn: "Lawn care", pest: "Pest control" };
   // Units for the frontend's illustrative numbers. Questions not listed here have
@@ -166,9 +182,18 @@
 
   // ---- errors ---------------------------------------------------------------------
   function isDraftMissing(err) { return !!err && err.data === DRAFT_NOT_FOUND; }
+  // "signIn" | "noAccount" | "clientOnly" | "developerOnly" | null
+  function authProblem(err) {
+    var d = err && err.data;
+    for (var k in AUTH_ERRORS) if (AUTH_ERRORS[k] === d) return k;
+    // The socket refused a token (e.g. expired and couldn't be refreshed).
+    if (/Unauthenticated|InvalidAuthHeader|NoAuthProvider/.test(String((err && err.message) || ""))) return "signIn";
+    return null;
+  }
 
   function friendlyError(err) {
     if (isDraftMissing(err)) return "Your saved request could not be found. Press the button again to save it as a new request.";
+    if (authProblem(err) === "signIn" && !(err && typeof err.data === "string")) return "Your session has ended. Please sign in again.";
     if (err && typeof err.data === "string") return err.data; // ConvexError from validation
     if (err && err.name === "RivetTimeout") {
       return "The server took too long to respond. Your answers may or may not have been saved. Press the button again; it will not create a duplicate.";
@@ -181,27 +206,64 @@
   }
 
   // ---- client ---------------------------------------------------------------------
+  // ConvexClient (WebSocket): request/response calls plus live subscriptions
+  // (watchPostedBounties). Authenticated with the Clerk session when RivetAuth is
+  // loaded: Convex asks for a fresh token when one expires, and calls wait until
+  // the current one has been sent, so nothing runs as the wrong person.
+  //
+  // Sign-out or a different session closes the socket instead of trying to
+  // de-authenticate it: with convex 1.48 a socket kept acting as the old user after
+  // setAuth(() => null) and clearAuth() (checked against a local backend). The next
+  // call opens a fresh connection with the new session, if any.
   var injected = null;
   var clientPromise = null;
 
-  // Asks the hosting site which backend to use; any failure (file://, a local
-  // static server with no /api) means the local dev deployment.
+  function authenticate(client, onEnded) {
+    var auth = root.RivetAuth;
+    if (!auth) return;
+    var session = null, ended = false;
+    var stop = auth.onChange(function (st) {
+      if (ended || st.sessionId === session) return;
+      if (session !== null) { // was signed in: this socket must not be reused
+        ended = true;
+        if (typeof stop === "function") stop();
+        client.close();
+        if (onEnded) onEnded(client);
+        return;
+      }
+      session = st.sessionId;
+      if (st.signedIn) client.setAuth(function (o) { return auth.getToken({ forceRefresh: !!(o && o.forceRefreshToken) }); });
+    });
+  }
+
+  // Which backend to talk to: window.RIVET_CONVEX_URL if set (pages on this machine, and tests);
+  // otherwise the hosting site's /api/config, i.e. the CONVEX_URL setting in Vercel. A hosted page
+  // never falls back to a backend on the visitor's own machine (it would send their sign-in token
+  // there) and accepts only an https *.convex.cloud URL; anything else is an error, not a guess.
+  var CONVEX_CLOUD_URL = /^https:\/\/[a-z0-9-]+\.convex\.cloud$/;
   function backendUrl() {
     if (root.RIVET_CONVEX_URL) return Promise.resolve(root.RIVET_CONVEX_URL);
-    if (typeof fetch !== "function" || !/^https?:$/.test((root.location || {}).protocol || "")) {
-      return Promise.resolve(DEFAULT_URL);
-    }
-    return fetch("/api/config")
+    var loc = root.location || {};
+    var hosted = /^https?:$/.test(loc.protocol || "") && !/^(localhost|127\.0\.0\.1)$/.test(loc.hostname || "");
+    if (!hosted || typeof root.fetch !== "function") return Promise.resolve(DEFAULT_URL);
+    return root.fetch("/api/config")
       .then(function (r) { return r.ok ? r.json() : {}; })
-      .then(function (c) { return (c && c.convexUrl) || DEFAULT_URL; })
-      .catch(function () { return DEFAULT_URL; });
+      .then(function (c) {
+        if (c && typeof c.convexUrl === "string" && CONVEX_CLOUD_URL.test(c.convexUrl)) return c.convexUrl;
+        throw new Error("This site's backend isn't configured.");
+      });
   }
 
   function getClient() {
     if (injected) return Promise.resolve(injected);
     if (!clientPromise) {
       clientPromise = Promise.all([import(CONVEX_ESM), backendUrl()])
-        .then(function (r) { return new r[0].ConvexHttpClient(r[1]); })
+        .then(function (r) {
+          var c = new r[0].ConvexClient(r[1]);
+          var mine = clientPromise;
+          authenticate(c, function () { if (clientPromise === mine) clientPromise = null; });
+          return c;
+        })
         .catch(function (e) { clientPromise = null; throw e; });
     }
     return clientPromise;
@@ -228,31 +290,63 @@
   // Each resolves only after Convex has confirmed; rejections carry err.data when
   // the backend refused the input.
   function createRequest(args) { return call("mutation", "requests:create", args); }
-  function updateIntake(id, token, args) {
-    return call("mutation", "requests:updateIntake", Object.assign({ id: id, clientToken: token }, args));
+  function updateIntake(id, args) {
+    return call("mutation", "requests:updateIntake", Object.assign({ id: id }, args));
   }
-  function saveFollowUps(id, token, followUps) {
+  function saveFollowUps(id, followUps) {
     return call("mutation", "requests:saveFollowUps",
-      { id: id, clientToken: token, answers: followUps.answers, complete: followUps.complete });
+      { id: id, answers: followUps.answers, complete: followUps.complete });
   }
   function listRobots() { return call("query", "robots:search", {}); }
   // AI: status reads are free; generateSpec starts a paid call (backend refuses without a key).
   function aiStatus() { return call("query", "agent:aiStatus", {}); }
-  function specStatus(id, token) { return call("query", "agent:specStatus", { requestId: id, clientToken: token }); }
-  function generateSpec(id, token) { return call("mutation", "agent:generateSpec", { requestId: id, clientToken: token }); }
+  function specStatus(id) { return call("query", "agent:specStatus", { requestId: id }); }
+  function generateSpec(id) { return call("mutation", "agent:generateSpec", { requestId: id }); }
   // Robot finder: findRobots starts a paid run (fast read, maybe a web search, then
-  // reasons); latestMatch is free and fills in over a few seconds, so poll it.
-  function findRobots(id, token) { return call("mutation", "agent:findRobots", { requestId: id, clientToken: token }); }
-  function latestMatch(id, token) { return call("query", "agent:latestMatch", { requestId: id, clientToken: token }); }
-  function setTaskCost(id, token, annualTaskCost) {
-    return call("mutation", "agent:setTaskCost", { requestId: id, clientToken: token, annualTaskCost: annualTaskCost });
+  // reasons); latestMatch is free and fills in over a few seconds, so poll it. The backend
+  // refuses unless AI matching is switched on, the caller owns the request, and budget remains.
+  function findRobots(id) { return call("mutation", "agent:findRobots", { requestId: id }); }
+  function latestMatch(id) { return call("query", "agent:latestMatch", { requestId: id }); }
+  function setTaskCost(id, annualTaskCost) {
+    return call("mutation", "agent:setTaskCost", { requestId: id, annualTaskCost: annualTaskCost });
   }
-  function getDraft(id, token) { return call("query", "requests:getDraft", { id: id, clientToken: token }); }
-  function postBounty(id, token, bounty) {
-    return call("mutation", "bounties:post", Object.assign({ requestId: id, clientToken: token }, bounty));
+  function getDraft(id) { return call("query", "requests:getDraft", { id: id }); }
+  function listMyRequests(limit) { return call("query", "requests:listMine", { limit: limit || 20 }); }
+  function claimLegacyDraft(id, token) { return call("mutation", "requests:claimLegacyDraft", { id: id, clientToken: token }); }
+  function postBounty(id, bounty) {
+    return call("mutation", "bounties:post", Object.assign({ requestId: id }, bounty));
   }
-  function getMyBounties(id, token) { return call("query", "bounties:getMine", { requestId: id, clientToken: token }); }
+  function getMyBounties(id) { return call("query", "bounties:getMine", { requestId: id }); }
   function listPostedBounties(limit) { return call("query", "bounties:listPosted", { limit: limit || 50 }); }
+  // Live Developer board: onData(rows) runs now and again whenever a bounty is
+  // posted or edited; onError(err) if the account may not read it. Returns stop().
+  function watchPostedBounties(onData, onError, limit) {
+    var stopped = false, unsubscribe = null;
+    getClient().then(function (c) {
+      if (stopped) return;
+      unsubscribe = c.onUpdate("bounties:listPosted", { limit: limit || 50 }, onData, onError);
+    }, function (e) { if (!stopped && onError) onError(e); });
+    return function () { stopped = true; if (unsubscribe) unsubscribe(); };
+  }
+
+  // ---- accounts -------------------------------------------------------------------
+  function me() { return call("query", "users:me", {}); }
+  function ensureAccount() { return call("mutation", "users:ensureAccount", {}); }
+  // role: "client" | "developer". extra: { name, organization, inviteCode } (optional).
+  function chooseRole(role, extra) {
+    var args = { role: role };
+    ["name", "organization", "inviteCode"].forEach(function (k) {
+      var v = extra && String(extra[k] || "").trim();
+      if (v) args[k] = v;
+    });
+    return call("mutation", "users:chooseRole", args);
+  }
+  function redeemInvite(code) { return call("mutation", "users:redeemDeveloperInvite", { code: String(code || "").trim() }); }
+  // Where a signed-in account belongs (page name in pages/), from Convex's answer only.
+  function homeFor(account) {
+    if (!account || !account.role) return "signup";
+    return account.role === "developer" ? "engineers" : "robot-bounty-client-flow";
+  }
 
   // ---- ids and persistence --------------------------------------------------------
   function newClientToken() {
@@ -263,17 +357,26 @@
   }
 
   // localStorage can throw (private mode, blocked storage): never let that break the page.
-  function loadDraft() {
+  // Returns {id: "..."} or null.
+  function loadCurrent() {
     try {
-      root.localStorage.removeItem(LEGACY_KEY);
+      LEGACY_KEYS.forEach(function (k) { root.localStorage.removeItem(k); });
+      var d = JSON.parse(root.localStorage.getItem(CURRENT_KEY) || "null");
+      return d && typeof d.id === "string" ? { id: d.id } : null;
+    } catch (e) { return null; }
+  }
+  function saveCurrent(id) {
+    try { root.localStorage.setItem(CURRENT_KEY, JSON.stringify({ id: id })); } catch (e) { /* ignore */ }
+  }
+  function clearCurrent() { try { root.localStorage.removeItem(CURRENT_KEY); } catch (e) { /* ignore */ } }
+  // A pre-accounts draft this browser still remembers, to claim once.
+  function loadLegacyDraft() {
+    try {
       var d = JSON.parse(root.localStorage.getItem(DRAFT_KEY) || "null");
       return d && typeof d.id === "string" && typeof d.token === "string" ? d : null;
     } catch (e) { return null; }
   }
-  function saveDraft(id, token) {
-    try { root.localStorage.setItem(DRAFT_KEY, JSON.stringify({ id: id, token: token })); } catch (e) { /* ignore */ }
-  }
-  function clearDraft() { try { root.localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ } }
+  function clearLegacyDraft() { try { root.localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ } }
 
   root.RivetApi = {
     intakeToRequest: intakeToRequest,
@@ -283,13 +386,22 @@
     precheck: precheck,
     friendlyError: friendlyError,
     isDraftMissing: isDraftMissing,
+    authProblem: authProblem,
     createRequest: createRequest,
     updateIntake: updateIntake,
     saveFollowUps: saveFollowUps,
     getDraft: getDraft,
+    listMyRequests: listMyRequests,
+    claimLegacyDraft: claimLegacyDraft,
     postBounty: postBounty,
     getMyBounties: getMyBounties,
     listPostedBounties: listPostedBounties,
+    watchPostedBounties: watchPostedBounties,
+    me: me,
+    ensureAccount: ensureAccount,
+    chooseRole: chooseRole,
+    redeemInvite: redeemInvite,
+    homeFor: homeFor,
     toBoardBounty: toBoardBounty,
     robotsToProducts: robotsToProducts,
     listRobots: listRobots,
@@ -301,9 +413,16 @@
     setTaskCost: setTaskCost,
     bountyToState: bountyToState,
     newClientToken: newClientToken,
-    loadDraft: loadDraft,
-    saveDraft: saveDraft,
-    clearDraft: clearDraft,
+    loadCurrent: loadCurrent,
+    saveCurrent: saveCurrent,
+    clearCurrent: clearCurrent,
+    loadLegacyDraft: loadLegacyDraft,
+    clearLegacyDraft: clearLegacyDraft,
+    backend: BACKEND,
+    currentKey: CURRENT_KEY,
+    draftKey: DRAFT_KEY,
     _setClient: function (c) { injected = c; }, // tests only
+    _authenticate: authenticate, // tests only
+    _backendUrl: backendUrl, // tests only
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

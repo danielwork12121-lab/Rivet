@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // rivet-api.js is a classic browser script that attaches RivetApi to globalThis.
 // @ts-expect-error plain JS, no types
@@ -117,16 +117,63 @@ describe("network calls with a fake client", () => {
     await expect(api().createRequest({})).rejects.toThrow("Failed to fetch");
   });
 
-  it("draft calls send id + token to the token-protected functions", async () => {
+  it("draft calls send only the id: ownership comes from the signed-in account", async () => {
     const mutation = vi.fn().mockResolvedValue("id1");
     const query = vi.fn().mockResolvedValue({ _id: "id1" });
     api()._setClient({ mutation, query });
-    await api().getDraft("id1", "tok-12345678");
-    expect(query).toHaveBeenCalledWith("requests:getDraft", { id: "id1", clientToken: "tok-12345678" });
-    await api().updateIntake("id1", "tok-12345678", { title: "t" });
-    expect(mutation).toHaveBeenCalledWith("requests:updateIntake", { id: "id1", clientToken: "tok-12345678", title: "t" });
-    await api().saveFollowUps("id1", "tok-12345678", { answers: [], complete: false });
-    expect(mutation).toHaveBeenCalledWith("requests:saveFollowUps", { id: "id1", clientToken: "tok-12345678", answers: [], complete: false });
+    await api().getDraft("id1");
+    expect(query).toHaveBeenCalledWith("requests:getDraft", { id: "id1" });
+    await api().updateIntake("id1", { title: "t" });
+    expect(mutation).toHaveBeenCalledWith("requests:updateIntake", { id: "id1", title: "t" });
+    await api().saveFollowUps("id1", { answers: [], complete: false });
+    expect(mutation).toHaveBeenCalledWith("requests:saveFollowUps", { id: "id1", answers: [], complete: false });
+    await api().listMyRequests(1);
+    expect(query).toHaveBeenCalledWith("requests:listMine", { limit: 1 });
+    await api().claimLegacyDraft("old1", "tok-12345678");
+    expect(mutation).toHaveBeenCalledWith("requests:claimLegacyDraft", { id: "old1", clientToken: "tok-12345678" });
+  });
+
+  it("account calls: me, ensureAccount, chooseRole (blank extras dropped), redeemInvite", async () => {
+    const mutation = vi.fn().mockResolvedValue({});
+    const query = vi.fn().mockResolvedValue({ signedIn: false, account: null });
+    api()._setClient({ mutation, query });
+    await api().me();
+    expect(query).toHaveBeenCalledWith("users:me", {});
+    await api().ensureAccount();
+    expect(mutation).toHaveBeenCalledWith("users:ensureAccount", {});
+    await api().chooseRole("developer", { name: " Ana ", organization: "", inviteCode: " rivet-dev-abc " });
+    expect(mutation).toHaveBeenCalledWith("users:chooseRole", { role: "developer", name: "Ana", inviteCode: "rivet-dev-abc" });
+    await api().redeemInvite(" code-1 ");
+    expect(mutation).toHaveBeenCalledWith("users:redeemDeveloperInvite", { code: "code-1" });
+  });
+
+  it("homeFor routes by the role Convex returned", () => {
+    expect(api().homeFor(null)).toBe("signup");
+    expect(api().homeFor({ role: null })).toBe("signup");
+    expect(api().homeFor({ role: "client" })).toBe("robot-bounty-client-flow");
+    expect(api().homeFor({ role: "developer", developerStatus: "pending" })).toBe("engineers");
+  });
+
+  it("authProblem recognises the backend's access errors", () => {
+    expect(api().authProblem({ data: "Please sign in to continue." })).toBe("signIn");
+    expect(api().authProblem({ data: "This needs a Client account." })).toBe("clientOnly");
+    expect(api().authProblem({ data: "This needs an approved Developer account." })).toBe("developerOnly");
+    expect(api().authProblem({ data: "Finish setting up your account first." })).toBe("noAccount");
+    expect(api().authProblem({ data: "title must not be empty" })).toBeNull();
+    expect(api().friendlyError({ data: "This needs a Client account." })).toBe("This needs a Client account.");
+  });
+
+  it("watchPostedBounties subscribes and returns a working stop()", async () => {
+    const stop = vi.fn();
+    const onUpdate = vi.fn().mockReturnValue(stop);
+    api()._setClient({ onUpdate, query: vi.fn(), mutation: vi.fn() });
+    const onData = vi.fn(), onError = vi.fn();
+    const off = api().watchPostedBounties(onData, onError, 10);
+    await Promise.resolve(); await Promise.resolve();
+    expect(onUpdate).toHaveBeenCalledWith("bounties:listPosted", { limit: 10 }, onData, onError);
+    off();
+    expect(stop).toHaveBeenCalled();
+    api()._setClient(null);
   });
 
   it("never calls the legacy public requests:get / requests:list", async () => {
@@ -234,14 +281,14 @@ describe("bounty mapping", () => {
     expect(api().bountyToState([], ["mow"])).toBeNull();
   });
 
-  it("bounty calls send the draft id and token", async () => {
+  it("bounty calls send the draft id only", async () => {
     const mutation = vi.fn().mockResolvedValue("b1");
     const query = vi.fn().mockResolvedValue([]);
     api()._setClient({ mutation, query });
-    await api().postBounty("r1", "tok-12345678", { taskKey: "mow" });
-    expect(mutation).toHaveBeenCalledWith("bounties:post", { requestId: "r1", clientToken: "tok-12345678", taskKey: "mow" });
-    await api().getMyBounties("r1", "tok-12345678");
-    expect(query).toHaveBeenCalledWith("bounties:getMine", { requestId: "r1", clientToken: "tok-12345678" });
+    await api().postBounty("r1", { taskKey: "mow" });
+    expect(mutation).toHaveBeenCalledWith("bounties:post", { requestId: "r1", taskKey: "mow" });
+    await api().getMyBounties("r1");
+    expect(query).toHaveBeenCalledWith("bounties:getMine", { requestId: "r1" });
     await api().listPostedBounties();
     expect(query).toHaveBeenCalledWith("bounties:listPosted", { limit: 50 });
     api()._setClient(null);
@@ -259,30 +306,51 @@ describe("draft storage", () => {
     return store;
   };
 
-  it("round-trips id and token", () => {
+  it("remembers which request is being edited", () => {
     memoryStorage();
-    expect(api().loadDraft()).toBeNull();
-    api().saveDraft("abc", "tok-12345678");
-    expect(api().loadDraft()).toEqual({ id: "abc", token: "tok-12345678" });
-    api().clearDraft();
-    expect(api().loadDraft()).toBeNull();
+    expect(api().loadCurrent()).toBeNull();
+    api().saveCurrent("abc");
+    expect(api().loadCurrent()).toEqual({ id: "abc" });
+    api().clearCurrent();
+    expect(api().loadCurrent()).toBeNull();
   });
 
-  it("discards the legacy id-only key and malformed values", () => {
+  it("keeps one choice per backend and never stores a token for it", () => {
+    const store = memoryStorage();
+    api().saveCurrent("abc");
+    expect(api().currentKey).toBe("rivet.intake.current.local");
+    expect(JSON.parse(store.get("rivet.intake.current.local")!)).toEqual({ id: "abc" });
+  });
+
+  it("reads a pre-accounts draft (id + token) once, for claiming, then forgets it", () => {
+    const store = memoryStorage();
+    expect(api().draftKey).toBe("rivet.intake.draft.local");
+    store.set("rivet.intake.draft.local", JSON.stringify({ id: "old", token: "tok-12345678" }));
+    expect(api().loadLegacyDraft()).toEqual({ id: "old", token: "tok-12345678" });
+    api().clearLegacyDraft();
+    expect(api().loadLegacyDraft()).toBeNull();
+    store.set("rivet.intake.draft.local", JSON.stringify({ id: "x" }));
+    expect(api().loadLegacyDraft()).toBeNull();
+  });
+
+  it("discards the legacy id-only key, the un-namespaced draft, and malformed values", () => {
     const store = memoryStorage();
     store.set("rivet.intake.requestId", "old-id");
-    expect(api().loadDraft()).toBeNull();
+    store.set("rivet.intake.draft", JSON.stringify({ id: "old", token: "old-token" }));
+    expect(api().loadCurrent()).toBeNull();
     expect(store.has("rivet.intake.requestId")).toBe(false);
-    store.set("rivet.intake.draft", "{not json");
-    expect(api().loadDraft()).toBeNull();
-    store.set("rivet.intake.draft", JSON.stringify({ id: "x" }));
-    expect(api().loadDraft()).toBeNull();
+    expect(store.has("rivet.intake.draft")).toBe(false);
+    store.set("rivet.intake.current.local", "{not json");
+    expect(api().loadCurrent()).toBeNull();
+    store.set("rivet.intake.current.local", JSON.stringify({ id: 5 }));
+    expect(api().loadCurrent()).toBeNull();
   });
 
   it("never throws when storage is blocked", () => {
     (globalThis as any).localStorage = new Proxy({}, { get() { throw new Error("blocked"); } });
-    expect(() => { api().saveDraft("x", "y"); api().clearDraft(); }).not.toThrow();
-    expect(api().loadDraft()).toBeNull();
+    expect(() => { api().saveCurrent("x"); api().clearCurrent(); api().clearLegacyDraft(); }).not.toThrow();
+    expect(api().loadCurrent()).toBeNull();
+    expect(api().loadLegacyDraft()).toBeNull();
   });
 });
 
@@ -291,5 +359,46 @@ describe("newClientToken", () => {
     const a = api().newClientToken(), b = api().newClientToken();
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[A-Za-z0-9_-]{8,100}$/);
+  });
+});
+
+describe("backendUrl (hosted pages ask /api/config, never fall back to this machine)", () => {
+  const g = globalThis as any;
+  const at = (protocol: string, hostname: string) => vi.stubGlobal("location", { protocol, hostname });
+  const config = (body: unknown, ok = true) => vi.stubGlobal("fetch", vi.fn(async () => ({ ok, json: async () => body })));
+  let saved: unknown;
+  beforeEach(() => { saved = g.RIVET_CONVEX_URL; delete g.RIVET_CONVEX_URL; });
+  afterEach(() => { vi.unstubAllGlobals(); g.RIVET_CONVEX_URL = saved; });
+
+  it("an injected URL wins and nothing is fetched", async () => {
+    g.RIVET_CONVEX_URL = "http://127.0.0.1:1";
+    config({});
+    await expect(api()._backendUrl()).resolves.toBe("http://127.0.0.1:1");
+    expect(g.fetch).not.toHaveBeenCalled();
+  });
+
+  it("on this machine, the local backend", async () => {
+    at("http:", "localhost");
+    config({});
+    await expect(api()._backendUrl()).resolves.toBe("http://127.0.0.1:3210");
+    expect(g.fetch).not.toHaveBeenCalled();
+  });
+
+  it("a hosted page uses the Convex Cloud URL from /api/config", async () => {
+    at("https:", "rivet-rose.vercel.app");
+    config({ convexUrl: "https://example-name-123.convex.cloud" });
+    await expect(api()._backendUrl()).resolves.toBe("https://example-name-123.convex.cloud");
+    expect(g.fetch).toHaveBeenCalledWith("/api/config");
+  });
+
+  it.each([
+    ["missing", {}, true],
+    ["not Convex Cloud", { convexUrl: "https://evil.example" }, true],
+    ["local", { convexUrl: "http://127.0.0.1:3210" }, true],
+    ["a failed request", { convexUrl: "https://x.convex.cloud" }, false],
+  ])("a hosted page refuses a %s URL instead of falling back", async (_n, body, ok) => {
+    at("https:", "rivet-rose.vercel.app");
+    config(body, ok as boolean);
+    await expect(api()._backendUrl()).rejects.toThrow(/backend isn't configured/);
   });
 });
