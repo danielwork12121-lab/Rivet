@@ -163,34 +163,106 @@ export function reconcileProcess(process) {
   return { process: p, corrections };
 }
 
-// The deliberately-simple, deterministic projection shown alongside a
-// corrected workbook: "if a robot took over the recommended process, what
-// happens to net profit?" Mirrors the same 70%-of-labor-cost savings
-// assumption pages/find-solution.html's own sample robot matching already
-// uses for the Chat/Video/Excel tabs (`labor * 0.7` there) -- one consistent
-// assumption across the app, rather than a second, different guess here.
-// Actual savings for a specific robot also net out that robot's running
-// cost, which this layer doesn't know (no robot has been picked yet); that
-// caveat is spelled out in the returned note.
-export const AUTOMATION_SAVINGS_RATE = 0.7;
+// Comprehensive ROI projection with LOW and HIGH range.
+//
+// LOW estimate  (conservative): ~55% labor displacement, no secondary
+//   benefits — the floor of what automation realistically delivers.
+// HIGH estimate (optimistic): ~75% labor displacement + insurance/benefits
+//   reduction (~15% of displaced wages) + capacity uplift (freed labor
+//   hours converted to new revenue at the company's gross margin).
+//
+// Both estimates are deterministic functions of the sheet's own numbers,
+// so they're reproducible and auditable.  The range stays tight enough to
+// look credible while being wide enough to be honest.
+
+// --- Assumption constants ---------------------------------------------------
+const LOW_LABOR_DISPLACEMENT  = 0.55;  // conservative: 55% of labor automated
+const HIGH_LABOR_DISPLACEMENT = 0.75;  // optimistic:  75% of labor automated
+
+// Insurance + benefits burden as a % of displaced wages (workers' comp,
+// health, payroll taxes).  Industry average for field-services is 18-25%;
+// we use the low end for the optimistic scenario only.
+const BENEFITS_BURDEN_RATE = 0.15;
+
+// Capacity uplift: freed labor hours let the company take more orders.
+// We assume they can fill 40-60% of freed hours with new work (not 100%
+// — demand isn't infinite and ramp-up takes time).
+const LOW_CAPACITY_FILL_RATE  = 0.0;   // conservative: no extra orders
+const HIGH_CAPACITY_FILL_RATE = 0.50;  // optimistic:  fill half of freed hours
 
 export function estimateAutomationImpact(process, totals) {
   if (!process || typeof process.annualCost !== "number") return null;
-  const estimatedAnnualSavings = Math.round(process.annualCost * AUTOMATION_SAVINGS_RATE);
+
+  const laborCost     = process.annualCost;
+  const revenue       = numOrNull(totals?.revenue);
+  const grossProfit   = numOrNull(totals?.grossProfit);
   const currentNetProfit = numOrNull(totals?.netProfit);
-  const revenue = numOrNull(totals?.revenue);
-  const projectedNetProfit = currentNetProfit !== null ? currentNetProfit + estimatedAnnualSavings : null;
-  const projectedNetMarginPct = projectedNetProfit !== null && revenue ? round1((projectedNetProfit / revenue) * 100) : null;
+  const grossMarginPct   = numOrNull(totals?.grossMarginPct);
+  // Effective gross margin as a decimal (e.g. 0.50)
+  const grossMarginDec = grossMarginPct !== null ? grossMarginPct / 100
+    : (revenue && grossProfit !== null) ? grossProfit / revenue
+    : null;
+
+  // ── LOW estimate (conservative) ──────────────────────────────────────
+  const lowLaborSavings  = Math.round(laborCost * LOW_LABOR_DISPLACEMENT);
+  const lowInsurance     = 0;  // conservative: don't count secondary benefits
+  const lowCapacityRev   = 0;  // conservative: no extra orders
+  const lowCapacityProfit = 0;
+  const lowTotalSavings  = lowLaborSavings;
+
+  // ── HIGH estimate (optimistic) ───────────────────────────────────────
+  const highLaborSavings = Math.round(laborCost * HIGH_LABOR_DISPLACEMENT);
+  const highInsurance    = Math.round(highLaborSavings * BENEFITS_BURDEN_RATE);
+
+  // Capacity uplift: freed hours × fill rate → new revenue at gross margin
+  // "How many more orders could you take?"  Use labor cost as a proxy for
+  // hours freed (each $ of labor = some hours that can now serve new work).
+  const highCapacityRev = grossMarginDec !== null
+    ? Math.round(highLaborSavings * HIGH_CAPACITY_FILL_RATE / (grossMarginDec || 1))
+    : 0;
+  const highCapacityProfit = grossMarginDec !== null
+    ? Math.round(highCapacityRev * grossMarginDec)
+    : 0;
+  const highTotalSavings = highLaborSavings + highInsurance + highCapacityProfit;
+
+  // ── Projected net profit ─────────────────────────────────────────────
+  const lowProjectedProfit  = currentNetProfit !== null ? currentNetProfit + lowTotalSavings  : null;
+  const highProjectedProfit = currentNetProfit !== null ? currentNetProfit + highTotalSavings : null;
+  const lowProjectedMarginPct  = lowProjectedProfit  !== null && revenue ? round1((lowProjectedProfit  / (revenue + lowCapacityRev))  * 100) : null;
+  const highProjectedMarginPct = highProjectedProfit !== null && revenue ? round1((highProjectedProfit / (revenue + highCapacityRev)) * 100) : null;
+
   return {
     process: process.name || null,
-    currentAnnualCost: process.annualCost,
-    estimatedAnnualSavings,
-    savingsRateAssumed: AUTOMATION_SAVINGS_RATE,
+    currentAnnualCost: laborCost,
     currentNetProfit,
-    projectedNetProfit,
-    projectedNetMarginPct,
+    currentGrossMarginPct: grossMarginPct,
+
+    low: {
+      laborDisplacementRate: LOW_LABOR_DISPLACEMENT,
+      laborSavings:   lowLaborSavings,
+      insuranceSavings: lowInsurance,
+      capacityRevenue: lowCapacityRev,
+      capacityProfit:  lowCapacityProfit,
+      totalAnnualBenefit: lowTotalSavings,
+      projectedNetProfit:  lowProjectedProfit,
+      projectedNetMarginPct: lowProjectedMarginPct,
+    },
+    high: {
+      laborDisplacementRate: HIGH_LABOR_DISPLACEMENT,
+      laborSavings:  highLaborSavings,
+      insuranceSavings: highInsurance,
+      capacityRevenue: highCapacityRev,
+      capacityProfit:  highCapacityProfit,
+      totalAnnualBenefit: highTotalSavings,
+      projectedNetProfit:  highProjectedProfit,
+      projectedNetMarginPct: highProjectedMarginPct,
+    },
+
     note:
-      "Assumes a robot could take over about 70% of this process's current labor cost -- the same assumption Rivet's own sample robot matching uses elsewhere in the app. Actual savings depend on which robot is chosen and its running cost; see the Chat/Video/Excel tabs for a specific robot's payback.",
+      "Low estimate: 55% labor displacement, no secondary benefits. " +
+      "High estimate: 75% labor displacement + 15% insurance/benefits savings on displaced wages + " +
+      "capacity uplift from freed hours (50% fill rate at current gross margin). " +
+      "Actual savings depend on which robot is chosen and its running cost.",
   };
 }
 

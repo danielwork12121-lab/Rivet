@@ -78,19 +78,23 @@ export async function buildCorrectedWorkbook({ extraction, corrections, impact, 
   );
 
   const impactWs = wb.addWorksheet("Robot Impact Projection");
-  if (impact) {
+  if (impact && impact.low && impact.high) {
     addTable(
       impactWs,
-      ["Field", "Value"],
+      ["Field", "Conservative", "Optimistic"],
       [
-        ["Recommended process", impact.process],
-        ["Current annual cost of that process", money(impact.currentAnnualCost)],
-        ["Assumed savings rate", `${Math.round(impact.savingsRateAssumed * 100)}%`],
-        ["Estimated annual savings", money(impact.estimatedAnnualSavings)],
-        ["Current net profit", money(impact.currentNetProfit)],
-        ["Projected net profit after implementing a robot", money(impact.projectedNetProfit)],
-        ["Projected net margin %", impact.projectedNetMarginPct],
-        ["Assumption", impact.note],
+        ["Recommended process", impact.process, impact.process],
+        ["Current annual cost of process", money(impact.currentAnnualCost), money(impact.currentAnnualCost)],
+        ["Labor displacement rate", `${Math.round(impact.low.laborDisplacementRate * 100)}%`, `${Math.round(impact.high.laborDisplacementRate * 100)}%`],
+        ["Direct labor savings", money(impact.low.laborSavings), money(impact.high.laborSavings)],
+        ["Insurance/benefits savings", money(impact.low.insuranceSavings), money(impact.high.insuranceSavings)],
+        ["Capacity uplift (new revenue)", money(impact.low.capacityRevenue), money(impact.high.capacityRevenue)],
+        ["Capacity uplift (profit at margin)", money(impact.low.capacityProfit), money(impact.high.capacityProfit)],
+        ["Total annual benefit", money(impact.low.totalAnnualBenefit), money(impact.high.totalAnnualBenefit)],
+        ["Current net profit", money(impact.currentNetProfit), money(impact.currentNetProfit)],
+        ["Projected net profit", money(impact.low.projectedNetProfit), money(impact.high.projectedNetProfit)],
+        ["Projected net margin %", impact.low.projectedNetMarginPct, impact.high.projectedNetMarginPct],
+        ["Assumptions", impact.note, impact.note],
       ],
     );
   } else {
