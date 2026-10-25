@@ -14,10 +14,13 @@ export function squash(text: string): string {
     .trim();
 }
 
-// True if `n` is written in `text`, e.g. 18500 in "$18,500" or 2.5 in "2.5 acres".
+// True if `n` is written in `text`, e.g. 18500 in "$18,500", 2399 in "$2,399.00" or 2.5 in "2.5 acres".
+// Trailing zeros after the decimal point are the same number ("2,399.00", "2.50").
 export function numberAppears(n: number, text: string): boolean {
   const plain = text.replace(/(\d),(?=\d{3})/g, "$1");
-  const re = new RegExp(`(^|[^\\d.])${String(n).replace(".", "\\.")}(?![\\d]|\\.\\d)`);
+  const digits = String(n).replace(".", "\\.");
+  const zeros = Number.isInteger(n) ? "(\\.0+)?" : "0*";
+  const re = new RegExp(`(^|[^\\d.])${digits}${zeros}(?![\\d]|\\.\\d)`);
   return re.test(plain);
 }
 
