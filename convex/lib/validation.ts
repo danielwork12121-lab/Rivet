@@ -158,6 +158,27 @@ export type FollowUpAnswer = {
   assumption?: { value: number; unit?: string };
 };
 
+// The text of a video analysis, trimmed to a safe size: it goes into Claude's prompt.
+export type VideoNotesInput = {
+  taskSummary: string; repetitiveActions: string[]; environment: string[]; obstacles: string[];
+  observedObjects: string[]; requirements: string[]; robotCapabilitiesNeeded: string[];
+};
+export function cleanVideoNotes(n: VideoNotesInput): VideoNotesInput {
+  const line = (t: unknown, max: number) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+  const list = (a: unknown) => (Array.isArray(a) ? a : []).map((t) => line(t, 160)).filter(Boolean).slice(0, 12);
+  const summary = line(n.taskSummary, 600);
+  if (!summary) throw new ConvexError("The video analysis has no task summary.");
+  return {
+    taskSummary: summary,
+    repetitiveActions: list(n.repetitiveActions),
+    environment: list(n.environment),
+    obstacles: list(n.obstacles),
+    observedObjects: list(n.observedObjects),
+    requirements: list(n.requirements),
+    robotCapabilitiesNeeded: list(n.robotCapabilitiesNeeded),
+  };
+}
+
 /** Validates a full set of follow-up answers; returns a trimmed copy or throws. */
 export function validateFollowUps(answers: FollowUpAnswer[]): FollowUpAnswer[] {
   if (answers.length > LIMITS.followUpCount) {

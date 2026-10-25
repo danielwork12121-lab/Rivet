@@ -86,9 +86,24 @@ export const matchPick = v.object({
 });
 
 // What the page should do next, from lib/decide.ts nextAction.
+// What the video analysis (api/analyze-video.js, Gemini) saw in the operator's work video. Text
+// only (no frames or boxes), kept on the request so the job breakdown can use it. These are a
+// model's observations, never the operator's own numbers (see ai.ts operatorText).
+export const videoNotes = v.object({
+  taskSummary: v.string(),
+  repetitiveActions: v.array(v.string()),
+  environment: v.array(v.string()),
+  obstacles: v.array(v.string()),
+  observedObjects: v.array(v.string()),
+  requirements: v.array(v.string()),
+  robotCapabilitiesNeeded: v.array(v.string()),
+  analyzedAt: v.number(),
+});
+
 export const workflowStep = v.object({
   // Order of the job (1, 2, 3...). Steps with the same stage are alternatives: the crew does one.
   stage: v.optional(v.number()),
+  seenInVideo: v.optional(v.boolean()), // the step shows up in the operator's work video
   name: v.string(),
   sharePct: v.number(), // share of the job's week, 0..100 (the AI's guess until the Client moves it)
   aiVerdict: v.union(v.literal("automatable"), v.literal("possible"), v.literal("person")),
@@ -172,6 +187,7 @@ export default defineSchema({
     // Only questions the user actually answered; never the page's defaults.
     followUps: v.optional(v.array(followUpAnswer)),
     followUpsComplete: v.optional(v.boolean()),
+    video: v.optional(videoNotes), // requests:setVideoNotes
     updatedAt: v.optional(v.number()), // ms since epoch, set on every edit after creation
     status: v.union(v.literal("submitted"), v.literal("specified")),
   })

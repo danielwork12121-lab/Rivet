@@ -77,3 +77,14 @@ All plain code; Claude never computes these.
 The Find a solution page shows the breakdown as a map: the job, its steps (slider, verdict,
 buttons), and what hangs off each step (robots with score and payback, a bounty with pooled
 pledges, or why it wasn't searched).
+
+## Work video (Gemini) in the breakdown
+
+The Video Input tab still sends sampled frames to `/api/analyze-video` (Gemini, budgeted by
+`aiBudget:reserveVideo`). When it finishes, the page saves the analysis text on the request with
+`requests:setVideoNotes` (owner-only, trimmed: summary ≤ 600 chars, ≤ 12 items per list; frames and
+boxes stay in the browser) before starting the breakdown. `agent:requestContext` passes it to
+Claude as `videoObservations`; the breakdown uses its repeated actions to name and order steps
+and marks those steps `seenInVideo` (shown as "In your video"). Numbers are checked against the
+operator's own words only (`operatorText` in `ai.ts`), so a figure read from a video frame never
+becomes a requirement or a cost.

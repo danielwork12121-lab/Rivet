@@ -29,6 +29,7 @@ export type RawStep = {
   // Steps run in stage order (A -> B -> C). Steps that share a stage are alternatives: the crew
   // does one of them (A -> B1 or B2 -> C). Missing = its own stage, in list order.
   stage?: number | null;
+  seenInVideo?: boolean;
 };
 
 // Whole-number shares that add up to 100, keeping the AI's proportions.
@@ -89,11 +90,12 @@ export function pathShares(steps: { sharePct: number; stage: number }[]): number
 
 // Cleans the AI's steps: at most MAX_STEPS, in stage order, trimmed text, normalised tasks,
 // shares summing to 100 along one path.
-export function cleanSteps(raw: RawStep[]) {
+export function cleanSteps(raw: RawStep[], hasVideo = false) {
   const steps = orderStages(raw.filter((s) => s.name.trim()).slice(0, MAX_STEPS));
   const shares = pathShares(steps);
   return steps.map((s, i) => ({
     stage: s.stage,
+    seenInVideo: hasVideo && s.seenInVideo === true, // only meaningful when there was a video
     name: s.name.trim().slice(0, 80),
     sharePct: shares[i],
     aiVerdict: s.verdict,

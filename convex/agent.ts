@@ -142,9 +142,12 @@ export const requestContext = internalQuery({
       .query("clarifications")
       .withIndex("by_request", (q) => q.eq("requestId", requestId))
       .collect();
+    const { video, ...rest } = withoutToken(request); // never send the draft token to Claude
     return {
-      request: withoutToken(request), // never send the draft token to Claude
+      request: rest,
       answers: clarifications.map((c) => ({ question: c.question, answer: c.answer })),
+      // What a vision model saw in the operator's work video, if they uploaded one.
+      ...(video ? { videoObservations: { ...video, analyzedAt: undefined } } : {}),
     };
   },
 });
@@ -614,7 +617,7 @@ export const latestWorkflow = query({
         ? await ctx.db.query("discoveries").withIndex("by_task", (q) => q.eq("task", match.intent!.task)).first()
         : null;
       steps.push({
-        index, stage: s.stage ?? index + 1, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
+        index, stage: s.stage ?? index + 1, seenInVideo: s.seenInVideo ?? false, name: s.name, sharePct: s.sharePct, aiVerdict: s.aiVerdict, why: s.why, task: s.task,
         verdict,
         annualCost: stepCost(wf.laborCost, s.sharePct),
         matchStatus: match?.status ?? null,
@@ -626,8 +629,10 @@ export const latestWorkflow = query({
         bestPaybackMonths: paybacks.length ? Math.min(...paybacks) : null,
       });
     }
+    const request = await ctx.db.get(requestId);
     return {
       _id: wf._id, status: wf.status, error: wf.error ?? null, laborCost: wf.laborCost,
+      fromVideo: !!request?.video,
       steps, summary: workflowSummary(steps),
     };
   },
