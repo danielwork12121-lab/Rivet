@@ -140,9 +140,22 @@ async function savePages(ctx: ActionCtx, discoveryId: Id<"discoveries">, items: 
 export const checkFinderRun = internalAction({
   args: { discoveryId: v.id("discoveries"), runId: v.string(), startedAt: v.number() },
   handler: async (ctx, { discoveryId, runId, startedAt }) => {
-    const run = await getRun(runId);
-    if (isRunning(run) && Date.now() - startedAt < GIVE_UP_MS) {
-      await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, { discoveryId, runId, startedAt });
+    const d0 = await ctx.runQuery(internal.discovery.get, { discoveryId });
+    if (!d0 || d0.status === "done" || d0.status === "failed") return; // ended elsewhere (e.g. timed out)
+    // Give up in time for the search as a whole, which may have waited for a free Apify slot first.
+    const giveUpAt = Math.min(startedAt, d0._creationTime) + GIVE_UP_MS;
+    const run = await getRun(runId).catch((err) => {
+      console.warn(`Apify run ${runId} status check failed, will retry: ${String(err).slice(0, 200)}`);
+      return null;
+    });
+    if (!run || (isRunning(run) && Date.now() < giveUpAt)) {
+      if (Date.now() < giveUpAt) {
+        await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, { discoveryId, runId, startedAt });
+        return;
+      }
+      await ctx.runMutation(internal.discovery.finish, {
+        discoveryId, status: "failed", robotsFound: 0, error: `Apify run ${runId} took too long`,
+      });
       return;
     }
     if (run.status !== "SUCCEEDED") {

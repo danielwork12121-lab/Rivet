@@ -12,6 +12,7 @@ import type * as agent from "../agent.js";
 import type * as ai from "../ai.js";
 import type * as aiBudget from "../aiBudget.js";
 import type * as bounties from "../bounties.js";
+import type * as crons from "../crons.js";
 import type * as discovery from "../discovery.js";
 import type * as lib_actorRows from "../lib/actorRows.js";
 import type * as lib_aiBudget from "../lib/aiBudget.js";
@@ -35,6 +36,7 @@ import type * as matching from "../matching.js";
 import type * as requests from "../requests.js";
 import type * as robots from "../robots.js";
 import type * as scrape from "../scrape.js";
+import type * as sweep from "../sweep.js";
 import type * as users from "../users.js";
 
 import type {
@@ -48,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   ai: typeof ai;
   aiBudget: typeof aiBudget;
   bounties: typeof bounties;
+  crons: typeof crons;
   discovery: typeof discovery;
   "lib/actorRows": typeof lib_actorRows;
   "lib/aiBudget": typeof lib_aiBudget;
@@ -71,6 +74,7 @@ declare const fullApi: ApiFromModules<{
   requests: typeof requests;
   robots: typeof robots;
   scrape: typeof scrape;
+  sweep: typeof sweep;
   users: typeof users;
 }>;
 
