@@ -51,7 +51,12 @@ export type RawRobotPage = {
 };
 
 const DEFAULT_OPEX_SHARE = 0.08; // running cost per year as a share of price, when the page doesn't say
-const DEFAULT_AUTOMATION = 0.5; // share of the task's labor replaced, when the page doesn't say
+// Share of the task's labor replaced, when no vendor page states a labor-saved percentage. Kept
+// deliberately low: a page that doesn't say how much labor it replaces gives us no basis to assume
+// it's a lot, and a wrong guess here becomes every dollar figure downstream (payback, yearly
+// savings, lifetime ROI). The robot this default applies to is also flagged (see robotFromPage
+// below) so the decision layer (lib/decide.ts) can never show it with a perfect match score.
+const DEFAULT_AUTOMATION = 0.15;
 
 // A robots-table row from one page, or null if the page isn't a robot product.
 export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: string; imageUrl?: string }, task: string) {
@@ -71,10 +76,19 @@ export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: 
 
   const saved = verifyEvidence(raw.laborSavedPercent, page.markdown).value;
   let automationShare: number;
+  let automationShareEstimated = false;
   if (saved !== null && saved > 0 && saved <= 100) automationShare = saved / 100;
   else {
     automationShare = DEFAULT_AUTOMATION;
-    assumptions.push(`Assumed to replace ${DEFAULT_AUTOMATION * 100}% of the task's labor`);
+    automationShareEstimated = true;
+    // Keeps the literal phrase "Assumed to replace" -- the frontend (pages/index.html) already
+    // greys out and caveats the headline savings/payback figures when it sees that phrase in a
+    // robot's assumptions, so this wording change stays compatible with that existing check while
+    // also setting the new, structured automationShareEstimated flag for the decision layer.
+    assumptions.push(
+      `No vendor-stated labor-saved figure. Assumed to replace a conservative ${DEFAULT_AUTOMATION * 100}% of ` +
+      `the task's labor until a specific job is checked against this product's real capacity.`,
+    );
   }
 
   const specs = [];
@@ -95,6 +109,7 @@ export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: 
     priceStatus: listed ? ("listed" as const) : ("quote_only" as const),
     yearlyOpex,
     automationShare,
+    automationShareEstimated,
     environments: raw.environments.slice(0, 10),
     specs,
     assumptions,

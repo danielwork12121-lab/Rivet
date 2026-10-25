@@ -190,8 +190,13 @@ const BENEFITS_BURDEN_RATE = 0.15;
 const LOW_CAPACITY_FILL_RATE  = 0.0;   // conservative: no extra orders
 const HIGH_CAPACITY_FILL_RATE = 0.50;  // optimistic:  fill half of freed hours
 
-export function estimateAutomationImpact(process, totals) {
+export function estimateAutomationImpact(process, totals, options = {}) {
   if (!process) return null;
+  // Whether the process's own labor cost had to be corrected or derived (reconcileProcess) rather
+  // than being a figure the sheet stated outright and that reconciliation confirmed. Passed through
+  // by analyze-excel.js from `corrections`; when true, this range is resting on a number this
+  // workbook didn't actually state cleanly, which is extra reason not to treat it as precise.
+  const laborCostWasCorrected = !!options.laborCostWasCorrected;
 
   // Try annualCost directly; if null/undefined, derive from component fields
   // (crew × people × hours × weeks × rate) as a fallback so the ROI card
@@ -248,6 +253,22 @@ export function estimateAutomationImpact(process, totals) {
     currentAnnualCost: laborCost,
     currentNetProfit,
     currentGrossMarginPct: grossMarginPct,
+    // Always "hypothetical": this is a generic labor-displacement percentage applied to one
+    // process's labor cost, not a figure tied to any specific robot's verified price, automation
+    // share or fleet size (those live on the robot's own match card -- convex/lib/roi.ts). Never
+    // the headline number to quote as "the" savings; see note and limitations below.
+    confidence: "hypothetical",
+    laborCostWasCorrected,
+    limitations: [
+      "This range assumes the stated share of labor is technically automatable; it does not check " +
+        "whether any specific robot -- or how many of them -- could actually deliver it for this job.",
+      "It does not size a robot fleet from coverage, throughput or operating hours, so it should " +
+        "not be read as \"one robot replaces this much labor\" -- a specific robot's own match card " +
+        "(with its real price and automation share) is the more reliable figure for that question.",
+      ...(laborCostWasCorrected
+        ? ["This process's annual labor cost did not match the sheet's other figures and was corrected before this estimate was computed -- see corrections."]
+        : []),
+    ],
 
     low: {
       laborDisplacementRate: LOW_LABOR_DISPLACEMENT,
@@ -271,10 +292,13 @@ export function estimateAutomationImpact(process, totals) {
     },
 
     note:
-      "Low estimate: 55% labor displacement, no secondary benefits. " +
-      "High estimate: 75% labor displacement + 15% insurance/benefits savings on displaced wages + " +
-      "capacity uplift from freed hours (50% fill rate at current gross margin). " +
-      "Actual savings depend on which robot is chosen and its running cost.",
+      "Hypothetical scenario, not a verified projection: it applies a generic labor-displacement " +
+      "percentage to this process's labor cost, without checking a specific robot's real price, " +
+      "capability or fleet size against this job. Low estimate: 55% labor displacement, no secondary " +
+      "benefits. High estimate: 75% labor displacement + 15% insurance/benefits savings on displaced " +
+      "wages + capacity uplift from freed hours (50% fill rate at current gross margin). " +
+      "Actual savings depend on which specific robot is chosen, how many units the job needs, and its " +
+      "real running cost -- see that robot's own match card for a figure grounded in its own data.",
   };
 }
 

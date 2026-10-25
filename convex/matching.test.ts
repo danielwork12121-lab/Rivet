@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { asClient, asDeveloper, signedIn } from "../tests/auth-helpers";
 
@@ -588,6 +588,150 @@ describe("matching: clearRequirements", () => {
     await clear(t, requestId);
     expect(await scheduled()).toHaveLength(0);
     expect(await raw.run((ctx) => ctx.db.query("aiUsage").collect())).toHaveLength(0);
+  });
+});
+
+// Section 2 of the Cal Hacks demo-reliability review: a hard engineering gate should run before
+// scoring, and a guessed economics figure should never earn a perfect match. These use their own
+// fixtures (not the shared setup()) so they don't disturb the top-three picks other tests assert on.
+describe("matching: hard engineering compatibility gate (regression)", () => {
+  async function gateSetup() {
+    vi.stubEnv("SHOW_SAMPLE_ROBOTS", "true");
+    const raw = convexTest(schema, modules);
+    const t = await asClient(raw);
+    const requestId = await t.mutation(api.requests.create, intake);
+    const robot = (r: object) => raw.run((ctx) => ctx.db.insert("robots", r as any));
+    const ids = {
+      // An AGIBOT-style indoor floor-cleaning robot: real engineering mismatch for outdoor work.
+      indoor: await robot({
+        name: "Indoor floor-cleaning robot", vendor: "V", task: "vegetation maintenance",
+        price: 5000, yearlyOpex: 500, automationShare: 0.5, environments: ["indoor"], url: "https://example.com/indoor",
+        sample: false, priceStatus: "listed", fetchedAt: 1, specs: [],
+      }),
+      // A Mammotion-LUBA-style cheap residential mower: no stated requirements to miss, and its
+      // automation share is a guessed default rather than anything the vendor stated.
+      residential: await robot({
+        name: "Residential mower", vendor: "V", task: "vegetation maintenance",
+        price: 1799, yearlyOpex: 150, automationShare: 0.15, automationShareEstimated: true,
+        environments: ["outdoor"], url: "https://example.com/residential", sample: false, priceStatus: "listed", fetchedAt: 1, specs: [],
+      }),
+    };
+    return { raw, t, requestId, ids };
+  }
+
+  it("rejects an indoor-only robot from an outdoor task outright (Test D)", async () => {
+    const { t, requestId, ids } = await gateSetup();
+    await t.mutation(api.matching.findRobots, { requestId, task: "vegetation maintenance", annualTaskCost: 90000 });
+    const m = (await t.query(api.matching.latestMatch, { requestId }))!;
+    expect(m.picks.map((p) => p.robotId)).not.toContain(ids.indoor);
+    expect(m.picks.map((p) => p.robotId)).toContain(ids.residential);
+  });
+
+  it("never gives a cheap robot a perfect 100 score on the strength of a guessed automation share", async () => {
+    const { t, requestId, ids } = await gateSetup();
+    // A large commercial-scale annual cost, mirroring the real LUBA case: a $1,799 mower against a
+    // six-figure task cost, with no stated requirements for it to fail.
+    await t.mutation(api.matching.findRobots, { requestId, task: "vegetation maintenance", annualTaskCost: 188000 });
+    const m = (await t.query(api.matching.latestMatch, { requestId }))!;
+    const pick = m.picks.find((p) => p.robotId === ids.residential)!;
+    expect(pick.score).toBeLessThan(100);
+    expect(pick.compatibility).toBe("conditionally_compatible");
+    expect(pick.roiConfidence).toBe("estimated");
+    // The payback is still unrealistically fast for this catalog entry alone (fleet-sizing data
+    // isn't available from the catalog), but it must never silently display as "0 months".
+    expect(pick.paybackMonths).not.toBe(0);
+  });
+
+  // Test C from the review: a large commercial operation / fleet-sizing job. Even a robot whose
+  // automation share WAS vendor-stated (so it isn't caught by the guessed-default check above)
+  // must not have that figure applied to a six-figure job as if one unit obviously covers it.
+  it("flags fleet-sizing uncertainty for a large commercial job, even with a vendor-sourced automation share (Test C)", async () => {
+    vi.stubEnv("SHOW_SAMPLE_ROBOTS", "true");
+    const raw = convexTest(schema, modules);
+    const t = await asClient(raw);
+    const requestId = await t.mutation(api.requests.create, intake);
+    const commercialId = await raw.run((ctx) =>
+      ctx.db.insert("robots", {
+        name: "Commercial mower", vendor: "V", task: "vegetation maintenance",
+        price: 15000, yearlyOpex: 1200, automationShare: 0.4, automationShareEstimated: false,
+        environments: ["outdoor"], url: "https://example.com/commercial", sample: false, priceStatus: "listed",
+        fetchedAt: 1, specs: [],
+      }),
+    );
+    await t.mutation(api.matching.findRobots, { requestId, task: "vegetation maintenance", annualTaskCost: 400000 });
+    const m = (await t.query(api.matching.latestMatch, { requestId }))!;
+    const pick = m.picks.find((p) => p.robotId === commercialId)!;
+    expect(pick.compatibility).toBe("compatible"); // the engineering match itself is fine
+    expect(pick.roiConfidence).toBe("estimated"); // but the dollar figures aren't verified at this scale
+    expect(pick.assumptions.some((a) => a.includes("Assumed to replace"))).toBe(true);
+  });
+});
+
+// Tests A & B from the review, run against the three real, cited flagship products (Section 3)
+// rather than synthetic fixtures: a steep embankment / heavy brush job should surface the
+// commercial slope mower and reject the residential one on the stated slope requirement; a small
+// residential lawn should do the reverse, on cost rather than slope.
+describe("matching: flagship products on steep-slope vs. residential jobs (Tests A & B)", () => {
+  async function flagshipSetup() {
+    const raw = convexTest(schema, modules);
+    await raw.mutation(internal.robots.seedFlagshipDemo, {});
+    const t = await asClient(raw);
+    const requestId = await t.mutation(api.requests.create, intake);
+    const robots = await raw.query(internal.robots.forTask, { task: "mowing" });
+    const idOf = (nameFragment: string) => robots.find((r) => r.name.includes(nameFragment))!._id;
+    return { raw, t, requestId, reaperId: idOf("REAPER"), husqvarnaId: idOf("Husqvarna") };
+  }
+
+  it("Test A: a steep embankment/heavy-brush job rejects the residential mower on its mandatory slope requirement", async () => {
+    const { t, requestId, reaperId, husqvarnaId } = await flagshipSetup();
+    await t.mutation(api.matching.findRobots, {
+      requestId, task: "mowing", annualTaskCost: 70000,
+      requirements: [{ name: "max_slope_deg", op: "atLeast", value: 45, mandatory: true }],
+    });
+    const m = (await t.query(api.matching.latestMatch, { requestId }))!;
+    const reaper = m.picks.find((p) => p.robotId === reaperId);
+    const husqvarna = m.picks.find((p) => p.robotId === husqvarnaId);
+    expect(reaper?.fit.find((f) => f.requirement.includes("Max slope"))?.status).toBe("meets");
+    // The residential mower either doesn't make the top-3 at all (scored 0 for missing a
+    // mandatory requirement), or if it does, it must be marked as missing that requirement --
+    // never silently recommended for a slope it can't handle.
+    if (husqvarna) expect(husqvarna.fit.find((f) => f.requirement.includes("Max slope"))?.status).toBe("misses");
+    expect(m.next).toMatchObject({ kind: "show_matches" });
+    expect(reaper?.score).toBeLessThan(100); // automationShare is still a guess, never a perfect score
+  });
+
+  // A genuinely small, appropriately-scaled residential job -- the counterpart to the
+  // large-commercial-job tests above. It should NOT trip the fleet-sizing caveat (the job is
+  // nowhere near that scale) and a well-suited residential robot should come back as a sane,
+  // non-absurd match: compatible engineering, but still never a falsely "verified" 100/100, since
+  // its automation share is a conservative guess rather than a manufacturer-stated figure.
+  it("Test B: a small residential lawn gets a sane match -- compatible, but no fleet caveat and no fabricated perfect score", async () => {
+    const raw = convexTest(schema, modules);
+    const t = await asClient(raw);
+    const requestId = await t.mutation(api.requests.create, intake);
+    const residentialId = await raw.run((ctx) =>
+      ctx.db.insert("robots", {
+        name: "Residential mower", vendor: "V", task: "mowing",
+        price: 1799, yearlyOpex: 150, automationShare: 0.15, automationShareEstimated: true,
+        environments: ["outdoor"], url: "https://example.com/residential2", sample: false, priceStatus: "listed",
+        fetchedAt: 1, specs: [],
+        assumptions: [
+          "No vendor-stated labor-saved figure. Assumed to replace a conservative 15% of the task's " +
+            "labor until a specific job is checked against this product's real capacity.",
+        ],
+      }),
+    );
+    // A typical homeowner's own small-lawn mowing spend -- far below the fleet-sizing threshold.
+    await t.mutation(api.matching.findRobots, { requestId, task: "mowing", annualTaskCost: 3000 });
+    const m = (await t.query(api.matching.latestMatch, { requestId }))!;
+    const pick = m.picks.find((p) => p.robotId === residentialId)!;
+    expect(pick.compatibility).toBe("conditionally_compatible"); // engineering fit is fine; share is a guess
+    expect(pick.roiConfidence).toBe("estimated"); // never presented as a verified number
+    expect(pick.score).toBeLessThan(100);
+    expect(pick.assumptions.some((a) => a.includes("Assumed to replace"))).toBe(true); // guessed share, flagged
+    // The small-job counterpart to the large-commercial Test C: this job is nowhere near
+    // fleet scale, so the fleet-sizing caveat text must not fire here.
+    expect(pick.assumptions.join(" ")).not.toMatch(/more than one worker or crew/);
   });
 });
 

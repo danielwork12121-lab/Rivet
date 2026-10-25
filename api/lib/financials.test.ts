@@ -75,6 +75,11 @@ describe("computeMargins", () => {
   });
 });
 
+// Test E from the Cal Hacks demo review: a financial workbook with deliberately incorrect or
+// inconsistent values (the Summit Grounds case). reconcileTotals/reconcileProcess below are the
+// functions that catch this -- every correction is reported (never a silent overwrite), and
+// buildCorrectedWorkbook (api/lib/corrected-workbook.test.ts) proves the original, corrected and
+// reasoning all end up in the workbook the operator gets back.
 describe("reconcileTotals", () => {
   it("leaves consistent totals untouched with no corrections", () => {
     const { totals, corrections } = reconcileTotals({ revenue: 1000000, cogs: 600000, grossProfit: 400000, operatingExpenses: 150000, netProfit: 250000 });
@@ -199,6 +204,26 @@ describe("estimateAutomationImpact", () => {
   it("returns null when there's no process or no way to determine annual cost", () => {
     expect(estimateAutomationImpact(null, { revenue: 1 })).toBeNull();
     expect(estimateAutomationImpact({ name: "x", annualCost: null }, { revenue: 1 })).toBeNull();
+  });
+
+  // Section 4 of the Cal Hacks demo-reliability review: this range is a generic labor-displacement
+  // percentage, not a robot-specific projection, and must never be presented as a verified figure.
+  it("is always labeled hypothetical, with limitations explaining what it doesn't check", () => {
+    const impact = estimateAutomationImpact({ name: "Mowing crew", annualCost: 200000 }, { revenue: 1000000, netProfit: 100000 });
+    expect(impact.confidence).toBe("hypothetical");
+    expect(impact.limitations.length).toBeGreaterThan(0);
+    expect(impact.limitations.join(" ")).toMatch(/fleet/);
+    expect(impact.note).toMatch(/^Hypothetical scenario, not a verified projection/);
+    expect(impact.laborCostWasCorrected).toBe(false);
+  });
+
+  it("flags when the labor cost behind the estimate had to be corrected", () => {
+    const impact = estimateAutomationImpact(
+      { name: "Mowing crew", annualCost: 200000 }, { revenue: 1000000, netProfit: 100000 },
+      { laborCostWasCorrected: true },
+    );
+    expect(impact.laborCostWasCorrected).toBe(true);
+    expect(impact.limitations.join(" ")).toMatch(/did not match the sheet/);
   });
 });
 

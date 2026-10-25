@@ -72,6 +72,146 @@ export const removeSamples = internalMutation({
   },
 });
 
+// ---------- Flagship steep-slope demo: three manually verified commercial products ----------
+// Not scraped: read by hand from each manufacturer's own page and entered here with the exact
+// quote and source URL for every spec, so the citations are as solid as anything upsertScraped
+// would produce. `sample: false` (these are real products), `priceStatus`/`automationShare` follow
+// the same conventions as the scraped path (lib/extract.ts), and automationShareEstimated is set
+// wherever a figure is a conservative placeholder rather than something the manufacturer stated.
+// Idempotent by url: run again any time to pick up a future manual correction; it is a no-op.
+// Run: npx convex run robots:seedFlagshipDemo
+const VERIFIED_ON = "2026-10-25"; // the date these pages were actually read
+
+const FLAGSHIP_ROBOTS = [
+  {
+    name: "RC Mowers REAPER 52",
+    vendor: "RC Mowers",
+    task: "mowing",
+    url: "https://www.rcmowersusa.com/mowers/reaper/",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor"],
+    specs: [
+      { name: "max_slope_deg", value: 50, quote: "Slope capability: 50°, any direction", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+      { name: "coverage_sqft_per_hour", value: 108900, quote: "Mow rate: Up to 2.5 acres/hour", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+      { name: "width_m", value: 1.32, quote: "Cutting width: 52 in", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+      { name: "weight_kg", value: 860.47, quote: "Dry weight: 1,897 lbs", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+      { name: "runtime_hours", value: 8, quote: "Runtime: Up to 8 hours", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+    ],
+    assumptions: [
+      "Remote-operated, not autonomous: a trained operator still runs it from up to 1,000 ft away, so " +
+        "this isn't the same labor story as a fully autonomous mower. automationShare is a conservative " +
+        "placeholder, not a manufacturer-stated labor-saved percentage.",
+      "The manufacturer's page gives no new-unit price (quote only); it cites about $40,000 as a starting " +
+        "cost for used machines, which this catalog entry deliberately does not use as the new-unit price.",
+    ],
+    provenance:
+      `Manually verified from the manufacturer's official specification page on ${VERIFIED_ON}. Commercial, ` +
+      "remote-operated slope mower built for steep embankments, retention/detention ponds, ditches, heavy " +
+      "brush and similar hazardous terrain; the manufacturer states it is not built for residential or " +
+      "small-scale use.",
+  },
+  {
+    name: "Husqvarna Automower 435X AWD NERA",
+    vendor: "Husqvarna",
+    task: "mowing",
+    url: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/",
+    price: 2999.99,
+    priceStatus: "listed" as const,
+    yearlyOpex: 240,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor"],
+    specs: [
+      { name: "max_slope_deg", value: 35, quote: "Max slope: 70% inside the installation area (about 35°)", sourceUrl: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/" },
+      { name: "runtime_hours", value: 2.4, quote: "About 145 minutes of typical mow time per charge", sourceUrl: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/" },
+    ],
+    assumptions: [
+      "Running cost estimated at 8% of price per year (no manufacturer-stated figure).",
+      // Keeps the literal phrase "Assumed to replace" for the same reason lib/extract.ts does:
+      // pages/index.html already greys out and caveats the ROI figures when it sees that phrase.
+      "No manufacturer-stated labor-saved percentage. Assumed to replace a conservative 15% of the task's labor.",
+      "Husqvarna's own page classifies this model under residential robotic lawn mowers, for maintained " +
+        "lawns up to about 0.9 acre -- this catalog doesn't yet encode a hard maximum-area limit, so check " +
+        "the job's actual area against that figure before trusting a high match score alone.",
+      "The 'NERA' (wire-free) variant's exact slope and price figures weren't separately confirmed on the " +
+        "page read for this entry; verify before quoting a NERA-specific number.",
+    ],
+    provenance:
+      `Manually verified from Husqvarna's official US product page on ${VERIFIED_ON}. Not a substitute for ` +
+      "a heavy-duty commercial brush-clearing machine: Husqvarna positions it for maintained residential " +
+      "lawns, and sells a separate commercial robotic-mower line for larger properties.",
+  },
+  {
+    name: "RC Mowers RECONX",
+    vendor: "RC Mowers",
+    task: "mowing",
+    url: "https://www.rcmowersusa.com/",
+    price: 0,
+    priceStatus: "quote_only" as const, // deliberate: see provenance -- not yet purchasable at any price
+    yearlyOpex: 0,
+    automationShare: 0,
+    automationShareEstimated: true,
+    environments: ["outdoor"],
+    specs: [
+      { name: "coverage_sqft_per_hour", value: 196020, quote: "each mowing about 4 to 5 acres per hour", sourceUrl: "https://www.rcmowersusa.com/" },
+      { name: "width_m", value: 1.52, quote: "Deck: 60\" or 72\"", sourceUrl: "https://www.rcmowersusa.com/" },
+    ],
+    assumptions: [
+      "Manufacturer-announced only, with production targeted for spring 2027: priced here as quote-only " +
+        "on purpose, so no payback or savings figure is ever computed against it for a job today.",
+      "Announced starting price is $39,986 for the 60\" deck model (manufacturer's own figure, as of " +
+        VERIFIED_ON + ") -- not reflected in the price field above, which stays quote-only until it ships.",
+    ],
+    provenance:
+      `Manually verified from RC Mowers' official site on ${VERIFIED_ON}. Fully autonomous commercial mower, ` +
+      "not yet in production (spring 2027 target) -- treat as an upcoming product, never as a currently " +
+      "purchasable one or as a community-created Idea Robot. Best suited for large, flat-to-low-rolling " +
+      "acreage on a recurring schedule; the manufacturer positions steep-slope and heavy-brush work to its " +
+      "REAPER line instead.",
+  },
+];
+
+export const seedFlagshipDemo = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let added = 0;
+    for (const r of FLAGSHIP_ROBOTS) {
+      const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
+      if (existing) continue;
+      await ctx.db.insert("robots", { ...r, sample: false, fetchedAt: Date.now() });
+      added++;
+    }
+    return `Added ${added} flagship robots (${FLAGSHIP_ROBOTS.length - added} already present)`;
+  },
+});
+
+// One-time backfill for robots scraped before automationShareEstimated existed (robots.ts
+// upsertScraped / lib/extract.ts). Those rows already carry an assumptions sentence recording that
+// their automation share was guessed, not read off the vendor's page -- this reads that sentence
+// back rather than re-guessing, so it never marks a robot estimated that genuinely had a
+// vendor-stated labor-saved percentage. Safe to run more than once. Run: npx convex run
+// robots:backfillAutomationShareEstimated
+export const backfillAutomationShareEstimated = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let updated = 0;
+    for (const r of await ctx.db.query("robots").collect()) {
+      if (r.sample || r.automationShareEstimated !== undefined) continue;
+      const guessed = (r.assumptions ?? []).some(
+        (a) => /task's labor/i.test(a) && /assumed|no vendor-stated/i.test(a),
+      );
+      if (!guessed) continue;
+      await ctx.db.patch(r._id, { automationShareEstimated: true });
+      updated++;
+    }
+    return `Flagged ${updated} previously-scraped robots whose automation share was guessed, not vendor-stated`;
+  },
+});
+
 // The manual-filter side of search (price slider, task).
 export const search = query({
   args: { task: v.optional(v.string()), maxPrice: v.optional(v.number()) },
@@ -148,6 +288,7 @@ export const upsertScraped = internalMutation({
     priceStatus: v.union(v.literal("listed"), v.literal("quote_only")),
     yearlyOpex: v.number(),
     automationShare: v.number(),
+    automationShareEstimated: v.optional(v.boolean()),
     environments: v.array(v.string()),
     specs: v.array(robotSpec),
     assumptions: v.array(v.string()),

@@ -179,6 +179,8 @@ function toFacts(r: Doc<"robots">): RobotFacts {
     specs: r.specs?.map((s) => ({ name: s.name, value: s.value })),
     slopeLimitDeg: r.slopeLimitDeg,
     assumptions: [...(r.assumptions ?? []), ...(r.sample ? [FICTIONAL_NOTE] : [])],
+    environments: r.environments,
+    automationShareEstimated: r.automationShareEstimated,
   };
 }
 

@@ -81,6 +81,16 @@ export const matchPick = v.object({
     years: v.number(), ratePct: v.number(), upfront: v.number(), totalCost: v.number(),
     totalSavings: v.number(), npv: v.number(), roiPct: v.union(v.number(), v.null()),
   }))),
+  // The hard engineering gate (lib/decide.ts compatibilityOf). Optional: older rows predate it. In
+  // practice a stored pick is never "incompatible" -- lib/decide.ts filters those out before a
+  // match is ever ranked -- but the literal is kept here so the type matches Compatibility exactly.
+  compatibility: v.optional(v.union(
+    v.literal("compatible"), v.literal("conditionally_compatible"), v.literal("insufficient_info"),
+    v.literal("incompatible"),
+  )),
+  // Whether the automation share behind paybackMonths/yearlyNetSavings/lifetime was read off a
+  // vendor page or guessed. Optional: older rows predate this distinction.
+  roiConfidence: v.optional(v.union(v.literal("vendor_sourced"), v.literal("estimated"))),
   assumptions: v.array(v.string()),
   reason: v.optional(v.string()),
 });
@@ -260,6 +270,9 @@ export default defineSchema({
     priceStatus: v.optional(v.union(v.literal("listed"), v.literal("quote_only"))), // quote_only: price is 0, unknown
     specs: v.optional(v.array(robotSpec)),
     assumptions: v.optional(v.array(v.string())), // numbers we filled in because the page didn't say
+    // True when automationShare is a default guess (no vendor page stated a labor-saved %), not a
+    // verified figure. Read by lib/decide.ts so a guessed number can never earn a perfect score.
+    automationShareEstimated: v.optional(v.boolean()),
     fetchedAt: v.optional(v.number()),
     imageUrl: v.optional(v.string()), // product photo from the vendor's page (og:image or similar)
   })

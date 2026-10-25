@@ -18,6 +18,15 @@ describe("computeRoi", () => {
     const r = computeRoi({ currentAnnualCost: 5000, robotPrice: 18000, yearlyOpex: 4000, automationShare: 0.5 });
     expect(r.paybackMonths).toBeNull();
   });
+
+  it("never reports a real, fast payback as 0 months", () => {
+    // A cheap robot against a large task cost (the Mammotion LUBA shape): true payback is a
+    // fraction of a month, which must not silently round down to a misleading "0 months".
+    const r = computeRoi({ currentAnnualCost: 188000, robotPrice: 1799, yearlyOpex: 150, automationShare: 0.5 });
+    expect(r.paybackMonths).not.toBe(0);
+    expect(r.paybackMonths).toBeGreaterThan(0);
+    expect(r.paybackMonths).toBeCloseTo(0.2, 1);
+  });
 });
 
 describe("suggestBounty", () => {

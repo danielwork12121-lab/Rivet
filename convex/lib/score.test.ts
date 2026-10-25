@@ -22,6 +22,18 @@ describe("match score S = F(0.4C + 0.3R + 0.3E)", () => {
     expect(scoreParts({ ...base, sourcedSpecs: 0, priceSourced: false }).evidence).toBe(0);
     expect(scoreParts({ ...base, sourcedSpecs: 0 }).evidence).toBe(0.5);
   });
+  it("leaves evidence unchanged when the caller doesn't track automation-share sourcing (back-compat)", () => {
+    expect(scoreParts(base).evidence).toBe(1);
+  });
+  it("counts a vendor-stated automation share as evidence, and a guessed one as missing evidence", () => {
+    expect(scoreParts({ ...base, automationShareSourced: true }).evidence).toBe(1);
+    expect(scoreParts({ ...base, automationShareSourced: false }).evidence).toBeLessThan(1);
+  });
+  it("can't reach a perfect 100 score once the automation share is flagged as a guess, even with a perfect payback", () => {
+    const fastPayback = { ...base, paybackMonths: 0 }; // cost component maxes out at 1
+    expect(matchScore(scoreParts({ ...fastPayback, automationShareSourced: true }))).toBe(100);
+    expect(matchScore(scoreParts({ ...fastPayback, automationShareSourced: false }))).toBeLessThan(100);
+  });
   it("scores cost from payback, then budget, else neutral", () => {
     expect(scoreParts({ ...base, paybackMonths: null }).cost).toBe(0); // never pays back
     expect(scoreParts({ ...base, hasRoi: false, paybackMonths: null, budget: 60000 }).cost).toBe(0.75);

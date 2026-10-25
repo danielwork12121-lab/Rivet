@@ -27,6 +27,12 @@ export function scoreParts(input: {
   budget: number | null;
   paybackMonths: number | null;
   hasRoi: boolean; // a payback could be worked out (price and yearly cost known)
+  // Whether the automation-share figure driving every dollar amount above came from the vendor's
+  // own page, as opposed to a default guess (lib/extract.ts). Omit when the caller doesn't track
+  // this (e.g. older callers, or a robot where the question doesn't apply) to leave evidence
+  // exactly as it was before this field existed; pass it explicitly once it's known, so a robot
+  // can never reach a perfect evidence score on the strength of an unverified number.
+  automationShareSourced?: boolean;
 }): ScoreParts {
   const reqRows = input.fit.slice(0, input.requirementCount);
   const fit = input.fit.some((f) => f.mandatory && f.status === "misses") ? 0 : 1;
@@ -37,7 +43,11 @@ export function scoreParts(input: {
   else if (input.budget !== null && input.budget > 0) cost = input.price <= input.budget ? 1 - 0.5 * (input.price / input.budget) : 0;
 
   const requirements = reqRows.length ? reqRows.filter((f) => f.status === "meets").length / reqRows.length : 1;
-  const evidence = (Math.min(input.sourcedSpecs, reqRows.length) + (input.priceSourced ? 1 : 0)) / (reqRows.length + 1);
+  const tracksAutomationShare = input.automationShareSourced !== undefined;
+  const evidenceItems = reqRows.length + 1 + (tracksAutomationShare ? 1 : 0);
+  const evidenceHits = Math.min(input.sourcedSpecs, reqRows.length) + (input.priceSourced ? 1 : 0) +
+    (input.automationShareSourced ? 1 : 0);
+  const evidence = evidenceHits / evidenceItems;
 
   return { fit, cost: round2(cost), requirements: round2(requirements), evidence: round2(evidence) };
 }

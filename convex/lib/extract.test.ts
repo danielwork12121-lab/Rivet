@@ -48,6 +48,16 @@ describe("robotFromPage", () => {
     ]);
     expect(robot.assumptions).toEqual(["Running cost estimated at 8% of the price per year"]);
   });
+  it("flags a guessed automation share and keeps the default conservative, when no page states one", () => {
+    const robot = robotFromPage({ ...raw, laborSavedPercent: none }, page, "mowing")!;
+    expect(robot.automationShare).toBe(0.15);
+    expect(robot.automationShareEstimated).toBe(true);
+    expect(robot.assumptions.some((a) => a.includes("conservative"))).toBe(true);
+  });
+  it("does not flag automationShareEstimated when the page states a labor-saved percentage", () => {
+    const robot = robotFromPage(raw, page, "mowing")!;
+    expect(robot.automationShareEstimated).toBe(false);
+  });
   it("stores an unlisted price as quote-only", () => {
     const robot = robotFromPage({ ...raw, price: none, priceOnRequest: true }, page, "mowing")!;
     expect(robot).toMatchObject({ price: 0, priceStatus: "quote_only", yearlyOpex: 0 });

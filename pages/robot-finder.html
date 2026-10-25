@@ -27,6 +27,8 @@
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
   .chip { font-size:13px; padding:3px 8px; border-radius:999px; background:var(--chip); }
   .chip.meets { background:#e1f1e4; color:#1f5a2e; } .chip.misses { background:#f8e3d6; color:#8a3c0e; } .chip.unknown { background:#ececec; color:#555; }
+  .chip.compatible { background:#e1f1e4; color:#1f5a2e; } .chip.conditionally_compatible { background:#fdf0d5; color:#8a5a0e; } .chip.insufficient_info { background:#ececec; color:#555; }
+  .roi-estimated { color:var(--warn); }
   .nums { display:flex; flex-wrap:wrap; gap:18px; font-variant-numeric: tabular-nums; }
   .nums b { display:block; font-size:20px; }
   .reason { border-left:3px solid var(--accent); padding-left:10px; }
@@ -193,12 +195,14 @@
           <h2>${esc(p.name)}</h2>
           <span class="muted">${esc(p.vendor)}${p.sample ? " · fictional sample" : ""}${p.url ? ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">source</a>` : ""}</span>
         </header>
+        ${p.compatibility ? `<div class="chips"><span class="chip ${p.compatibility}">Engineering fit: ${esc(p.compatibility.replace(/_/g, " "))}</span>${p.roiConfidence ? `<span class="chip ${p.roiConfidence === "estimated" ? "conditionally_compatible" : "compatible"}">ROI confidence: ${p.roiConfidence === "estimated" ? "estimated, not vendor-verified" : "vendor-sourced"}</span>` : ""}</div>` : ""}
         <div class="nums">
           <span><span class="muted">Price</span><b>${p.price === null ? "On request" : money(p.price)}</b></span>
-          <span><span class="muted">Payback</span><b>${p.paybackMonths === null ? "—" : p.paybackMonths + " months"}</b></span>
-          <span><span class="muted">Net savings / yr</span><b>${p.yearlyNetSavings === null ? "—" : money(p.yearlyNetSavings)}</b></span>
+          <span><span class="muted">Payback${p.roiConfidence === "estimated" ? " *" : ""}</span><b class="${p.roiConfidence === "estimated" ? "roi-estimated" : ""}">${p.paybackMonths === null ? "—" : (p.paybackMonths < 1 ? p.paybackMonths : Math.round(p.paybackMonths)) + " months"}</b></span>
+          <span><span class="muted">Net savings / yr${p.roiConfidence === "estimated" ? " *" : ""}</span><b class="${p.roiConfidence === "estimated" ? "roi-estimated" : ""}">${p.yearlyNetSavings === null ? "—" : money(p.yearlyNetSavings)}</b></span>
           <span><span class="muted">Pays back in 2 yrs if the job costs</span><b>${p.breakEvenAnnualCost === null ? "—" : money(p.breakEvenAnnualCost) + "+"}</b></span>
         </div>
+        ${p.roiConfidence === "estimated" ? `<p class="muted">* No vendor-stated labor-saved figure for this robot: the savings above use a conservative placeholder, not a verified number. Engineering match and financial attractiveness are shown separately on purpose -- this robot can be a physical fit even if the economics above aren't trustworthy yet, or vice versa.</p>` : ""}
         ${p.fit.length ? `<div class="chips">${p.fit.map((f) => `<span class="chip ${f.status}">${f.status}: ${esc(f.requirement)}</span>`).join("")}</div>` : ""}
         ${p.reason ? `<p class="reason">${esc(p.reason)}</p>` : m.status === "ranked" ? `<p class="muted">Writing an explanation…</p>` : ""}
         ${p.specs.length ? `<div class="muted">${p.specs.map((s) => `${esc(s.name)}: ${s.value} (<a href="${esc(s.sourceUrl)}" target="_blank" rel="noopener" title="${esc(s.quote)}">source</a>)`).join(" · ")}</div>` : ""}

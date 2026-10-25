@@ -15,9 +15,15 @@ export type RoiResult = {
   paybackRange: [number | null, number | null]; // if savings are 20% better / worse
 };
 
+// Months to pay back the price out of yearly net savings. Rounded to a whole month once it's at
+// least one -- but never collapsed to "0 months", which would misreport an unusually fast payback
+// as instantaneous. Below one month this keeps one decimal place instead (e.g. 0.2), so a tiny but
+// real number still displays as a real, non-zero number.
 function payback(price: number, yearlySavings: number): number | null {
   if (yearlySavings <= 0) return null;
-  return Math.round((price / yearlySavings) * 12);
+  const months = (price / yearlySavings) * 12;
+  if (months <= 0) return null;
+  return months < 1 ? Math.max(0.1, Math.round(months * 10) / 10) : Math.round(months);
 }
 
 

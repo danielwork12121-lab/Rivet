@@ -295,7 +295,9 @@ export default async function handler(req, res) {
       reconciledProcesses[0]?.name ||
       null;
     const recommendedProcess = reconciledProcesses.find((p) => p.name === recommendedProcessName) || null;
-    const impact = estimateAutomationImpact(recommendedProcess, totals);
+    const laborCostWasCorrected = !!recommendedProcess &&
+      corrections.some((c) => c.field === `${recommendedProcess.name}.annualCost`);
+    const impact = estimateAutomationImpact(recommendedProcess, totals, { laborCostWasCorrected });
 
     const extraction = {
       companyName: typeof raw.companyName === "string" && raw.companyName ? raw.companyName.slice(0, 200) : null,
