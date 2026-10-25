@@ -191,9 +191,21 @@ const LOW_CAPACITY_FILL_RATE  = 0.0;   // conservative: no extra orders
 const HIGH_CAPACITY_FILL_RATE = 0.50;  // optimistic:  fill half of freed hours
 
 export function estimateAutomationImpact(process, totals) {
-  if (!process || typeof process.annualCost !== "number") return null;
+  if (!process) return null;
 
-  const laborCost     = process.annualCost;
+  // Try annualCost directly; if null/undefined, derive from component fields
+  // (crew × people × hours × weeks × rate) as a fallback so the ROI card
+  // still renders when grounding stripped annualCost but left the pieces.
+  let laborCost = numOrNull(process.annualCost);
+  if (laborCost === null) {
+    const { crewCount, peoplePerCrew, hoursPerWeek, weeksPerYear, hourlyLaborCost } = process;
+    const parts = [crewCount, peoplePerCrew, hoursPerWeek, weeksPerYear, hourlyLaborCost];
+    if (parts.every((v) => typeof v === "number" && !isNaN(v))) {
+      laborCost = Math.round(crewCount * peoplePerCrew * hoursPerWeek * weeksPerYear * hourlyLaborCost);
+    }
+  }
+  if (laborCost === null) return null;
+
   const revenue       = numOrNull(totals?.revenue);
   const grossProfit   = numOrNull(totals?.grossProfit);
   const currentNetProfit = numOrNull(totals?.netProfit);
