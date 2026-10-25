@@ -74,7 +74,11 @@ const EXTRACT_TOOL = {
             },
             note: { type: "string", description: "One short sentence of context; empty string if none" },
           },
-          required: ["name", "automationCandidate"],
+          // Every field is required even though most are nullable: without
+          // this, strict mode lets the model just omit a key it's unsure
+          // about instead of stating null for it, which silently drops the
+          // annualCost/crew/hours fields the ROI estimate depends on.
+          required: ["name", "annualCost", "crewCount", "peoplePerCrew", "hoursPerWeek", "weeksPerYear", "hourlyLaborCost", "automationCandidate", "note"],
           additionalProperties: false,
         },
       },
@@ -89,7 +93,10 @@ const EXTRACT_TOOL = {
       },
       confidence: { type: "number", description: "0 to 1: how complete and legible the sheet was" },
     },
-    required: ["totals", "processes", "followUpQuestions", "confidence"],
+    // Same reasoning as processes.items.required above: every top-level
+    // field is required, nullable ones included, so strict mode can't let
+    // the model drop a field instead of stating null for it.
+    required: ["companyName", "currency", "totals", "processes", "recommendedProcess", "followUpQuestions", "confidence"],
     additionalProperties: false,
   },
 };

@@ -313,7 +313,6 @@ export default async function handler(req, res) {
     };
 
     let correctedWorkbookBase64 = null;
-    let workbookErrDebug = null; // TEMP: surfaced in the response for live debugging, removed below
     try {
       const correctedBuf = await buildCorrectedWorkbook({ extraction, corrections, impact, sourceFileName: fileName });
       correctedWorkbookBase64 = correctedBuf.toString("base64");
@@ -324,7 +323,6 @@ export default async function handler(req, res) {
       // failures invisible in Vercel's runtime logs.
       console.error("buildCorrectedWorkbook failed:", workbookErr);
       correctedWorkbookBase64 = null;
-      workbookErrDebug = String(workbookErr?.stack || workbookErr?.message || workbookErr).slice(0, 2000);
     }
 
     return res.status(200).json({
@@ -332,7 +330,6 @@ export default async function handler(req, res) {
       correctedWorkbook: correctedWorkbookBase64
         ? { fileBase64: correctedWorkbookBase64, fileName: `corrected-${fileName.replace(/\.(xlsx|csv)$/i, "")}.xlsx` }
         : null,
-      _workbookErrDebug: workbookErrDebug,
     });
   } catch (err) {
     const timedOut = err?.name === "AbortError";
