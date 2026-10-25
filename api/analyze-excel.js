@@ -192,7 +192,14 @@ export default async function handler(req, res) {
     return errorRes(res, 400, "That spreadsheet looks empty");
   }
 
-  const { text: sheetText } = summarizeSheets(sheets);
+  // A real operator's workbook is rarely just a P&L tab -- a payroll
+  // roster, a labor-burden buildup, an equipment list, a materials log, a
+  // client-contract list, a job-estimate sheet, and the P&L itself is a
+  // normal spread for one company. summarizeSheets' own default
+  // (maxSheets: 6) is sized for a simple sheet, so raise it here rather
+  // than silently dropping the tabs that usually carry the actual totals
+  // (which tend to come *after* the supporting detail sheets, not before).
+  const { text: sheetText } = summarizeSheets(sheets, { maxSheets: 16 });
   const groundSet = extractNumbers(sheetText);
 
   const controller = new AbortController();
