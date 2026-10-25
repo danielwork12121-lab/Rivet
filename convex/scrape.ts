@@ -8,7 +8,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { pickUrls, searchQueries } from "./lib/discovery";
 import { normalizeTask } from "./lib/decide";
-import { callActor, datasetItems, getRun, isRunning, startActor } from "./lib/apify";
+import { callActor, datasetItems, getRun, isBusy, isRunning, startActor } from "./lib/apify";
 import { robotFromActorRow, type ActorRow } from "./lib/actorRows";
 import { pageImage, type CrawledPage } from "./lib/images";
 
@@ -22,6 +22,8 @@ const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets 
 // which Apify stores and shows. The Actor must be a version that has the crawlOnly input.
 const finderActor = () => process.env.APIFY_ACTOR_ID;
 const CHECK_EVERY_MS = 30_000;
+const BUSY_WAIT_MS = 30_000; // Apify's concurrent-run limit: wait this long, then try again
+const BUSY_RETRY_MS = 8 * 60 * 1000; // ...for at most this long after the search was created
 const GIVE_UP_MS = 14 * 60 * 1000; // discovery.ts treats a search older than 15 minutes as crashed
 
 // Google search -> pick vendor pages -> crawl them -> hand over to extraction.
@@ -42,6 +44,7 @@ export const discover = internalAction({
           crawlOnly: true, // no AI inside Apify, so no key in the input
           maxSites: Number(process.env.APIFY_MAX_SITES) || 8, // pages to read; more = slower but more robots
         }).catch((err) => {
+          if (isBusy(err)) throw err; // wait for a free slot (below), don't switch paths
           console.warn(`Robot Spec Finder (${actorId}) wouldn't start, using the built-in search: ${String(err).slice(0, 300)}`);
           return null;
         });
@@ -62,6 +65,11 @@ export const discover = internalAction({
       const urls = pickUrls(items as { organicResults?: { url?: string }[] }[]);
       await crawlAndExtract(ctx, discoveryId, urls);
     } catch (err) {
+      // Apify is running too many jobs at once: try again shortly, while the search is still young.
+      if (isBusy(err) && Date.now() - d._creationTime < BUSY_RETRY_MS) {
+        await ctx.scheduler.runAfter(BUSY_WAIT_MS, internal.scrape.discover, { discoveryId });
+        return;
+      }
       await ctx.runMutation(internal.discovery.finish, {
         discoveryId, status: "failed", robotsFound: 0, error: String(err).slice(0, 500),
       });

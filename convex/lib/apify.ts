@@ -63,3 +63,7 @@ export async function callActor(actorId: string, input: unknown, waitSecs: numbe
 export async function datasetItems(datasetId: string): Promise<unknown[]> {
   return (await api(`/datasets/${encodeURIComponent(datasetId)}/items?clean=true&format=json`)) as unknown[];
 }
+
+// Apify's "too many runs at once" refusal (the free plan allows 5 concurrent runs). Worth waiting
+// out and retrying, unlike other errors.
+export const isBusy = (err: unknown) => /\b402\b/.test(String(err)) && /concurrent/i.test(String(err));
