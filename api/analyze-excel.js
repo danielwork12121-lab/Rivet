@@ -43,10 +43,9 @@ import { readWorkbookSheets } from "./lib/workbook.js";
 // number it returns is grounded against the sheet anyway, so the model's
 // job is reading comprehension, not reasoning.
 const MODEL = "claude-sonnet-5-5";
-// Vercel Hobby caps maxDuration at 10s regardless of vercel.json, so keep
-// our own abort comfortably inside that to return a clean JSON error
-// instead of Vercel's bare 504 HTML page.
-const TIMEOUT_MS = 9000;
+// Keep our abort inside vercel.json's maxDuration (30s) to return a clean
+// JSON error instead of Vercel's bare 504 HTML page.
+const TIMEOUT_MS = 25000;
 // Vercel's Node.js functions cap the request body at ~4.5MB; base64 inflates
 // a file by about a third, so this leaves headroom for that plus the rest
 // of the JSON envelope. The frontend enforces the same limit before upload.

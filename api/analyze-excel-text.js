@@ -17,7 +17,7 @@ import {
 } from "./lib/financials.js";
 
 const MODEL = "claude-sonnet-5-5";
-const TIMEOUT_MS = 9000;
+const TIMEOUT_MS = 25000;
 const MAX_TEXT_BYTES = 200 * 1024; // 200KB -- far more than summarizeSheets ever produces
 
 const EXTRACT_TOOL = {
