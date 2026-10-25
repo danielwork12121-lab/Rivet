@@ -52,6 +52,10 @@ const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const EXTRACT_TOOL = {
   name: "extract_financials",
   description: "Record the financial totals and labor processes read from this operator's spreadsheet.",
+  // Opus 5.5 (and Sonnet 5.5 / Fable 5.1 / Mythos 5.1) reject a forced
+  // tool_choice ("tool"/"any") outright, so tool_choice below is "auto" and
+  // this schema is enforced by the API instead via strict mode.
+  strict: true,
   input_schema: {
     type: "object",
     properties: {
@@ -76,6 +80,7 @@ const EXTRACT_TOOL = {
           },
         },
         required: ["revenue", "cogs", "grossProfit", "operatingExpenses", "netProfit"],
+        additionalProperties: false,
       },
       processes: {
         type: "array",
@@ -102,6 +107,7 @@ const EXTRACT_TOOL = {
             note: { type: "string", description: "One short sentence of context; empty string if none" },
           },
           required: ["name", "automationCandidate"],
+          additionalProperties: false,
         },
       },
       recommendedProcess: {
@@ -116,6 +122,7 @@ const EXTRACT_TOOL = {
       confidence: { type: "number", description: "0 to 1: how complete and legible the sheet was" },
     },
     required: ["totals", "processes", "followUpQuestions", "confidence"],
+    additionalProperties: false,
   },
 };
 
@@ -219,8 +226,13 @@ export default async function handler(req, res) {
         output_config: { effort: "medium" },
         system: PROMPT,
         tools: [EXTRACT_TOOL],
-        tool_choice: { type: "tool", name: "extract_financials" },
-        messages: [{ role: "user", content: `File: ${fileName}\n\n${sheetText}` }],
+        tool_choice: { type: "auto" },
+        messages: [
+          {
+            role: "user",
+            content: `File: ${fileName}\n\n${sheetText}\n\nCall the extract_financials tool now with what you read above.`,
+          },
+        ],
       }),
       signal: controller.signal,
     });
