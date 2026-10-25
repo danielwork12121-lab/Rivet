@@ -147,3 +147,60 @@ describe("web search (discovery)", () => {
     expect(await t.query(api.discovery.forTask, { task: "mowing" })).toBeNull();
   });
 });
+
+describe("workflow breakdown (agent:planWorkflow and friends)", () => {
+  const step = { name: "Mow the lawns", sharePct: 60, aiVerdict: "automatable" as const, why: "Fixture.", task: "mowing", searchPhrase: "robotic mower" };
+  async function withReadyWorkflow() {
+    const s = await setup();
+    await s.raw.run((ctx) => ctx.db.insert("workflows", {
+      requestId: s.requestId, status: "ready", steps: [step], laborCost: 50000, budget: null, requirements: [],
+    }));
+    return s;
+  }
+
+  it("anonymous callers, other Clients and Developers can't plan, read, change or search a breakdown", async () => {
+    const { raw, requestId, usage, matches, scheduled } = await withReadyWorkflow();
+    const callers: [any, RegExp][] = [
+      [raw, /Please sign in/],
+      [await asClient(raw, "user_client_b"), /Draft not found/],
+      [await asDeveloper(raw), /needs a Client account/],
+    ];
+    for (const [c, err] of callers) {
+      await expect(c.mutation(api.agent.planWorkflow, { requestId })).rejects.toThrow(err);
+      await expect(c.query(api.agent.latestWorkflow, { requestId })).rejects.toThrow(err);
+      await expect(c.mutation(api.agent.setStepShare, { requestId, step: 0, sharePct: 10 })).rejects.toThrow(err);
+      await expect(c.mutation(api.agent.setWorkflowLabor, { requestId, laborCost: 1 })).rejects.toThrow(err);
+      await expect(c.mutation(api.agent.checkStep, { requestId, step: 0 })).rejects.toThrow(err);
+    }
+    const wf = await raw.run((ctx) => ctx.db.query("workflows").first());
+    expect(wf).toMatchObject({ laborCost: 50000, steps: [{ sharePct: 60 }] }); // unchanged
+    expect(await usage()).toEqual([]);
+    expect(await matches()).toEqual([]);
+    expect(await scheduled()).toEqual([]);
+  });
+
+  it("the paid calls are off unless AI_MATCH_ENABLED=true; the free re-rank still works for the owner", async () => {
+    const s = await setup({ enabled: false });
+    await expect(s.t.mutation(api.agent.planWorkflow, { requestId: s.requestId })).rejects.toThrow(/turned off/);
+    await s.raw.run((ctx) => ctx.db.insert("workflows", {
+      requestId: s.requestId, status: "ready", steps: [step], laborCost: 50000, budget: null, requirements: [],
+    }));
+    await expect(s.t.mutation(api.agent.checkStep, { requestId: s.requestId, step: 0 })).rejects.toThrow(/turned off/);
+    await s.t.mutation(api.agent.setStepShare, { requestId: s.requestId, step: 0, sharePct: 40 });
+    expect((await s.raw.run((ctx) => ctx.db.query("workflows").first()))!.steps[0].sharePct).toBe(40);
+    expect(await s.usage()).toEqual([]);
+    expect(await s.scheduled()).toEqual([]);
+  });
+
+  it("a breakdown spends one AI budget unit, and the per-request limit stops the next one before anything runs", async () => {
+    vi.stubEnv("AI_REQUEST_DAILY_LIMIT", "1");
+    const { raw, t, requestId, usage, scheduled } = await setup();
+    await t.mutation(api.agent.planWorkflow, { requestId });
+    expect((await usage()).map((u) => u.kind)).toEqual(["match"]);
+    await raw.run(async (ctx) => { for (const w of await ctx.db.query("workflows").collect()) await ctx.db.patch(w._id, { status: "ready", steps: [step] }); });
+    await expect(t.mutation(api.agent.planWorkflow, { requestId })).rejects.toThrow(/reached its AI limit/);
+    await expect(t.mutation(api.agent.checkStep, { requestId, step: 0 })).rejects.toThrow(/reached its AI limit/);
+    expect(await scheduled()).toHaveLength(1); // only the first breakdown's split job
+  });
+});
+
