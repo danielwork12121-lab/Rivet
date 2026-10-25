@@ -34,17 +34,24 @@ export const discover = internalAction({
       const actorId = finderActor();
       if (actorId) {
         // Start it and check back, because one run can take longer than an action may.
+        // If Apify refuses to start it (e.g. an old version that still wants a key, or a wrong
+        // Actor id), fall back to the built-in steps below so the search still happens.
         const run = await startActor(actorId, {
           task: d.task,
           searchPhrase: d.searchPhrase,
           crawlOnly: true, // no AI inside Apify, so no key in the input
           maxSites: Number(process.env.APIFY_MAX_SITES) || 8, // pages to read; more = slower but more robots
+        }).catch((err) => {
+          console.warn(`Robot Spec Finder (${actorId}) wouldn't start, using the built-in search: ${String(err).slice(0, 300)}`);
+          return null;
         });
-        await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "crawling" });
-        await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, {
-          discoveryId, runId: run.id, startedAt: Date.now(),
-        });
-        return;
+        if (run) {
+          await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "crawling" });
+          await ctx.scheduler.runAfter(CHECK_EVERY_MS, internal.scrape.checkFinderRun, {
+            discoveryId, runId: run.id, startedAt: Date.now(),
+          });
+          return;
+        }
       }
       const run = await callActor(
         "apify/google-search-scraper",

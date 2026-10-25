@@ -111,6 +111,27 @@ describe("Robot Spec Finder runs", () => {
     expect(await t.run((ctx) => ctx.db.query("pages").collect())).toEqual([]);
   });
 
+  it("falls back to the built-in search when Apify refuses to start the finder Actor", async () => {
+    vi.stubEnv("APIFY_TOKEN", "apify-test-token");
+    vi.stubEnv("APIFY_ACTOR_ID", "trevor/robot-spec-finder");
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      sent.push(url);
+      if (url.includes("trevor~robot-spec-finder")) {
+        return new Response(JSON.stringify({ error: { type: "invalid-input", message: "Field input.anthropicApiKey is required" } }), { status: 400 });
+      }
+      if (url.includes("/acts/") || url.includes("/actor-runs/")) return json({ data: { id: "run2", status: "SUCCEEDED", defaultDatasetId: "ds1" } });
+      return json([{ organicResults: [{ url: "https://acme.example/x1" }] }]);
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const discoveryId = await newSearch(t);
+    await t.action(internal.scrape.discover, { discoveryId });
+    expect(sent.some((u) => u.includes("apify~google-search-scraper"))).toBe(true);
+    expect((await t.run((ctx) => ctx.db.get(discoveryId)))?.status).not.toBe("failed");
+  });
+
   it("the built-in crawl path sends no credential either", async () => {
     vi.stubEnv("APIFY_TOKEN", "apify-test-token");
     vi.stubEnv("ANTHROPIC_API_KEY", SENTINEL);
