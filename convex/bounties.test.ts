@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient, asDeveloper } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 
@@ -36,20 +37,22 @@ const bounty = {
 };
 
 async function setup(visibility: "shared" | "anonymous" = "shared") {
-  const t = convexTest(schema, modules);
+  const base = convexTest(schema, modules);
+  const t = await asClient(base);
+  const dev = await asDeveloper(base); // approved
   const requestId = await t.mutation(api.requests.create, {
     ...intake,
     profile: { ...profile, visibility },
     clientToken: token,
   });
   const all = () => t.run((ctx) => ctx.db.query("bounties").collect());
-  return { t, requestId, all };
+  return { t, base, dev, requestId, all };
 }
 
 describe("bounties:post", () => {
   it("stores a posted client bounty with raw text and the request's region", async () => {
     const { t, requestId, all } = await setup();
-    const id = await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
+    const id = await t.mutation(api.bounties.post, { requestId, ...bounty });
     const [row] = await all();
     expect(row._id).toBe(id);
     expect(row).toMatchObject({
@@ -59,27 +62,35 @@ describe("bounties:post", () => {
     expect(typeof row.updatedAt).toBe("number");
   });
 
-  it("rejects a wrong token and stores nothing", async () => {
-    const { t, requestId, all } = await setup();
-    await expect(
-      t.mutation(api.bounties.post, { requestId, clientToken: "someone-else", ...bounty }),
-    ).rejects.toThrow(/Draft not found/);
+  it("rejects another Client account, a Developer and a signed-out caller, and stores nothing", async () => {
+    const { base, dev, requestId, all } = await setup();
+    const other = await asClient(base, "user_client_b");
+    await expect(other.mutation(api.bounties.post, { requestId, ...bounty })).rejects.toThrow(/Draft not found/);
+    await expect(dev.mutation(api.bounties.post, { requestId, ...bounty })).rejects.toThrow(/needs a Client account/);
+    await expect(base.mutation(api.bounties.post, { requestId, ...bounty })).rejects.toThrow(/Please sign in/);
     expect(await all()).toHaveLength(0);
+  });
+
+  it("records the owning account on the bounty", async () => {
+    const { t, requestId, all } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    const request = await t.query(internal.requests.get, { id: requestId });
+    expect((await all())[0].ownerId).toBe(request!.ownerId);
   });
 
   it("rejects anonymous requests", async () => {
     const { t, requestId, all } = await setup("anonymous");
     await expect(
-      t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty }),
+      t.mutation(api.bounties.post, { requestId, ...bounty }),
     ).rejects.toThrow(/Anonymous requests can't post/);
     expect(await all()).toHaveLength(0);
   });
 
   it("posting the same task again updates the same bounty", async () => {
     const { t, requestId, all } = await setup();
-    const a = await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
+    const a = await t.mutation(api.bounties.post, { requestId, ...bounty });
     const b = await t.mutation(api.bounties.post, {
-      requestId, clientToken: token, ...bounty, pledgePercent: 40, pledged: 6000, note: "",
+      requestId, ...bounty, pledgePercent: 40, pledged: 6000, note: "",
     });
     expect(b).toBe(a);
     const rows = await all();
@@ -91,7 +102,7 @@ describe("bounties:post", () => {
   it("concurrent posts for one task create exactly one bounty", async () => {
     const { t, requestId, all } = await setup();
     const ids = await Promise.all(
-      Array.from({ length: 5 }, () => t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty })),
+      Array.from({ length: 5 }, () => t.mutation(api.bounties.post, { requestId, ...bounty })),
     );
     expect(new Set(ids).size).toBe(1);
     expect(await all()).toHaveLength(1);
@@ -99,8 +110,8 @@ describe("bounties:post", () => {
 
   it("a different task is a separate bounty", async () => {
     const { t, requestId, all } = await setup();
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty, taskKey: "spray" });
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    await t.mutation(api.bounties.post, { requestId, ...bounty, taskKey: "spray" });
     expect(await all()).toHaveLength(2);
   });
 
@@ -119,30 +130,41 @@ describe("bounties:post", () => {
   ])("rejects %s and stores nothing", async (_n, patch, message) => {
     const { t, requestId, all } = await setup();
     await expect(
-      t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty, ...patch }),
+      t.mutation(api.bounties.post, { requestId, ...bounty, ...patch }),
     ).rejects.toThrow(message);
     expect(await all()).toHaveLength(0);
   });
 });
 
 describe("bounties:getMine", () => {
-  it("returns the owner's posted bounties, newest first, and rejects a wrong token", async () => {
-    const { t, requestId } = await setup();
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty, taskKey: "spray" });
-    const mine = await t.query(api.bounties.getMine, { requestId, clientToken: token });
+  it("returns the owner's posted bounties, newest first, and rejects another account", async () => {
+    const { t, base, requestId } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    await t.mutation(api.bounties.post, { requestId, ...bounty, taskKey: "spray" });
+    const mine = await t.query(api.bounties.getMine, { requestId });
     expect(mine.map((b) => b.taskKey)).toEqual(["spray", "mow"]);
-    await expect(t.query(api.bounties.getMine, { requestId, clientToken: "nope-nope" })).rejects.toThrow(
-      /Draft not found/,
-    );
+    const other = await asClient(base, "user_client_b");
+    await expect(other.query(api.bounties.getMine, { requestId })).rejects.toThrow(/Draft not found/);
   });
 });
 
-describe("bounties:listPosted (public)", () => {
-  it("exposes no requestId, company identity, token, gaps or note", async () => {
-    const { t, requestId } = await setup();
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
-    const [pub] = await t.query(api.bounties.listPosted, {});
+describe("bounties:listPosted (Developer board)", () => {
+  it("only approved Developers can read it", async () => {
+    const { t, base, requestId } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    await expect(base.query(api.bounties.listPosted, {})).rejects.toThrow(/Please sign in/);
+    await expect(t.query(api.bounties.listPosted, {})).rejects.toThrow(/needs an approved Developer/);
+    const pending = await asDeveloper(base, "user_dev_pending", false);
+    await expect(pending.query(api.bounties.listPosted, {})).rejects.toThrow(/needs an approved Developer/);
+    await base.mutation(internal.users.setDeveloperStatus, { clerkUserId: "user_dev_a", status: "revoked" });
+    const revoked = await asDeveloper(base, "user_dev_a", false);
+    await expect(revoked.query(api.bounties.listPosted, {})).rejects.toThrow(/needs an approved Developer/);
+  });
+
+  it("exposes no requestId, owner, company identity, token, gaps or note", async () => {
+    const { t, dev, requestId } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    const [pub] = await dev.query(api.bounties.listPosted, {});
     expect(Object.keys(pub).sort()).toEqual(
       ["_creationTime", "_id", "goal", "industry", "pledged", "region", "specLines", "taskKey", "title"].sort(),
     );
@@ -153,25 +175,35 @@ describe("bounties:listPosted (public)", () => {
   });
 
   it("never lists AI drafts, and agent:latestBounty returns only the AI draft", async () => {
-    const { t, requestId } = await setup();
+    const { t, dev, requestId } = await setup();
     await t.mutation(internal.agent.saveBounty, {
       requestId, title: "AI brief", summary: "s", mustHaves: ["m"], niceToHaves: [], acceptanceTest: "a", goal: 7200,
     });
-    await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty });
-    const pub = await t.query(api.bounties.listPosted, {});
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    const pub = await dev.query(api.bounties.listPosted, {});
     expect(pub.map((b) => b.title)).toEqual([bounty.title]);
-    const draft = await t.query(api.agent.latestBounty, { requestId, clientToken: token });
+    const draft = await t.query(api.agent.latestBounty, { requestId });
     expect(draft).toMatchObject({ title: "AI brief", status: "draft", source: "ai" });
-    const mine = await t.query(api.bounties.getMine, { requestId, clientToken: token });
+    const mine = await t.query(api.bounties.getMine, { requestId });
     expect(mine.map((b) => b.title)).toEqual([bounty.title]);
   });
 
+  it("a request switched to anonymous after posting leaves the board", async () => {
+    const { t, dev, requestId } = await setup();
+    await t.mutation(api.bounties.post, { requestId, ...bounty });
+    expect(await dev.query(api.bounties.listPosted, {})).toHaveLength(1);
+    await t.mutation(api.requests.updateIntake, { id: requestId, ...intake, profile: { ...profile, visibility: "anonymous" } });
+    expect(await dev.query(api.bounties.listPosted, {})).toHaveLength(0);
+    // The owner still sees it.
+    expect(await t.query(api.bounties.getMine, { requestId })).toHaveLength(1);
+  });
+
   it("lists newest first and caps the limit", async () => {
-    const { t, requestId } = await setup();
+    const { t, dev, requestId } = await setup();
     for (const taskKey of ["mow", "spray", "trim"]) {
-      await t.mutation(api.bounties.post, { requestId, clientToken: token, ...bounty, taskKey });
+      await t.mutation(api.bounties.post, { requestId, ...bounty, taskKey });
     }
-    expect((await t.query(api.bounties.listPosted, { limit: 2 })).map((b) => b.taskKey)).toEqual(["trim", "spray"]);
-    expect(await t.query(api.bounties.listPosted, { limit: 0 })).toHaveLength(1);
+    expect((await dev.query(api.bounties.listPosted, { limit: 2 })).map((b) => b.taskKey)).toEqual(["trim", "spray"]);
+    expect(await dev.query(api.bounties.listPosted, { limit: 0 })).toHaveLength(1);
   });
 });

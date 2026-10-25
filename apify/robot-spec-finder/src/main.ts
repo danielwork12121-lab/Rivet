@@ -6,12 +6,17 @@
 // 3. Claude Haiku reads each page and quotes the sentence behind every number.
 // 4. Plain code keeps a number only if that quote is really on the page, and
 //    converts units (acres/hour, lbs, minutes...) itself.
+//
+// crawlOnly: steps 1 and 2 only. The Actor returns each page's text ({ url, title, markdown })
+// and never needs an Anthropic key; the caller reads the pages with Claude on its own side.
+// Rivet's backend uses this, so its key is never put in a run's input or stored by Apify.
 import { Actor, log } from "apify";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { pickUrls, searchQueries } from "./lib/discovery.js";
 import { robotFromPage } from "./lib/extract.js";
+import { pageImage, type CrawledPage } from "./lib/images.js";
 import { toDatasetRow } from "./lib/row.js";
 import { SPEC_NAMES } from "./lib/specs.js";
 
@@ -22,6 +27,7 @@ type Input = {
   maxSites?: number;
   proxyConfiguration?: Record<string, unknown>;
   anthropicApiKey?: string;
+  crawlOnly?: boolean;
 };
 
 const MODEL = "claude-haiku-5-5";
@@ -45,7 +51,9 @@ facilities, construction) find robots.
 - priceOnRequest: true if the page says to contact sales or request a quote.
 - yearlyRunningCost: a stated yearly subscription, service plan or maintenance cost in USD.
 - laborSavedPercent: a stated share of labor or time saved, e.g. "cuts labor by 60%" is 60.
-- specs: only these names: ${SPEC_NAMES.join(", ")}.`;
+- specs: only these names: ${SPEC_NAMES.join(", ")}.
+- imageUrl: the URL of a photo of this robot exactly as it appears in the page text (an image
+  link), or null. Not a logo or icon.`;
 
 const Evidence = z.object({ value: z.number().nullable(), unit: z.string().nullable(), quote: z.string().nullable() });
 const RobotSchema = z.object({
@@ -59,16 +67,17 @@ const RobotSchema = z.object({
   laborSavedPercent: Evidence,
   specs: z.array(z.object({ name: z.enum(SPEC_NAMES), value: z.number(), unit: z.string(), quote: z.string() })),
   environments: z.array(z.string()),
+  imageUrl: z.string().nullable(),
 });
 const PageSchema = z.object({ robots: z.array(RobotSchema) });
 
 await Actor.init();
 const input = await Actor.getInputOrThrow<Input>();
 const task = input.task?.trim();
-const apiKey = input.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
+const crawlOnly = input.crawlOnly === true;
+const apiKey = crawlOnly ? undefined : input.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
 if (!task) await Actor.fail("Input 'task' is required, e.g. \"gutter cleaning\".");
-if (!apiKey) await Actor.fail("Add your Anthropic API key in the input (it's stored as a secret).");
-const claude = new Anthropic({ apiKey });
+if (!crawlOnly && !apiKey) await Actor.fail("Add your Anthropic API key in the input (it's stored as a secret), or turn on crawlOnly.");
 const maxSites = Math.min(Math.max(input.maxSites ?? 8, 1), 40);
 
 // 1. Which pages to read
@@ -103,6 +112,19 @@ const gotUrls = new Set((pages as { url?: string }[]).map((p) => p.url));
 const blocked = urls.filter((u) => !gotUrls.has(u));
 if (blocked.length) log.warning(`${blocked.length} sites blocked the crawler or failed`, { blocked });
 
+// crawlOnly: hand the page text back; reading it is the caller's job (and the caller's key).
+if (crawlOnly) {
+  const rows = (pages as (CrawledPage & { metadata?: { title?: string } })[])
+    .map((p) => ({
+      url: p.url, title: p.metadata?.title ?? "", markdown: (p.markdown ?? p.text ?? "").slice(0, 200_000),
+      imageUrl: pageImage(p), // the page's main photo (og:image or Product JSON-LD), or null
+    }))
+    .filter((p) => p.url && p.markdown.length >= 200); // blocked or empty pages
+  await Actor.pushData(rows);
+  await Actor.exit(`Crawled ${rows.length} of ${urls.length} pages for "${task}". Nothing was sent to an AI model.`);
+}
+const claude = new Anthropic({ apiKey });
+
 // 3 + 4. Extract and verify. The same robot often appears on several pages (its
 // own page and a few "best of" lists): keep one row, preferring the one with a price
 // and then the one with more verified specs.
@@ -117,7 +139,7 @@ function addRobot(r: Robot): boolean {
   return !old;
 }
 const found = () => robots.size;
-for (const [i, item] of (pages as { url?: string; markdown?: string; text?: string }[]).entries()) {
+for (const [i, item] of (pages as CrawledPage[]).entries()) {
   const markdown = item.markdown ?? item.text ?? "";
   if (!item.url || markdown.length < 200) continue;
   await Actor.setStatusMessage(`Reading page ${i + 1} of ${pages.length}, ${found()} robots so far`);
@@ -133,7 +155,9 @@ for (const [i, item] of (pages as { url?: string; markdown?: string; text?: stri
     const listed = res.parsed_output?.robots ?? [];
     let kept = 0;
     for (const r of listed.slice(0, 15)) {
-      const robot = robotFromPage({ ...r, isRobotProduct: true }, { url: item.url, markdown }, task!);
+      // A page's own photo only fits when it's about one robot.
+      const imageUrl = listed.length === 1 ? pageImage(item) : null;
+      const robot = robotFromPage({ ...r, isRobotProduct: true }, { url: item.url, markdown, imageUrl }, task!);
       if (robot && addRobot(robot)) kept++;
     }
     log.info(`${item.url}: ${listed.length} robots named, ${kept} new`);

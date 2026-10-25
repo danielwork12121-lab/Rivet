@@ -47,4 +47,78 @@ describe("Robot Spec Finder runs", () => {
     expect(robots).toHaveLength(1);
     expect(robots[0]).toMatchObject({ name: "Mower X", price: 30000, sample: false, task: "mowing" });
   });
+
+  // The Anthropic key must stay in Convex: Apify stores and shows every run's input.
+  const SENTINEL = "sk-ant-TEST-SENTINEL-do-not-leak";
+  function recordingApify(datasetRows: unknown[], runStatus = "SUCCEEDED") {
+    const sent: { url: string; method: string; body: string; headers: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+      sent.push({ url, method: init.method ?? "GET", body: String(init.body ?? ""), headers: JSON.stringify(init.headers ?? {}) });
+      if (!url.startsWith("https://api.apify.com/")) throw new Error(`unexpected request to ${url}`);
+      if (url.includes("/acts/") || url.includes("/actor-runs/")) return json({ data: { id: "run1", status: runStatus, defaultDatasetId: "ds1" } });
+      return json(datasetRows);
+    });
+    return sent;
+  }
+  const page = (url: string) => ({ url, title: "Acme X1", markdown: "# Acme X1 robotic mower\n" + "It mows steep slopes. ".repeat(20) });
+  async function newSearch(t: ReturnType<typeof convexTest>) {
+    return await t.run((ctx) => ctx.db.insert("discoveries", {
+      task: "mowing", searchPhrase: "commercial robotic mower", status: "searching", urls: [], robotsFound: 0, waitingMatches: [],
+    }));
+  }
+
+  it("starts the Actor in crawlOnly mode and puts no credential in its input", async () => {
+    vi.stubEnv("APIFY_TOKEN", "apify-test-token");
+    vi.stubEnv("APIFY_ACTOR_ID", "trevor/robot-spec-finder");
+    vi.stubEnv("ANTHROPIC_API_KEY", SENTINEL);
+    const sent = recordingApify([], "RUNNING");
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    await t.action(internal.scrape.discover, { discoveryId: await newSearch(t) });
+    const start = sent.find((r) => r.url.includes("/acts/"))!;
+    expect(JSON.parse(start.body)).toEqual({ task: "mowing", searchPhrase: "commercial robotic mower", crawlOnly: true, maxSites: 8 });
+    // The sentinel appears in no URL, header or body of anything sent to Apify.
+    expect(sent.some((r) => (r.url + r.body + r.headers).includes(SENTINEL))).toBe(false);
+  });
+
+  it("saves the pages an Actor run returns and leaves reading them to Convex's own Claude step", async () => {
+    vi.stubEnv("APIFY_TOKEN", "apify-test-token");
+    vi.stubEnv("APIFY_ACTOR_ID", "trevor/robot-spec-finder");
+    vi.stubEnv("ANTHROPIC_API_KEY", SENTINEL);
+    const sent = recordingApify([page("https://acme.example/x1"), { url: "https://blocked.example", title: "", markdown: "403" }]);
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const discoveryId = await newSearch(t);
+    await t.action(internal.scrape.checkFinderRun, { discoveryId, runId: "run1", startedAt: Date.now() });
+    const pages = await t.run((ctx) => ctx.db.query("pages").collect());
+    expect(pages.map((p) => p.url)).toEqual(["https://acme.example/x1"]); // the blocked page is dropped
+    expect(pages[0]).toMatchObject({ discoveryId, extracted: false, title: "Acme X1" });
+    expect((await t.run((ctx) => ctx.db.get(discoveryId)))?.status).toBe("extracting");
+    const queued = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(queued.map((q) => q.name)).toContain("ai:extractPages");
+    expect(sent.every((r) => r.url.startsWith("https://api.apify.com/"))).toBe(true); // nothing went to an AI provider
+    expect(sent.some((r) => (r.url + r.body + r.headers).includes(SENTINEL))).toBe(false);
+  });
+
+  it("finishes with no robots when the run returned no usable pages", async () => {
+    vi.stubEnv("APIFY_TOKEN", "apify-test-token");
+    recordingApify([{ url: "https://blocked.example", title: "", markdown: "403" }]);
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const discoveryId = await newSearch(t);
+    await t.action(internal.scrape.checkFinderRun, { discoveryId, runId: "run1", startedAt: Date.now() });
+    expect(await t.run((ctx) => ctx.db.get(discoveryId))).toMatchObject({ status: "done", robotsFound: 0 });
+    expect(await t.run((ctx) => ctx.db.query("pages").collect())).toEqual([]);
+  });
+
+  it("the built-in crawl path sends no credential either", async () => {
+    vi.stubEnv("APIFY_TOKEN", "apify-test-token");
+    vi.stubEnv("ANTHROPIC_API_KEY", SENTINEL);
+    const sent = recordingApify([{ organicResults: [{ url: "https://acme.example/x1" }] }]);
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    await t.action(internal.scrape.discover, { discoveryId: await newSearch(t) });
+    expect(sent.filter((r) => r.url.includes("/runs")).length).toBeGreaterThan(0);
+    expect(sent.some((r) => (r.url + r.body + r.headers).includes(SENTINEL))).toBe(false);
+  });
 });

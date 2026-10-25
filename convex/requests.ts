@@ -1,12 +1,13 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalQuery, mutation, query } from "./_generated/server";
 import { costInfo, followUpAnswer, profileInfo } from "./schema";
 import { validateFollowUps, validateRequestInput } from "./lib/validation";
-import { loadOwnedDraft, withoutToken } from "./lib/drafts";
+import { DRAFT_NOT_FOUND, loadOwnedDraft, withoutToken } from "./lib/drafts";
+import { requireClient } from "./lib/auth";
 
-// The browser generates each draft's `clientToken`, keeps it in localStorage,
-// and must send it to read or change the draft (see lib/drafts.ts). No public
-// function returns a token or lists other operators' requests.
+// Every public function here needs a signed-in Client and only touches that
+// account's own requests (lib/auth.ts, lib/drafts.ts). No public function returns
+// a token, an owner id, or another account's requests.
 
 const intakeFields = {
   title: v.string(),
@@ -17,13 +18,14 @@ const intakeFields = {
   profile: v.optional(profileInfo),
 };
 
-// Operator submits a problem. Returns the request's id. If `clientToken` was
-// already used, returns that request's id and inserts nothing, so a retried or
-// double-clicked submit can't create duplicates. Mutations are serializable, so
-// the lookup-then-insert below can't race with a concurrent call.
+// A Client submits a problem. Returns the request's id. If `clientToken` was
+// already used by this account, returns that request's id and inserts nothing, so
+// a retried or double-clicked submit can't create duplicates. Mutations are
+// serializable, so the lookup-then-insert below can't race with a concurrent call.
 export const create = mutation({
   args: { ...intakeFields, clientToken: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const user = await requireClient(ctx);
     const clean = validateRequestInput(args);
     if (clean.clientToken !== undefined) {
       const token = clean.clientToken;
@@ -31,10 +33,16 @@ export const create = mutation({
         .query("operatorRequests")
         .withIndex("by_client_token", (q) => q.eq("clientToken", token))
         .first();
-      if (existing) return existing._id;
+      if (existing) {
+        if (existing.ownerId !== user._id) {
+          throw new ConvexError("This submission id is already in use. Reload the page and try again.");
+        }
+        return existing._id;
+      }
     }
     return await ctx.db.insert("operatorRequests", {
       ...clean,
+      ownerId: user._id,
       status: "submitted",
     });
   },
@@ -44,9 +52,9 @@ export const create = mutation({
 // status are left alone. Sending the same values again is harmless, so a
 // timed-out update can simply be retried.
 export const updateIntake = mutation({
-  args: { id: v.id("operatorRequests"), clientToken: v.string(), ...intakeFields },
-  handler: async (ctx, { id, clientToken, ...intake }) => {
-    await loadOwnedDraft(ctx, id, clientToken);
+  args: { id: v.id("operatorRequests"), ...intakeFields },
+  handler: async (ctx, { id, ...intake }) => {
+    await loadOwnedDraft(ctx, id);
     const clean = validateRequestInput(intake);
     await ctx.db.patch(id, {
       ...clean,
@@ -63,12 +71,11 @@ export const updateIntake = mutation({
 export const saveFollowUps = mutation({
   args: {
     id: v.id("operatorRequests"),
-    clientToken: v.string(),
     answers: v.array(followUpAnswer),
     complete: v.boolean(),
   },
-  handler: async (ctx, { id, clientToken, answers, complete }) => {
-    await loadOwnedDraft(ctx, id, clientToken);
+  handler: async (ctx, { id, answers, complete }) => {
+    await loadOwnedDraft(ctx, id);
     await ctx.db.patch(id, {
       followUps: validateFollowUps(answers),
       followUpsComplete: complete,
@@ -79,11 +86,49 @@ export const saveFollowUps = mutation({
 });
 
 // The caller's own draft, without its token. Throws "Draft not found" for an
-// unknown id or a wrong token.
+// unknown id or someone else's request.
 export const getDraft = query({
+  args: { id: v.id("operatorRequests") },
+  handler: async (ctx, { id }) => withoutToken(await loadOwnedDraft(ctx, id)),
+});
+
+// The caller's own requests, most recently created first.
+export const listMine = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const user = await requireClient(ctx);
+    const n = Math.min(Math.max(Math.floor(limit ?? 20), 1), 50);
+    const rows = await ctx.db
+      .query("operatorRequests")
+      .withIndex("by_owner", (q) => q.eq("ownerId", user._id))
+      .order("desc")
+      .take(n);
+    return rows.map(withoutToken);
+  },
+});
+
+// Moves a draft saved before accounts existed (protected only by the browser's
+// clientToken) into the caller's account, together with its bounties. Works once:
+// a draft that already has an owner is "not found" to everyone else, and the token
+// grants nothing afterwards.
+export const claimLegacyDraft = mutation({
   args: { id: v.id("operatorRequests"), clientToken: v.string() },
-  handler: async (ctx, { id, clientToken }) =>
-    withoutToken(await loadOwnedDraft(ctx, id, clientToken)),
+  handler: async (ctx, { id, clientToken }) => {
+    const user = await requireClient(ctx);
+    const doc = await ctx.db.get(id);
+    if (!doc || doc.clientToken === undefined || doc.clientToken !== clientToken) {
+      throw new ConvexError(DRAFT_NOT_FOUND);
+    }
+    if (doc.ownerId === user._id) return id;
+    if (doc.ownerId !== undefined) throw new ConvexError(DRAFT_NOT_FOUND);
+    await ctx.db.patch(id, { ownerId: user._id });
+    const bounties = await ctx.db
+      .query("bounties")
+      .withIndex("by_request", (q) => q.eq("requestId", id))
+      .collect();
+    for (const b of bounties) await ctx.db.patch(b._id, { ownerId: user._id });
+    return id;
+  },
 });
 
 // ---- internal only: not callable from browsers ---------------------------------

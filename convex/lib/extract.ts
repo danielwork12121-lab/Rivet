@@ -4,6 +4,7 @@
 import { normalizeTask, type Intent, type Requirement } from "./decide";
 import { isSpecName, toCanonical, type SpecName } from "./specs";
 import { numberAppears, verifyEvidence, type Evidence } from "./verify";
+import { verifiedImage } from "./images";
 
 // ---------- The operator's message (fast layer) ----------
 
@@ -46,13 +47,14 @@ export type RawRobotPage = {
   laborSavedPercent: Evidence;
   specs: { name: string; value: number; unit: string; quote: string }[];
   environments: string[];
+  imageUrl?: string | null; // a photo URL linked in the page text
 };
 
 const DEFAULT_OPEX_SHARE = 0.08; // running cost per year as a share of price, when the page doesn't say
 const DEFAULT_AUTOMATION = 0.5; // share of the task's labor replaced, when the page doesn't say
 
 // A robots-table row from one page, or null if the page isn't a robot product.
-export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: string }, task: string) {
+export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: string; imageUrl?: string }, task: string) {
   if (!raw.isRobotProduct || !raw.name.trim()) return null;
   const assumptions: string[] = [];
 
@@ -96,5 +98,12 @@ export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: 
     environments: raw.environments.slice(0, 10),
     specs,
     assumptions,
+    ...imageOf(raw, page),
   };
+}
+
+// The robot's photo: one the AI found linked in the page text, else the page's own main image.
+function imageOf(raw: RawRobotPage, page: { url: string; markdown: string; imageUrl?: string }) {
+  const imageUrl = verifiedImage(raw.imageUrl, page) ?? page.imageUrl;
+  return imageUrl ? { imageUrl } : {};
 }

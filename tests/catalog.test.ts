@@ -7,9 +7,9 @@ import { PAGE_SAMPLE_PRODUCTS } from "../convex/robots";
 beforeAll(async () => { await import("../js/rivet-api.js"); });
 const api = () => (globalThis as any).RivetApi;
 
-// The page's built-in PRODUCTS array, read straight from Trevor's HTML.
+// The page's built-in PRODUCTS array, read straight from the deployed page's HTML.
 function pageProducts() {
-  const html = readFileSync(new URL("../Robot Bounty Client Flow.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../pages/robot-bounty-client-flow.html", import.meta.url), "utf8");
   const literal = html.match(/const PRODUCTS = (\[[\s\S]*?\n\]);/)?.[1];
   if (!literal) throw new Error("PRODUCTS not found in the page");
   return new Function(`return ${literal};`)();
@@ -20,9 +20,17 @@ const asRows = () =>
   PAGE_SAMPLE_PRODUCTS.map((p, i) => ({ ...p, regions: [...p.regions], _id: `robot${i}`, sample: true }));
 
 describe("catalog", () => {
-  it("Convex's copy of the page products matches the page exactly (no drift)", () => {
-    const fromConvex = api().robotsToProducts(asRows()).map(({ robotId: _r, sample: _s, ...p }: any) => p);
-    expect(fromConvex).toEqual(pageProducts());
+  // The page used to carry the same fictional products as robots:seed. They were removed so
+  // operators only ever see real robots; Convex keeps its fictional copy for demos and tests,
+  // hidden unless SHOW_SAMPLE_ROBOTS=true (convex/matching.ts) and never ranked by the agent.
+  it("the client-flow page lists no fictional products", () => {
+    expect(pageProducts()).toEqual([]);
+  });
+
+  it("Convex's fictional copy is still mapped whole and marked as sample data", () => {
+    const fromConvex = api().robotsToProducts(asRows());
+    expect(fromConvex).toHaveLength(PAGE_SAMPLE_PRODUCTS.length);
+    expect(fromConvex.every((p: any) => p.sample === true)).toBe(true);
   });
 
   it("maps only page-mirrored robots, in p1..pN order, keeping the Convex id", () => {

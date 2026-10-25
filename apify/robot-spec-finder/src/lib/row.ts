@@ -28,6 +28,7 @@ export function toDatasetRow(robot: Robot, checkedAt: string) {
     vendor: robot.vendor,
     task: robot.task,
     url: robot.url,
+    imageUrl: robot.imageUrl, // product photo from the vendor's page, or null
     priceAvailable: pricing.model !== "none",
     pricingModel: pricing.model, // "purchase" | "subscription" | "none"
     priceSummary: pricing.note,

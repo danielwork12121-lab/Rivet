@@ -89,19 +89,41 @@
 </main>
 
 <script src="../js/rivet-config.js"></script>
+<script src="../js/rivet-auth.js"></script>
 <script src="../js/rivet-api.js"></script>
 <script>
-  // The backend URL comes from js/rivet-config.js.
+  // The backend URL comes from js/rivet-config.js (or the site's /api/config). The finder is for
+  // signed-in Client accounts: the backend checks the account on every call and runs the paid
+  // search only when AI matching is switched on and budget remains.
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
   let draft = null, timer = null;
 
+  // Signed-out visitors log in first; accounts without a role finish setting up; Developers are told
+  // the finder is for Clients. The backend enforces all of this anyway.
+  (async () => {
+    try {
+      const st = await RivetAuth.current();
+      if (!st.signedIn) { location.href = RivetAuth.pageUrl("login") + "?reason=signin"; return; }
+      const account = await RivetApi.ensureAccount();
+      if (!account.role) { location.href = RivetAuth.pageUrl("signup") + "?reason=finish"; return; }
+      if (account.role !== "client") {
+        $("go").disabled = true;
+        $("progress").hidden = false;
+        $("status").innerHTML = `<span class="error">The robot finder is for Client accounts.</span>`;
+      }
+    } catch (err) {
+      $("progress").hidden = false;
+      $("status").innerHTML = `<span class="error">${esc(RivetApi.friendlyError(err))}</span>`;
+    }
+  })();
+
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     $("go").disabled = true;
     try {
-      const token = RivetApi.newClientToken();
+      const token = RivetApi.newClientToken(); // retry key only: a repeated submit can't duplicate
       const cost = Number($("cost").value);
       const args = {
         title: `${$("type").value} — robot finder request`.slice(0, 120),
@@ -111,9 +133,9 @@
       };
       if (cost > 0) args.cost = { currency: "USD", currentAnnualCost: cost };
       const id = await RivetApi.createRequest(args);
-      draft = { id, token };
+      draft = { id };
       spoken.clear();
-      await RivetApi.findRobots(id, token);
+      await RivetApi.findRobots(id);
       watch();
     } catch (err) {
       $("progress").hidden = false;
@@ -127,7 +149,7 @@
     const n = Number($("askCost").value);
     if (!(n > 0) || !draft) return;
     $("askGo").disabled = true;
-    await RivetApi.setTaskCost(draft.id, draft.token, n);
+    await RivetApi.setTaskCost(draft.id, n);
     $("askGo").disabled = false;
     spoken.clear();
     watch();
@@ -138,7 +160,7 @@
     clearInterval(timer);
     $("progress").hidden = false;
     timer = setInterval(async () => {
-      const m = await RivetApi.latestMatch(draft.id, draft.token).catch(() => null);
+      const m = await RivetApi.latestMatch(draft.id).catch(() => null);
       if (!m) return;
       render(m);
       if (m.status === "done" || m.status === "failed") { clearInterval(timer); $("go").disabled = false; }

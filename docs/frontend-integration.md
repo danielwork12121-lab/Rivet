@@ -8,9 +8,10 @@ You need one value from the backend owner: the **deployment URL**. For local
 development it is `http://127.0.0.1:3210` (the backend owner must have
 `npx convex dev` running on their machine, so it is reachable only from that
 machine). A cloud deployment will look like `https://<name>.convex.cloud`. The URL is
-public (not a secret) and is the only configuration. There are no accounts. A draft
-request is protected only by its **client token**: the browser generates it, keeps it,
-and must send it to read or change that draft. Fictional demo data only.
+public (not a secret). **Accounts**: every protected function needs a signed-in Clerk
+session with the right role, and works only on the caller's own data. See
+[accounts-and-access.md](accounts-and-access.md) for roles, sign-in and the full access table.
+Fictional demo data only.
 
 CORS needs no setup: Convex accepts browser requests from any origin, so
 `file://`, `localhost` and any hosting all work.
@@ -22,7 +23,8 @@ CORS needs no setup: Convex accepts browser requests from any origin, so
 
   const client = new ConvexHttpClient("http://127.0.0.1:3210"); // or the cloud URL
 
-  const clientToken = crypto.randomUUID(); // one per draft; keep it with the id
+  // client.setAuth(fetchClerkSessionToken) first: see js/rivet-api.js
+  const clientToken = crypto.randomUUID(); // retry key: one per draft, so retries never duplicate
   const intake = {
     title: "Fictional Culvert Co. — inspection request",
     description: "Fictional: culverts need yearly inspection.",
@@ -33,9 +35,9 @@ CORS needs no setup: Convex accepts browser requests from any origin, so
   // Create once (retrying with the same token returns the same id)
   const id = await client.mutation("requests:create", { ...intake, clientToken });
   // Edit the same request later
-  await client.mutation("requests:updateIntake", { id, clientToken, ...intake, description: "Edited." });
+  await client.mutation("requests:updateIntake", { id, ...intake, description: "Edited." });
   // Read it back (e.g. after a refresh)
-  const draft = await client.query("requests:getDraft", { id, clientToken });
+  const draft = await client.query("requests:getDraft", { id });
 </script>
 ```
 
@@ -69,13 +71,15 @@ Every public function, and what protects it:
 
 | Function | Kind | Access |
 |---|---|---|
-| `requests:create` | mutation | open (creates; returns an id) |
-| `requests:updateIntake`, `requests:saveFollowUps`, `requests:getDraft` | mutation/query | draft token |
-| `bounties:post`, `bounties:getMine` | mutation/query | draft token |
-| `bounties:listPosted` | query | open: public projection only |
-| `agent:generateSpec`, `agent:answerQuestions`, `agent:recommend`, `agent:requestBounty` | mutation | draft token (each starts a paid Claude call) |
-| `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty`, `agent:specStatus` | query | draft token |
-| `agent:aiStatus` | query | open: returns only `{ available: boolean }` |
+| `requests:create`, `requests:listMine`, `requests:claimLegacyDraft` | mutation/query | signed-in Client |
+| `requests:updateIntake`, `requests:saveFollowUps`, `requests:getDraft` | mutation/query | the owning Client |
+| `bounties:post`, `bounties:getMine` | mutation/query | the owning Client |
+| `bounties:listPosted` | query | approved Developer: public projection only |
+| `agent:generateSpec`, `agent:answerQuestions`, `agent:recommend`, `agent:requestBounty` | mutation | the owning Client (each starts a paid Claude call) |
+| `agent:latestSpec`, `agent:latestPicks`, `agent:latestBounty`, `agent:specStatus` | query | the owning Client |
+| `users:me`, `users:ensureAccount`, `users:chooseRole`, `users:redeemDeveloperInvite` | query/mutation | see accounts-and-access.md |
+| `agent:aiStatus` | query | open: `{ available }`, plus `reason` (`no_key`, `daily_limit`) and a safe `message` when unavailable |
+| `aiBudget:reserveChat` | mutation | server only: requires `RIVET_SERVER_SECRET` and the visitor's Client session (called by Vercel's `/api/chat`) |
 | `robots:search`, `robots:get` | query | open (fictional catalog, no private data) |
 
 **Not public** (internal, backend/CLI only): `requests:get`, `requests:list`,
@@ -86,10 +90,11 @@ browser fails with "Could not find public function".
 ### Changes from the first version of this contract
 | Before | Now | Why |
 |---|---|---|
-| `requests:get({ id })` public | `requests:getDraft({ id, clientToken })`; `get` is internal | Anyone with an id could read the record, including its token |
+| `requests:get({ id })` public | `requests:getDraft({ id })` for the owner; `get` is internal | Anyone with an id could read the record, including its token |
 | `requests:list` public | internal | Returned every operator, including "Stay anonymous" ones |
 | Edits created a new request | `requests:updateIntake` edits the same record | One request per operator draft |
-| Responses included `clientToken` | Never returned | The token is the only thing protecting a draft |
+| Responses included `clientToken` | Never returned | It used to protect the draft |
+| A draft was protected by its `clientToken` | It belongs to the signed-in Client account (`ownerId`); the token only makes retries safe | Tokens could be copied; accounts are verified by Clerk |
 
 ### `requests:create` (mutation)
 | Arg | Type | Rules |
@@ -104,22 +109,22 @@ browser fails with "Could not find public function".
 | `cost.budget` | number | optional, ≥0 |
 | `cost.notes` | string | optional, ≤1000 |
 | `profile` | object | optional. See below |
-| `clientToken` | string | optional, 8–100 chars of letters, digits, `-`, `_`. **Makes retries safe**: if a request with this token already exists, its id is returned and nothing is inserted. Generate one per logical submission (`crypto.randomUUID()`) and reuse it when retrying the same submission |
+| `clientToken` | string | optional, 8–100 chars of letters, digits, `-`, `_`. **Makes retries safe**: if this account already created a request with this token, its id is returned and nothing is inserted. Generate one per logical submission (`crypto.randomUUID()`) and reuse it when retrying the same submission |
 
 `profile` fields: `companyName` (1–100), `businessType` (1–50, free text), `region` (1–50, free text),
 `crewCount` (whole number 1–10000), `peoplePerCrew` (optional, whole number 1–10000),
 `hourlyLaborCost` (>0, ≤10000), `visibility` (`"shared"` or `"anonymous"`).
 
-Returns: the new request's id (string). A request created without `clientToken` can
-never be read or edited through the public API.
+Returns: the new request's id (string), owned by the signed-in Client. Without
+`clientToken`, every call creates a new request.
 
 ### `requests:updateIntake` (mutation)
-Args: `{ id, clientToken, ...same fields as create (without clientToken) }`. Replaces the
+Args: `{ id, ...same fields as create (without clientToken) }`. Replaces the
 step 1 fields of that draft; an omitted `cost`/`profile` is removed. Follow-up answers and
 `status` are kept. Returns the id. Same validation as `create`.
 
 ### `requests:saveFollowUps` (mutation)
-Args: `{ id, clientToken, answers, complete }`. Replaces the whole answer set.
+Args: `{ id, answers, complete }`. Replaces the whole answer set.
 `complete` (boolean) is the client saying every question was answered. Send only questions
 the user actually answered, never pre-filled defaults.
 
@@ -133,11 +138,11 @@ the user actually answered, never pre-filled defaults.
 At most 10 answers. An empty array clears saved answers.
 
 ### `requests:getDraft` (query)
-Args: `{ id, clientToken }`. Returns the draft (shape below, without `clientToken`).
+Args: `{ id }`. Returns the caller's draft (shape below, without `clientToken` or `ownerId`).
 
 ### Draft errors
 `getDraft`, `updateIntake` and `saveFollowUps` reject with `err.data === "Draft not found"`
-for an unknown id **or** a wrong token (deliberately indistinguishable). A malformed id
+for an unknown id **or** another account's request (deliberately indistinguishable). A malformed id
 rejects with a generic error.
 
 ### Returned draft shape
@@ -167,7 +172,7 @@ absent (not null) when not set.
 ## Shared bounties
 
 ### `bounties:post` (mutation)
-Args: `{ requestId, clientToken, taskKey, title, specLines, gaps, note, industry, pledgePercent, pledged, goal }`.
+Args: `{ requestId, taskKey, title, specLines, gaps, note, industry, pledgePercent, pledged, goal }`.
 Posts the operator's bounty for one task, or updates it if that request already posted for
 that task, so retries never create a second bounty. Returns the bounty id.
 Rejected for requests whose profile says `visibility: "anonymous"`.
@@ -184,12 +189,14 @@ Rejected for requests whose profile says `visibility: "anonymous"`.
 | `pledged`, `goal` | USD, ≥0 and >0. **Illustrative demo figures, not commitments** |
 
 ### `bounties:getMine` (query)
-Args: `{ requestId, clientToken }`. The owner's posted bounties, newest first (full rows).
+Args: `{ requestId }`. The owner's posted bounties, newest first (full rows).
 
 ### `bounties:listPosted` (query)
 Args: `{ limit?: number }` (default 50, 1–100). Posted bounties, newest first, as
 `{ _id, _creationTime, title, taskKey, industry, region, specLines, goal, pledged }`.
-No request id, company name, token, gaps, note or AI drafts.
+No request id, owner, company name, token, gaps, note or AI drafts. Approved Developers only.
+It is a live query: `RivetApi.watchPostedBounties(onData, onError)` subscribes, so newly posted
+bounties appear without a refresh.
 
 ### Draft vs posted
 The `bounties` table holds both. `status: "draft"` rows are AI-written briefs
@@ -198,20 +205,22 @@ The `bounties` table holds both. `status: "draft"` rows are AI-written briefs
 
 ## For the AI teammate (agent functions)
 The agent from `feature/agent` is merged with these changes:
-- Every public `agent:*` function now takes `{ requestId, clientToken, ... }` and rejects a
-  wrong token with `"Draft not found"`. The page must pass the draft token it already holds.
-- `agent:requestContext` strips `clientToken` before the request is sent to Claude.
+- Every public `agent:*` function takes `{ requestId, ... }` and needs the signed-in Client that
+  owns the request; anyone else gets `"Draft not found"`. `clientToken` is still accepted for
+  older callers and ignored. Paid calls also count against a per-account daily limit.
+- `agent:requestContext` strips `clientToken` and `ownerId` before the request is sent to Claude.
 - `ai:hello` and `ai:runEvals` are internal: run them with `npx convex run ai:hello`.
 - AI-written bounties are saved as private drafts (`status: "draft"`, `source: "ai"`).
 - Failed runs (`spec`, `recommend`, `bounty`) are logged to `agentRuns` with `ok: false`.
 - **Spec runs are jobs** (`aiJobs`): `queued` → `running` → `succeeded` | `failed`.
-  - `agent:generateSpec({ requestId, clientToken })` returns `{ jobId, reused }`. A queued or
+  - `agent:generateSpec({ requestId })` returns `{ jobId, reused }`. A queued or
     running job is reused, so repeated clicks never start a second paid call (a run stuck for
     over 10 minutes stops blocking). Without `ANTHROPIC_API_KEY` it rejects with
     `err.data = "AI drafting is unavailable: no Anthropic API key is configured on the backend."`
     and queues nothing.
-  - `agent:specStatus({ requestId, clientToken })` returns `{ available, job, spec, stale,
-    clarifications }`. `job.errorKind` is `"unavailable"` (missing/rejected credentials) or
+  - `agent:specStatus({ requestId })` returns `{ available, unavailableReason,
+    unavailableMessage, job, spec, stale, clarifications }`. `unavailableReason` is `no_key`,
+    `daily_limit`, `request_limit` or `user_limit` (see the limits in docs/intake-integration.md). `job.errorKind` is `"unavailable"` (missing/rejected credentials) or
     `"model_error"`; `job.error` is safe to show. `stale` is true when the request (intake or
     follow-up answers) changed after the AI read it. `clarifications` are answers to the AI's
     own questions, separate from the fixed `followUps`.

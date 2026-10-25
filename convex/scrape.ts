@@ -10,12 +10,16 @@ import { pickUrls, searchQueries } from "./lib/discovery";
 import { normalizeTask } from "./lib/decide";
 import { callActor, datasetItems, getRun, isRunning, startActor } from "./lib/apify";
 import { robotFromActorRow, type ActorRow } from "./lib/actorRows";
+import { pageImage, type CrawledPage } from "./lib/images";
 
 const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets at most 4
 
 // Our own Robot Spec Finder Actor, e.g. "yourname/robot-spec-finder". When it is set,
-// searches run on it instead of the built-in Google -> crawl -> extract steps:
+// searches run on it instead of the built-in Google -> crawl steps:
 // npx convex env set APIFY_ACTOR_ID 'yourname/robot-spec-finder'
+// It runs with crawlOnly: it finds and crawls the vendor pages and returns their text. Claude
+// reads them here (ai.extractPages), so ANTHROPIC_API_KEY never goes into an Apify run's input,
+// which Apify stores and shows. The Actor must be a version that has the crawlOnly input.
 const finderActor = () => process.env.APIFY_ACTOR_ID;
 const CHECK_EVERY_MS = 30_000;
 const GIVE_UP_MS = 14 * 60 * 1000; // discovery.ts treats a search older than 15 minutes as crashed
@@ -33,7 +37,7 @@ export const discover = internalAction({
         const run = await startActor(actorId, {
           task: d.task,
           searchPhrase: d.searchPhrase,
-          anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+          crawlOnly: true, // no AI inside Apify, so no key in the input
           maxSites: Number(process.env.APIFY_MAX_SITES) || 8, // pages to read; more = slower but more robots
         });
         await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "crawling" });
@@ -91,22 +95,33 @@ async function crawlAndExtract(ctx: ActionCtx, discoveryId: Id<"discoveries">, u
       },
       WAIT_SECS,
     );
-    const items = await datasetItems(run.defaultDatasetId);
-    for (const item of items as { url?: string; markdown?: string; text?: string; metadata?: { title?: string } }[]) {
-      const markdown = item.markdown ?? item.text ?? "";
-      if (!item.url || markdown.length < 200) continue; // blocked or empty pages
-      await ctx.runMutation(internal.discovery.savePage, {
-        discoveryId, url: item.url, title: item.metadata?.title ?? "", markdown: markdown.slice(0, 200_000),
-      });
-    }
+    await savePages(ctx, discoveryId, await datasetItems(run.defaultDatasetId));
   }
   await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "extracting" });
   await ctx.scheduler.runAfter(0, internal.ai.extractPages, { discoveryId });
 }
 
+type PageItem = CrawledPage & { title?: string; metadata?: CrawledPage["metadata"] & { title?: string } };
+
+// Stores crawled pages for ai.extractPages. Returns how many were usable.
+async function savePages(ctx: ActionCtx, discoveryId: Id<"discoveries">, items: unknown[]): Promise<number> {
+  let saved = 0;
+  for (const item of items as PageItem[]) {
+    const markdown = item.markdown ?? item.text ?? "";
+    if (!item.url || markdown.length < 200) continue; // blocked or empty pages
+    await ctx.runMutation(internal.discovery.savePage, {
+      discoveryId, url: item.url, title: item.title ?? item.metadata?.title ?? "", markdown: markdown.slice(0, 200_000),
+      ...(pageImage(item) ? { imageUrl: pageImage(item)! } : {}),
+    });
+    saved++;
+  }
+  return saved;
+}
+
 // ---------- Our Robot Spec Finder Actor ----------
 
-// Checks on a finder run every 30 seconds; saves its robots when it finishes.
+// Checks on a finder run every 30 seconds. A crawlOnly run returns pages, which go to Claude here;
+// a run made by hand with its own key (importFinderRun) returns finished robot rows instead.
 export const checkFinderRun = internalAction({
   args: { discoveryId: v.id("discoveries"), runId: v.string(), startedAt: v.number() },
   handler: async (ctx, { discoveryId, runId, startedAt }) => {
@@ -123,7 +138,19 @@ export const checkFinderRun = internalAction({
     }
     const d = await ctx.runQuery(internal.discovery.get, { discoveryId });
     if (!d) return;
-    const found = await saveActorRows(ctx, run.defaultDatasetId, d.task);
+    const items = await datasetItems(run.defaultDatasetId);
+    const isPage = (i: unknown) => typeof (i as PageItem).markdown === "string" && !(i as ActorRow).name;
+    if (items.some(isPage)) {
+      const pages = await savePages(ctx, discoveryId, items.filter(isPage));
+      if (pages > 0) {
+        await ctx.runMutation(internal.discovery.setStatus, { discoveryId, status: "extracting" });
+        await ctx.scheduler.runAfter(0, internal.ai.extractPages, { discoveryId });
+        return;
+      }
+      await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound: 0 });
+      return;
+    }
+    const found = await saveActorRows(ctx, items, d.task);
     await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound: found });
   },
 });
@@ -135,14 +162,13 @@ export const importFinderRun = internalAction({
   handler: async (ctx, { task, runId }): Promise<string> => {
     const run = await getRun(runId);
     const discoveryId: Id<"discoveries"> = await ctx.runMutation(internal.discovery.startManual, { task });
-    const found = await saveActorRows(ctx, run.defaultDatasetId, normalizeTask(task));
+    const found = await saveActorRows(ctx, await datasetItems(run.defaultDatasetId), normalizeTask(task));
     await ctx.runMutation(internal.discovery.finish, { discoveryId, status: "done", robotsFound: found });
     return `Saved ${found} robots for "${normalizeTask(task)}"`;
   },
 });
 
-async function saveActorRows(ctx: ActionCtx, datasetId: string, task: string): Promise<number> {
-  const items = await datasetItems(datasetId);
+async function saveActorRows(ctx: ActionCtx, items: unknown[], task: string): Promise<number> {
   let found = 0;
   for (const item of items as ActorRow[]) {
     const robot = robotFromActorRow(item, task);

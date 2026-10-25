@@ -2,6 +2,7 @@
 // numbers are checked against the source text and units are converted by
 // lib/specs.ts, so a mistake by the AI becomes "unknown" instead of a wrong fact.
 import { normalizeTask, type Intent, type Requirement } from "./decide.js";
+import { verifiedImage } from "./images.js";
 import { isSpecName, toCanonical, type SpecName } from "./specs.js";
 import { numberAppears, verifyEvidence, type Evidence } from "./verify.js";
 
@@ -48,6 +49,7 @@ export type RawRobotPage = {
   laborSavedPercent: Evidence;
   specs: { name: string; value: number; unit: string; quote: string }[];
   environments: string[];
+  imageUrl?: string | null; // a photo URL linked in the page text
 };
 
 export type Pricing =
@@ -91,7 +93,7 @@ export function pricingFrom(raw: RawRobotPage, markdown: string): Pricing {
 }
 
 // One robot from one page, or null if the page isn't a robot product.
-export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: string }, task: string) {
+export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: string; imageUrl?: string | null }, task: string) {
   if (!raw.isRobotProduct || !raw.name.trim()) return null;
   const assumptions: string[] = [];
   const pricing = pricingFrom(raw, page.markdown);
@@ -140,5 +142,7 @@ export function robotFromPage(raw: RawRobotPage, page: { url: string; markdown: 
     environments: raw.environments.slice(0, 10),
     specs,
     assumptions,
+    // A photo the AI found linked in the page text, else the page's own main image.
+    imageUrl: verifiedImage(raw.imageUrl, page) ?? page.imageUrl ?? null,
   };
 }

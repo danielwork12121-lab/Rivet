@@ -6,6 +6,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { asClient } from "../tests/auth-helpers";
 
 const modules = import.meta.glob("./**/*.*s");
 const token = "ai-test-token-0001";
@@ -16,7 +17,7 @@ afterEach(() => {
 });
 
 async function setupJob() {
-  const t = convexTest(schema, modules);
+  const t = await asClient(convexTest(schema, modules));
   const requestId = await t.mutation(api.requests.create, {
     title: "Fictional Lawn Co. — mowing", description: "Fictional: 3 crews mow 120 lawns a week.",
     environment: "Lawn care operation, West region.", constraints: [], clientToken: token,
@@ -24,9 +25,9 @@ async function setupJob() {
   // Queue a job the way the page does; the scheduled copy never runs (no timers advanced).
   vi.stubEnv("ANTHROPIC_API_KEY", "test-key-not-real");
   vi.useFakeTimers();
-  const { jobId } = await t.mutation(api.agent.generateSpec, { requestId, clientToken: token });
+  const { jobId } = await t.mutation(api.agent.generateSpec, { requestId });
   vi.useRealTimers();
-  const status = () => t.query(api.agent.specStatus, { requestId, clientToken: token });
+  const status = () => t.query(api.agent.specStatus, { requestId });
   const runs = () => t.run((ctx) => ctx.db.query("agentRuns").collect());
   return { t, requestId, jobId, status, runs };
 }
@@ -95,7 +96,7 @@ describe("extractSpec (real action, stubbed transport)", () => {
       confidence: 1, followUpQuestions: ["q1", "q2", "q3"],
     });
     expect(s.spec?.requirements[0]).not.toHaveProperty("value");
-    expect((await t.query(api.requests.getDraft, { id: requestId, clientToken: token })).status).toBe("specified");
+    expect((await t.query(api.requests.getDraft, { id: requestId })).status).toBe("specified");
   });
 
   it("a second pickup of the same job does nothing (no second paid call)", async () => {
