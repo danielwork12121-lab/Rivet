@@ -171,7 +171,9 @@ describe("matchRobots (real action, stubbed transport)", () => {
     const { t, matchId, latest } = await setup();
     stubClaude(intentFixture);
     await t.action(internal.ai.matchRobots, { matchId }); // DISCOVERY_ENABLED is not set
-    expect((await latest())!.searchNote).toMatch(/Web search is turned off/);
+    const note = (await latest())!.searchNote!;
+    expect(note).toBe("Web search is off for this deployment; results come from Rivet's catalog.");
+    expect(note).not.toMatch(/DISCOVERY_ENABLED|APIFY_TOKEN|\bset\b|backend/);
   });
 
   it("suggests a bounty listing the gap when no robot meets a must-have", async () => {
@@ -231,13 +233,23 @@ describe("extractPages (real action, stubbed transport)", () => {
 });
 
 describe("discovery.finish", () => {
-  it("tells waiting matches that the search failed, with the reason", async () => {
+  it("tells waiting matches that the search failed, hiding an internal reason", async () => {
     const { t, matchId, latest } = await setup();
     const discoveryId = await t.run((ctx) => ctx.db.insert("discoveries", {
       task: "mowing", searchPhrase: "x", status: "crawling", urls: [], robotsFound: 0, waitingMatches: [matchId],
     }));
     vi.useFakeTimers();
     await t.mutation(internal.discovery.finish, { discoveryId, status: "failed", robotsFound: 0, error: "Apify POST /acts/x/runs failed: 400 invalid input" });
-    expect((await latest())!.searchNote).toBe("Web search failed: Apify POST /acts/x/runs failed: 400 invalid input");
+    expect((await latest())!.searchNote).toBe("Web search didn't work this time; results come from Rivet's catalog. Try again later.");
+  });
+
+  it("never passes an env var name from a failed search on to the match", async () => {
+    const { t, matchId, latest } = await setup();
+    const discoveryId = await t.run((ctx) => ctx.db.insert("discoveries", {
+      task: "mowing", searchPhrase: "x", status: "crawling", urls: [], robotsFound: 0, waitingMatches: [matchId],
+    }));
+    vi.useFakeTimers();
+    await t.mutation(internal.discovery.finish, { discoveryId, status: "failed", robotsFound: 0, error: "Error: APIFY_TOKEN is not set in Convex" });
+    expect((await latest())!.searchNote).not.toMatch(/APIFY|TOKEN|Convex/);
   });
 });

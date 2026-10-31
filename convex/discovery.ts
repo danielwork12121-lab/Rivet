@@ -6,6 +6,7 @@ import { normalizeTask } from "./lib/decide";
 import { AI_BLOCK_MESSAGES, budgetBlock } from "./lib/aiBudget";
 import { requireClient } from "./lib/auth";
 import { env } from "./lib/env";
+import { SEARCH_OFF_NOTE, failedSearchNote } from "./lib/searchNote";
 
 // Database side of the web search for robots. The Apify calls live in scrape.ts
 // and the extraction in ai.ts; these functions track progress and store pages.
@@ -18,7 +19,8 @@ export const STUCK_MS = 15 * 60 * 1000; // a search older than this has crashed 
 // budget charged to the account whose match asked for it (lib/aiBudget.ts). The check and the
 // usage row are in this one mutation, so concurrent matches can't both take the last unit.
 const discoveryEnabled = () => env("DISCOVERY_ENABLED") === "true" && !!env("APIFY_TOKEN");
-const DISCOVERY_OFF = "Web search is turned off on this backend (set DISCOVERY_ENABLED=true and APIFY_TOKEN).";
+// The operator sees a neutral note; the setup hint is for developers, in the Convex logs only.
+const DISCOVERY_OFF_LOG = "web search skipped: discovery is off (needs DISCOVERY_ENABLED=true and APIFY_TOKEN)";
 
 // Tells the match why it went on without a web search, so the page can say so.
 async function noteSkipped(ctx: MutationCtx, matchId: Id<"matches"> | undefined, note: string) {
@@ -32,7 +34,8 @@ export const start = internalMutation({
   args: { task: v.string(), searchPhrase: v.string(), matchId: v.optional(v.id("matches")) },
   handler: async (ctx, { task, searchPhrase, matchId }) => {
     if (!discoveryEnabled()) {
-      await noteSkipped(ctx, matchId, DISCOVERY_OFF);
+      console.log(DISCOVERY_OFF_LOG);
+      await noteSkipped(ctx, matchId, SEARCH_OFF_NOTE);
       return "blocked" as const;
     }
     const key = normalizeTask(task);
@@ -152,7 +155,7 @@ export async function finishDiscovery(ctx: MutationCtx, discoveryId: Id<"discove
   if (lateFinish) return;
   // Tell each waiting match how the search went, so an empty result isn't read as "no product".
   const note = result.status === "failed"
-    ? `Web search failed: ${(result.error ?? "unknown error").replace(/\s+/g, " ").slice(0, 200)}`
+    ? failedSearchNote(result.error)
     : result.robotsFound === 0 ? `The web search for "${d.task}" robots read the pages it found but none described a robot.` : null;
   for (const matchId of d.waitingMatches) {
     if (note && (await ctx.db.get(matchId))) await ctx.db.patch(matchId, { searchNote: note });

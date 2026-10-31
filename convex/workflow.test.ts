@@ -96,6 +96,21 @@ describe("workflow breakdown", () => {
     expect((await t.query(api.agent.latestWorkflow, { requestId }))!.steps[0].annualCost).toBe(80000);
   });
 
+  it("shows a skipped step's search note without env var names, even one stored in the old wording", async () => {
+    const { raw, t, requestId, workflowId } = await setup();
+    stubClaude(split);
+    vi.useFakeTimers();
+    await raw.action(internal.ai.splitWorkflow, { workflowId });
+    vi.useRealTimers();
+    const wf = (await raw.run((ctx) => ctx.db.get(workflowId)))!;
+    const old = "Web search is turned off on this backend (set DISCOVERY_ENABLED=true and APIFY_TOKEN).";
+    await raw.run((ctx) => ctx.db.patch(wf.steps[1].matchId!, { status: "done", picks: [], searchNote: old }));
+    const view = (await t.query(api.agent.latestWorkflow, { requestId }))!;
+    expect(view.steps[1].verdict).toBe("skipped");
+    expect(view.steps[1].searchNote).toBe("Web search is off for this deployment; results come from Rivet's catalog.");
+    expect(JSON.stringify(view)).not.toMatch(/DISCOVERY_ENABLED|APIFY_TOKEN/);
+  });
+
   it("is owner-only and refuses bad slider values", async () => {
     const { raw, t, requestId, workflowId } = await setup();
     stubClaude(split);

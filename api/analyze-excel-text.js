@@ -132,7 +132,8 @@ export default async function handler(req, res) {
 
   const apiKey = env("ANTHROPIC_API_KEY");
   if (!apiKey) {
-    return errorRes(res, 500, "ANTHROPIC_API_KEY not configured");
+    console.error("analyze-excel: ANTHROPIC_API_KEY is not set"); // for developers (Vercel logs), not the response
+    return errorRes(res, 503, "Spreadsheet analysis is unavailable right now. Try again later.");
   }
 
   let body = req.body;

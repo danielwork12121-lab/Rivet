@@ -12,6 +12,7 @@ import { isSpecName } from "./lib/specs";
 import { numbersIn } from "./lib/verify";
 import { stepCost, stepVerdict, stepsToSearch, workflowSummary } from "./lib/workflow";
 import { env } from "./lib/env";
+import { isSearchSkippedNote, publicSearchNote } from "./lib/searchNote";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -365,7 +366,7 @@ export const logRun = internalMutation({
 // and this flow neither reads nor replaces them.
 
 const matchEnabled = () => env("AI_MATCH_ENABLED") === "true" && aiAvailable();
-const MATCH_OFF = "AI robot matching is turned off on this backend.";
+const MATCH_OFF = "AI robot matching is turned off for this deployment.";
 
 // The latest row this flow made for a request (rows from before `engine` existed count as ours).
 async function latestAgentMatch(ctx: QueryCtx, requestId: Id<"operatorRequests">) {
@@ -463,7 +464,7 @@ export const latestMatch = query({
       next: match.next ?? null,
       error: match.error ?? null,
       msToRanked: match.msToRanked ?? null,
-      searchNote: match.searchNote ?? null,
+      searchNote: publicSearchNote(match.searchNote),
       picks: robots,
       search: search && { status: search.status, sitesFound: search.urls.length },
     };
@@ -611,7 +612,7 @@ export const latestWorkflow = query({
       const picks = match ? await picksWithRobots(ctx, match.picks) : [];
       const verdict = stepVerdict(s.aiVerdict, match && {
         status: match.status, pickCount: match.picks.length, next: match.next ?? null,
-        searchSkipped: !!match.searchNote && /^Web search (is turned off|skipped|failed)/.test(match.searchNote),
+        searchSkipped: isSearchSkippedNote(match.searchNote),
       });
       const fits = picks.filter((p) => !p.fit.some((f) => f.mandatory && f.status === "misses"));
       const savings = fits.map((p) => p.yearlyNetSavings).filter((n): n is number => n !== null);
@@ -624,7 +625,7 @@ export const latestWorkflow = query({
         verdict,
         annualCost: stepCost(wf.laborCost, s.sharePct),
         matchStatus: match?.status ?? null,
-        searchNote: match?.searchNote ?? null,
+        searchNote: publicSearchNote(match?.searchNote),
         next: match?.next ?? null,
         search: search && { status: search.status, sitesFound: search.urls.length },
         picks,
@@ -687,7 +688,7 @@ export const checkStep = mutation({
     const s = wf.steps[step];
     if (!s) throw new ConvexError("No such step.");
     const existing = s.matchId ? await ctx.db.get(s.matchId) : null;
-    const skipped = existing?.status === "done" && existing.picks.length === 0 && /^Web search (is turned off|skipped|failed)/.test(existing.searchNote ?? "");
+    const skipped = existing?.status === "done" && existing.picks.length === 0 && isSearchSkippedNote(existing.searchNote);
     if (existing && existing.status !== "failed" && !skipped) return existing._id;
     await spendAiBudget(ctx, "match", { requestId, userId: request.ownerId });
     const matchId = await startStepMatch(ctx, wf, step);
