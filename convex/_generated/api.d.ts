@@ -21,6 +21,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_decide from "../lib/decide.js";
 import type * as lib_discovery from "../lib/discovery.js";
 import type * as lib_drafts from "../lib/drafts.js";
+import type * as lib_env from "../lib/env.js";
 import type * as lib_extract from "../lib/extract.js";
 import type * as lib_images from "../lib/images.js";
 import type * as lib_personas from "../lib/personas.js";
@@ -59,6 +60,7 @@ declare const fullApi: ApiFromModules<{
   "lib/decide": typeof lib_decide;
   "lib/discovery": typeof lib_discovery;
   "lib/drafts": typeof lib_drafts;
+  "lib/env": typeof lib_env;
   "lib/extract": typeof lib_extract;
   "lib/images": typeof lib_images;
   "lib/personas": typeof lib_personas;
