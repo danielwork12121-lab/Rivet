@@ -20,7 +20,7 @@
 - **Private, account-owned requests**: Convex verifies Clerk tokens, and owner-only functions check the caller via `ctx.auth` and the `by_owner` index (convex/lib/auth.ts, convex/requests.ts).
 - **Robot matching and saved requirements**: `matching:findRobots` ranks by code and saves the result; `overview` reads it back (convex/matching.ts, convex/schema.ts).
 - **Job breakdown and web search**: mutations queue internal actions with the scheduler; the page polls for progress (convex/agent.ts, convex/ai.ts).
-- **Stuck-work sweeper**: a cron runs every 2 minutes (convex/crons.ts, convex/sweep.ts).
+- **Stuck-work sweeper**: a cron runs every 5 minutes (convex/crons.ts, convex/sweep.ts).
 - **Spend limits**: serializable mutations count usage before any paid call (convex/lib/aiBudget.ts).
 
 ## Log

@@ -294,7 +294,9 @@ export default defineSchema({
     waitingMatches: v.array(v.id("matches")),
     error: v.optional(v.string()),
     finishedAt: v.optional(v.number()),
-  }).index("by_task", ["task"]),
+  })
+    .index("by_task", ["task"])
+    .index("by_status", ["status"]),
 
   // Raw crawled pages, kept so extraction can be re-run without paying to scrape again.
   pages: defineTable({
@@ -330,7 +332,9 @@ export default defineSchema({
     step: v.optional(v.number()),
     // Why this match has no fresh web results: search off, a daily limit, or a search that found none.
     searchNote: v.optional(v.string()),
-  }).index("by_request", ["requestId"]),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_status", ["status"]),
 
   // A job split into steps (agent:planWorkflow): what share of the week each step takes, and
   // whether a robot could do it. The biggest steps a robot might do each get a match.
@@ -342,7 +346,9 @@ export default defineSchema({
     budget: v.union(v.number(), v.null()), // per robot, if the Client wrote one
     requirements: intentInfo.fields.requirements, // apply to every step's search
     error: v.optional(v.string()),
-  }).index("by_request", ["requestId"]),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_status", ["status"]),
 
   // The AI's "best for you" picks for a request.
   recommendations: defineTable({
