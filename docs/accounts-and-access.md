@@ -170,3 +170,19 @@ key, token or secret field. The deployed Actor must be a version that has the `c
   the next call opens a fresh one.
 - The login page's "Keep me logged in" box is cosmetic. Session length is a Clerk instance
   setting.
+- Every `RivetApi` call waits (up to 8 s) until the socket's sign-in is settled: Clerk has said
+  whether anyone is signed in and, if so, Convex has accepted or refused the token. Before this, a
+  call made while clerk-js was still loading (e.g. the first job sent on Find a solution) went out
+  anonymously and came back "Please sign in to continue." although the person was signed in.
+- convex 1.48 falls back to anonymous for good if one token fetch fails (e.g. in a sleeping tab).
+  `js/rivet-api.js` re-sends the token before the next call when that happened, and a call refused
+  as signed out while Clerk still has a session is re-authenticated and retried once (safe: the
+  backend refuses before changing anything). If it is still refused, the page says Rivet couldn't
+  confirm the sign-in instead of "Please sign in".
+- A Clerk account older than the Convex deployment (e.g. after moving backends) has no `users`
+  row there. On "Finish setting up your account first." the pages call `users:ensureAccount`
+  themselves and retry; if the account has no role, Find a solution asks "Choose how you'll use
+  Rivet" inline (Client chooses at once; "I build robots" goes to sign-up's finish step). No role
+  is ever assumed.
+- While signed in, the header nav's "Log in" link reads "Account" (title: the email); it opens
+  the login page, which shows the account and "Sign out".
