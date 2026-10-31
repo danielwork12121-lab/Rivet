@@ -167,8 +167,10 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
   var priceRaw = qp('price');
   var price = priceRaw === '' ? null : Number(priceRaw);
   if (price !== null && !isFinite(price)) price = null;
-  var img = qp('img');
+  var img = /^https?:\/\//i.test(qp('img')) ? qp('img') : '';
+  var url = /^https?:\/\//i.test(qp('url')) ? qp('url') : '';
   var robotId = qp('robotId');
+  var requestId = qp('requestId');
 
   if (!qp('name')) {
     document.getElementById('missing-state').hidden = false;
@@ -227,10 +229,14 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
     document.getElementById('negotiate-body').classList.toggle('open');
   });
 
-  // The vendor-contact link mirrors the same static page Top Matches links
-  // to today (message-vendor.html carries no query context yet there
-  // either) -- kept as a fallback for anyone who'd rather not go through
-  // checkout at all.
+  // "Message vendor instead" carries the same robot, so the contact page shows it (not its sample).
+  var mv = new URLSearchParams();
+  mv.set('name', name); mv.set('vendor', qp('vendor')); mv.set('price', priceRaw);
+  if (img) mv.set('img', img);
+  if (url) mv.set('url', url);
+  if (robotId) mv.set('robotId', robotId);
+  if (requestId) mv.set('requestId', requestId);
+  document.getElementById('message-vendor-link').href = 'message-vendor.html?' + mv.toString();
 
   placeBtn.addEventListener('click', function () {
     var ref = 'RVT-' + Math.random().toString(36).slice(2, 8).toUpperCase();
