@@ -53,6 +53,7 @@ Rivet sits between the two:
 - **Score** `S = F · (0.4·Cost + 0.3·Requirements + 0.3·Evidence)` — cost fit from payback, requirement coverage, and how much of what we're judging on was actually read from the vendor's page. `convex/lib/score.ts`
 - **ROI / TCO / payback / 5-year value** — computed, not generated, and a robot with an unverified labor-share number can never reach a perfect evidence score. `convex/lib/roi.ts`
 - **Provenance on every pick** — `vendor_sourced` (with the quoted sentence and URL), `unverified`, or `fictional_sample` for demo data, shown to the user as such.
+- **US sale status** — each robot is checked against the FCC's July 2026 rule on foreign-produced mobile robots (country of manufacture, domestic-content share, pre-rule authorization) and labelled OK / FCC review / exempt / unknown; missing facts give "unknown", never a guess. `convex/lib/usSale.ts`
 
 **Catalog from the open web.** The [`robot-spec-finder`](apify/robot-spec-finder/) Apify actor searches for robots matching a task, verifies the page is a real product, extracts specs with source quotes, and writes rows the matcher can score.
 

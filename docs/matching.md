@@ -78,6 +78,30 @@ The Find a solution page shows the breakdown as a map: the job, its steps (slide
 buttons), and what hangs off each step (robots with score and payback, a bounty with pooled
 pledges, or why it wasn't searched).
 
+## US sale status
+
+Every pick (`matching:latestMatch`/`overview`, `agent:latestMatch`/`latestWorkflow`) and every `robots:search` row carries
+`usSale: { status, label, note }`, computed at read time by `convex/lib/usSale.ts` (plain code, no AI) from optional
+origin fields on the robot row: `madeIn` (ISO-2), `mobile`, `connected`, `stationaryArm`, `underwater`,
+`usContentShare` (0..1) and `fccAuthorizedBefore`. It encodes the FCC action adopted July 28, 2026 that put new
+foreign-produced connected mobile robots on the Covered List (sources in the module header). First match wins:
+
+| Condition | Status | Note |
+|---|---|---|
+| `sample` | unknown | Sample robot: not a real product |
+| `stationaryArm`, `underwater` or `mobile === false` | exempt | Stationary or non-covered device |
+| mobile + connected, US-made, `usContentShare >= 0.65` | ok | US-made, meets 65% domestic content |
+| mobile + connected, `fccAuthorizedBefore` | ok | Authorized before the July 2026 rule |
+| mobile + connected, US-made, share unknown | review | Domestic-content share not yet verified |
+| mobile + connected, US-made, share < 0.65 | review | Below 65% domestic content |
+| mobile + connected, made elsewhere | review | Needs FCC conditional approval |
+| anything else | unknown | Not enough information |
+
+The 65% threshold holds through 2028 (75% from 2029; the module must change then). Scraped robots have no origin
+fields yet, so they come out "unknown". The three flagship robots carry the fields in their seed data;
+`robots:backfillUsSaleFields` (idempotent) patches rows seeded before the fields existed. The Find a solution page
+shows the status as a badge on each robot card with the note as its tooltip.
+
 ## Work video (Gemini) in the breakdown
 
 The Video Input tab still sends sampled frames to `/api/analyze-video` (Gemini, budgeted by

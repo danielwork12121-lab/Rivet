@@ -27,6 +27,7 @@
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
   .chip { font-size:13px; padding:3px 8px; border-radius:999px; background:var(--chip); }
   .chip.meets { background:#e1f1e4; color:#1f5a2e; } .chip.misses { background:#f8e3d6; color:#8a3c0e; } .chip.unknown { background:#ececec; color:#555; }
+  .chip.us-ok { background:#e1f1e4; color:#1f5a2e; } .chip.us-review { background:#fdf0d5; color:#7a4e08; } .chip.us-exempt { background:#ececec; color:#4a5668; } .chip.us-unknown { background:#fff; color:#555; border:1px solid var(--line); }
   .chip.compatible { background:#e1f1e4; color:#1f5a2e; } .chip.conditionally_compatible { background:#fdf0d5; color:#8a5a0e; } .chip.insufficient_info { background:#ececec; color:#555; }
   .roi-estimated { color:var(--warn); }
   .nums { display:flex; flex-wrap:wrap; gap:18px; font-variant-numeric: tabular-nums; }
@@ -45,7 +46,7 @@
 <body>
 <main>
   <h1>Robot finder</h1>
-  <p class="muted">Describe a job. A fast model reads it, code ranks real robots (searching the web with Apify if we have none yet), and a strong model explains the picks. Fictional demo data only.</p>
+  <p class="muted">Describe a job. A fast model reads it, code ranks real robots from the catalog and vendor spec sheets, and a strong model explains the picks. Fictional demo data only.</p>
 
   <form class="card" id="form">
     <div class="row">
@@ -195,6 +196,7 @@
           <h2>${esc(p.name)}</h2>
           <span class="muted">${esc(p.vendor)}${p.sample ? " · fictional sample" : ""}${p.url ? ` · <a href="${esc(p.url)}" target="_blank" rel="noopener">source</a>` : ""}</span>
         </header>
+        ${p.usSale ? `<div class="chips"><span class="chip us-${esc(p.usSale.status)}" title="${esc(p.usSale.note)}">${p.usSale.status === "ok" ? "US sale: OK" : p.usSale.status === "review" ? "US sale: FCC review" : p.usSale.status === "exempt" ? "Stationary: exempt" : "US sale: unknown"}</span></div>` : ""}
         ${p.compatibility ? `<div class="chips"><span class="chip ${p.compatibility}">Engineering fit: ${esc(p.compatibility.replace(/_/g, " "))}</span>${p.roiConfidence ? `<span class="chip ${p.roiConfidence === "estimated" ? "conditionally_compatible" : "compatible"}">ROI confidence: ${p.roiConfidence === "estimated" ? "estimated, not vendor-verified" : "vendor-sourced"}</span>` : ""}</div>` : ""}
         <div class="nums">
           <span><span class="muted">Price</span><b>${p.price === null ? "On request" : money(p.price)}</b></span>
