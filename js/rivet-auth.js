@@ -286,16 +286,27 @@
     });
     return links.length;
   }
+  // Clerk is loaded only once the nav is on the page: bundled pages replace their document
+  // while unpacking, and a clerk-js <script> added before that loses its publishable key
+  // ("Clerk keys are missing").
   function watchNav() {
-    var doc = root.document, last = null, queued = false;
-    if (!doc || typeof root.MutationObserver !== "function") return;
-    var apply = function () { queued = false; decorateNav(last, doc); };
-    onChange(function (st) { last = st; apply(); });
-    new root.MutationObserver(function () {
-      if (queued || !last || !last.signedIn) return;
-      queued = true;
-      (root.requestAnimationFrame || setTimeout)(apply);
-    }).observe(doc.documentElement, { childList: true, subtree: true });
+    if (!root.document || typeof root.MutationObserver !== "function") return;
+    var last = null, started = false, queued = false;
+    var check = function () {
+      queued = false;
+      var doc = root.document;
+      if (!started) {
+        if (!doc.querySelector || !doc.querySelector('nav a[href$="login.html"]')) return;
+        started = true;
+        onChange(function (st) { last = st; decorateNav(st, root.document); });
+        return;
+      }
+      if (last && last.signedIn) decorateNav(last, doc);
+    };
+    var later = function () { if (queued) return; queued = true; (root.requestAnimationFrame || setTimeout)(check); };
+    new root.MutationObserver(later).observe(root.document, { childList: true, subtree: true });
+    if (root.addEventListener) root.addEventListener("load", later);
+    later();
   }
   watchNav();
 
