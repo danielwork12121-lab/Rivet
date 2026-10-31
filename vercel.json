@@ -66,6 +66,10 @@
     {
       "source": "/order-confirm",
       "destination": "/pages/order-confirm.html"
+    },
+    {
+      "source": "/:page([a-z-]+)\\.html",
+      "destination": "/pages/:page.html"
     }
   ],
   "headers": [
