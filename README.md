@@ -123,7 +123,7 @@ convex/         backend: schema, functions, scheduled AI actions, cron, pure log
 docs/           integration notes, matching spec, deploy runbook, screenshots
 js/             browser client: config, Clerk auth, Convex API wrapper
 pages/          the app's screens (static HTML)
-scripts/        local/e2e harnesses (fake Clerk issuer, browser flows, frontend compile check)
+scripts/        local/e2e harnesses (fake Clerk issuer, browser flows, frontend compile check); edit-bundle.mjs safely edits the bundled pages/*.html templates
 tests/          browser-side unit tests for js/ and api/
 ```
 
