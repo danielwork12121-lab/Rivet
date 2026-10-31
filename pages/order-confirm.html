@@ -20,7 +20,7 @@ h1{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-siz
 .card{background:#FFFFFF;border:1px solid #CBD3DE;border-radius:12px;padding:20px;margin-bottom:16px}
 .robot-row{display:flex;gap:16px;align-items:flex-start}
 .robot-row img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8}
-.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #DCE4F0;background:linear-gradient(160deg,#EEF3FA,#E2EAF5) center/56px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none' stroke='%235B7090' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0M30 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0'/%3E%3Cpath d='M7 33h22v-9H7zM29 28l7-9 7 3M36 19l-3-8'/%3E%3C/svg%3E");flex:none}
+.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #DCE4F0;background:center/56px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none' stroke='%235B7090' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0M30 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0'/%3E%3Cpath d='M7 33h22v-9H7zM29 28l7-9 7 3M36 19l-3-8'/%3E%3C/svg%3E"),linear-gradient(160deg,#EEF3FA,#E2EAF5);flex:none}
 .robot-name{font-weight:700;font-size:18px;margin:0}
 .robot-vendor{color:#4A5668;font-size:13px;margin:2px 0 0}
 .robot-price{font-weight:800;font-size:18px;margin-top:8px;font-variant-numeric:tabular-nums}
@@ -61,6 +61,9 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 .missing{padding:40px 20px;text-align:center;color:#4A5668}
 [hidden]{display:none!important}
 </style>
+<!-- Sign-in state only: the nav's "Log in" reads "Account" while signed in. -->
+<script src="../js/rivet-config.js"></script>
+<script src="../js/rivet-auth.js"></script>
 </head>
 <body>
 <header class="top">
@@ -87,7 +90,7 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 
       <div class="card">
         <div class="robot-row">
-          <img id="r-img" alt="" hidden>
+          <img id="r-img" alt="" referrerpolicy="no-referrer" hidden>
           <div id="r-noimg" class="noimg" hidden></div>
           <div>
             <p class="robot-name" id="r-name">—</p>
@@ -180,13 +183,20 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 
   document.getElementById('r-name').textContent = name;
   document.getElementById('r-vendor').textContent = vendor;
+  // No photo, or one the vendor's site won't serve to us: show the drawn robot tile instead of an empty box.
+  function showGlyph() {
+    document.getElementById('r-img').hidden = true;
+    document.getElementById('r-noimg').hidden = false;
+  }
   if (img) {
     var imgEl = document.getElementById('r-img');
-    imgEl.src = img;
+    imgEl.addEventListener('error', showGlyph);
+    imgEl.addEventListener('load', function () { if (!imgEl.naturalWidth) showGlyph(); });
     imgEl.alt = 'Photo of ' + name;
     imgEl.hidden = false;
+    imgEl.src = img;
   } else {
-    document.getElementById('r-noimg').hidden = false;
+    showGlyph();
   }
 
   var priceEl = document.getElementById('r-price');
