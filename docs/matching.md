@@ -56,6 +56,15 @@ step's search phrase and its share of the job's yearly labor, so `ai.matchRobots
 - `agent:checkStep` searches a step that wasn't searched up front (one unit of budget).
 - Robot photos (`robots.imageUrl`) come from the vendor page only: a photo link in the page text,
   else its Product JSON-LD image or `og:image` (`lib/images.ts`).
+  The page never shows an empty tile: with no vendor photo, or one the vendor's site won't serve, it
+  shows a drawing of that kind of robot from `img/robots/*.svg`, labelled "Illustration".
+- Catalog lookup (`robots.forTask`) reads a robot's `task` and its `extraTasks`. When the AI's task
+  name finds no real robot, `lib/taskAlias.ts` maps clear water-job wording ("weed removal" on a pond,
+  "inspection" of a pond) onto the catalog's `aquatic weed removal`, `debris skimming` or
+  `water survey` before giving up. Those tasks are covered by `robots:seedAquaticDemo` (RanMarine
+  WasteShark and WasteShark+ Pro, Seafloor Systems HyDrone 4.5, Lake Groomer, Crary WeedRoller PRO).
+- Live web discovery stays off in production. A step with nothing in the catalog reads "No verified
+  match yet" and offers a bounty, not an error.
 
 ## Match score, lifetime value and pooled bounties
 

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: autonomous water-surface skimmer">
+  <defs>
+    <linearGradient id="w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EAF3FB"/><stop offset="1" stop-color="#B8D5EF"/></linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E6ECF4"/></linearGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#w)"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.8">
+    <path d="M24 62c14-5 28-5 42 0s28 5 42 0"/><path d="M282 48c14-5 28-5 42 0s28 5 42 0"/>
+    <path d="M300 250c14-5 28-5 42 0s28 5 42 0"/><path d="M18 258c14-5 28-5 42 0s28 5 42 0"/>
+  </g>
+  <ellipse cx="214" cy="214" rx="138" ry="26" fill="#7FA9D2" opacity="0.45"/>
+  <!-- floating debris ahead of the mouth -->
+  <g>
+    <rect x="44" y="214" width="34" height="12" rx="6" transform="rotate(-14 61 220)" fill="#9FD3C7" stroke="#13243D" stroke-width="2"/>
+    <rect x="72" y="208" width="7" height="8" rx="2" transform="rotate(-14 75 212)" fill="#13243D"/>
+    <path d="M96 244c8-10 22-10 28 0c-8 6-20 6-28 0z" fill="#6FAE5B" stroke="#2F6B2A" stroke-width="2"/>
+    <path d="M40 186c6-8 18-8 22 0c-6 5-16 5-22 0z" fill="#8CC06F" stroke="#2F6B2A" stroke-width="2"/>
+  </g>
+  <!-- hull: two pontoons -->
+  <path d="M128 182 L322 168 L344 190 L150 206 Z" fill="#13243D"/>
+  <path d="M150 206 L344 190 L344 200 L152 216 Z" fill="#0B1626"/>
+  <!-- deck -->
+  <path d="M112 120 L300 106 L344 160 L150 176 Z" fill="url(#top)" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M150 176 L344 160 L344 190 L150 206 Z" fill="#D9E2EE" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M112 120 L150 176 L150 206 L112 150 Z" fill="#C3CFDE" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <!-- open mouth with mesh basket -->
+  <path d="M118 134 L146 175 L146 200 L118 158 Z" fill="#13243D"/>
+  <g stroke="#5B7090" stroke-width="1.5"><path d="M125 144v24M132 154v24M139 164v24"/><path d="M118 146l28 41M118 154l28 41"/></g>
+  <!-- deck stripes in Rivet blue -->
+  <path d="M190 128 L226 125 L262 168 L226 171 Z" fill="#1660CE" opacity="0.92"/>
+  <path d="M238 123 L254 122 L290 165 L274 166 Z" fill="#1660CE" opacity="0.55"/>
+  <!-- control dome + lidar mast -->
+  <ellipse cx="252" cy="132" rx="22" ry="9" fill="#13243D"/>
+  <rect x="246" y="96" width="12" height="34" rx="3" fill="#13243D"/>
+  <rect x="238" y="84" width="28" height="16" rx="6" fill="#2A3647" stroke="#13243D" stroke-width="2"/>
+  <rect x="242" y="89" width="20" height="5" rx="2.5" fill="#F2A33A"/>
+  <path d="M300 118 L300 82" stroke="#13243D" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="300" cy="80" r="4" fill="#F2A33A" stroke="#13243D" stroke-width="2"/>
+  <!-- waterline -->
+  <path d="M100 204 L150 200 L346 184 L360 198 L152 224 L94 216 Z" fill="#B8D5EF" opacity="0.75"/>
+  <!-- bow wake -->
+  <path d="M104 214c10 6 24 8 40 6M96 196c-8 6-10 14-6 20" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+</svg>

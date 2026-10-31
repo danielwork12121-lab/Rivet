@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: field service robot">
+  <defs><linearGradient id="p" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F3F6FA"/><stop offset="1" stop-color="#D9E2EE"/></linearGradient></defs>
+  <rect width="400" height="300" fill="url(#p)"/>
+  <g stroke="#C6D2E1" stroke-width="2"><path d="M0 230 L400 200"/><path d="M0 266 L400 236"/></g>
+  <ellipse cx="200" cy="236" rx="120" ry="18" fill="#5B7090" opacity="0.28"/>
+  <rect x="116" y="150" width="168" height="62" rx="12" fill="#E8EDF3" stroke="#13243D" stroke-width="3"/>
+  <rect x="132" y="166" width="136" height="12" rx="6" fill="#1660CE"/>
+  <g><circle cx="146" cy="220" r="22" fill="#13243D"/><circle cx="146" cy="220" r="9" fill="#5B7090"/><circle cx="254" cy="220" r="22" fill="#13243D"/><circle cx="254" cy="220" r="9" fill="#5B7090"/></g>
+  <!-- arm -->
+  <path d="M170 150 L150 104 L206 78" fill="none" stroke="#13243D" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M170 150 L150 104 L206 78" fill="none" stroke="#C3CFDE" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="150" cy="104" r="9" fill="#1660CE" stroke="#13243D" stroke-width="3"/>
+  <path d="M206 78 L226 68 M206 78 L224 92" stroke="#13243D" stroke-width="5" stroke-linecap="round"/>
+  <!-- sensor head -->
+  <path d="M246 150 L246 118" stroke="#13243D" stroke-width="5" stroke-linecap="round"/>
+  <rect x="230" y="98" width="40" height="22" rx="6" fill="#2A3647" stroke="#13243D" stroke-width="2"/><circle cx="260" cy="109" r="4" fill="#F2A33A"/>
+</svg>

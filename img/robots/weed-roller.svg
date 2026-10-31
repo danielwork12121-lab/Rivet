@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: dock-mounted automated aquatic weed roller">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F3F7FC"/><stop offset="1" stop-color="#E2ECF7"/></linearGradient>
+    <linearGradient id="w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C8DFF3" stop-opacity="0.85"/><stop offset="1" stop-color="#8FB8DE" stop-opacity="0.9"/></linearGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#sky)"/>
+  <!-- lake bed -->
+  <path d="M0 252 Q120 236 220 246 T400 238 V300 H0 Z" fill="#C9B48A"/>
+  <!-- weeds: tall on the right (not yet rolled), flattened on the left -->
+  <g fill="none" stroke="#3F7F36" stroke-width="3" stroke-linecap="round">
+    <path d="M300 246c-6-24 6-40 0-62"/><path d="M314 244c6-22-4-36 2-58"/><path d="M330 242c-4-20 8-34 2-54"/><path d="M346 240c6-18-2-30 4-48"/><path d="M362 240c-4-18 6-28 0-44"/><path d="M378 238c4-16-4-26 2-40"/>
+  </g>
+  <g fill="#6FAE5B"><ellipse cx="303" cy="210" rx="6" ry="3"/><ellipse cx="318" cy="200" rx="6" ry="3"/><ellipse cx="333" cy="214" rx="6" ry="3"/><ellipse cx="350" cy="206" rx="6" ry="3"/><ellipse cx="366" cy="216" rx="6" ry="3"/></g>
+  <!-- roller tubes along the bottom -->
+  <g>
+    <rect x="96" y="236" width="182" height="16" rx="8" fill="#C3CFDE" stroke="#13243D" stroke-width="3"/>
+    <g stroke="#13243D" stroke-width="2" opacity="0.6"><path d="M120 238v12M150 238v12M180 238v12M210 238v12M240 238v12"/></g>
+    <rect x="152" y="234" width="10" height="20" rx="3" fill="#13243D"/><rect x="214" y="234" width="10" height="20" rx="3" fill="#13243D"/>
+    <path d="M286 238c6 4 6 10 0 14" fill="none" stroke="#1660CE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M294 232c10 6 10 20 0 26" fill="none" stroke="#1660CE" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  </g>
+  <!-- water -->
+  <path d="M0 150 H400 V300 H0 Z" fill="url(#w)" opacity="0.55"/>
+  <path d="M0 150 H400" stroke="#FFFFFF" stroke-width="3"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.8"><path d="M200 170c12-4 24-4 36 0"/><path d="M290 176c12-4 24-4 36 0"/></g>
+  <!-- dock -->
+  <path d="M0 118 H112 V130 H0 Z" fill="#A9845A" stroke="#6E5233" stroke-width="2"/>
+  <g fill="#8A6A44"><rect x="20" y="130" width="10" height="122"/><rect x="88" y="130" width="10" height="122"/></g>
+  <!-- post and drive head -->
+  <rect x="88" y="104" width="12" height="148" fill="#9AA6B6" stroke="#13243D" stroke-width="2"/>
+  <path d="M74 52 L118 52 L126 104 L66 104 Z" fill="#F4EAD2" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <rect x="70" y="84" width="52" height="14" rx="3" fill="#1660CE"/>
+  <rect x="78" y="88" width="20" height="5" rx="2" fill="#FFFFFF" opacity="0.85"/>
+  <circle cx="114" cy="62" r="3" fill="#F2A33A"/>
+  <path d="M100 244 L94 236" stroke="#13243D" stroke-width="4" stroke-linecap="round"/>
+  <!-- arc of travel -->
+  <path d="M130 230 Q210 196 290 222" fill="none" stroke="#1660CE" stroke-width="2.5" stroke-dasharray="6 6" opacity="0.7"/>
+  <path d="M286 214 L294 223 L282 226" fill="none" stroke="#1660CE" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+</svg>

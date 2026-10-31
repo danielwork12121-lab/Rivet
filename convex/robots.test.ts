@@ -68,6 +68,49 @@ describe("robots:seedFlagshipDemo", () => {
   });
 });
 
+describe("robots:seedAquaticDemo", () => {
+  it("adds the real pond/wetland products once, each with a quoted vendor source and a vendor photo", async () => {
+    const t = convexTest(schema, modules);
+    const first = await t.mutation(internal.robots.seedAquaticDemo, {});
+    expect(first.added.length).toBe(5);
+    expect(await t.mutation(internal.robots.seedAquaticDemo, {})).toEqual({ added: [], updated: [], unchanged: 5 });
+    const rows = await t.run((ctx) => ctx.db.query("robots").collect());
+    for (const r of rows) {
+      expect(r.sample).toBe(false);
+      expect(r.fetchedAt).toBeTypeOf("number");
+      expect(r.imageUrl).toMatch(/^https:\/\//);
+      expect(new URL(r.imageUrl!).hostname.replace(/^www\./, "")).toMatch(/ranmarine\.io|wixstatic\.com|lakegroomer\.net|weedroller\.com/);
+      expect(r.specs!.length).toBeGreaterThan(0);
+      for (const s of r.specs!) expect(s.sourceUrl).toBe(r.url);
+      expect(r.provenance).toMatch(/Manually verified/);
+    }
+    // Only Lake Groomer publishes a dollar price; the rest stay quote-only rather than guessed.
+    expect(rows.filter((r) => r.priceStatus === "listed").map((r) => r.name)).toEqual(["Lake Groomer"]);
+  });
+
+  it("patches a row that drifted from the verified data", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(internal.robots.seedAquaticDemo, {});
+    await t.run(async (ctx) => {
+      const r = (await ctx.db.query("robots").collect()).find((x) => x.name === "Lake Groomer")!;
+      await ctx.db.patch(r._id, { price: 1 });
+    });
+    expect((await t.mutation(internal.robots.seedAquaticDemo, {})).updated).toEqual(["Lake Groomer"]);
+  });
+
+  it("finds a robot by any of its tasks, and lists those tasks for the AI", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(internal.robots.seedAquaticDemo, {});
+    const names = async (task: string) => (await t.query(internal.robots.forTask, { task })).map((r) => r.name).sort();
+    expect(await names("water survey")).toEqual(["RanMarine WasteShark+ Pro", "Seafloor Systems HyDrone 4.5"]);
+    expect(await names("aquatic weed removal")).toEqual(
+      ["Crary WeedRoller PRO", "Lake Groomer", "RanMarine WasteShark", "RanMarine WasteShark+ Pro"]);
+    expect(await names("debris skimming")).toEqual(["RanMarine WasteShark", "RanMarine WasteShark+ Pro"]);
+    expect(await t.query(internal.robots.knownTasks, {})).toEqual(
+      expect.arrayContaining(["water survey", "aquatic weed removal", "debris skimming"]));
+  });
+});
+
 describe("robots:backfillAutomationShareEstimated", () => {
   it("flags a previously-scraped robot whose automation share was guessed, from its own assumptions text", async () => {
     const t = convexTest(schema, modules);

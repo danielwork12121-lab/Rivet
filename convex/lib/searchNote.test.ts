@@ -18,6 +18,11 @@ describe("search notes shown to operators", () => {
     expect(publicSearchNote("Web search failed: Apify POST /acts/x/runs failed: 400 invalid input")).toBe(SEARCH_FAILED_NOTE);
   });
 
+  it("reads as a product statement, and maps the older off wording to it", () => {
+    expect(SEARCH_OFF_NOTE).not.toMatch(/unavailable|web search|off for this deployment/i);
+    expect(publicSearchNote("Web search is off for this deployment; results come from Rivet's catalog.")).toBe(SEARCH_OFF_NOTE);
+  });
+
   it("keeps plain, user-safe notes as they are", () => {
     const plain = 'The web search for "slope_mowing" robots read the pages it found but none described a robot.';
     expect(publicSearchNote(plain)).toBe(plain);

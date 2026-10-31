@@ -15,6 +15,18 @@ describe("message-vendor robot context", () => {
     expect(robotFor("?name=X&price=").price).toBe("On request");
   });
 
+  it("only accepts a drawing from Rivet's own img/robots folder", () => {
+    expect(robotFor("?name=X&art=%2Fimg%2Frobots%2Fskimmer.svg").art).toBe("/img/robots/skimmer.svg");
+    expect(robotFor("?name=X&art=https%3A%2F%2Fevil.example%2Fx.svg").art).toBe("/img/robots/robot.svg");
+    expect(robotFor("?name=X&art=%2Fimg%2Frobots%2F..%2F..%2Fx.svg").art).toBe("/img/robots/robot.svg");
+  });
+
+  it("every drawing the pages can name exists", () => {
+    const fs = dumpTemplate("pages/find-solution.html") as string;
+    const kinds = [...fs.matchAll(/\['([a-z-]+)', \/[^\]]+\/\]/g)].map((m) => m[1]).concat("robot", "mower");
+    for (const k of kinds) expect(readFileSync(`img/robots/${k}.svg`, "utf8")).toContain("<svg");
+  });
+
   it("falls back to the sample robot with no params", () => {
     expect(robotFor("")).toMatchObject({ name: "Wright Stander with Greenzie autonomy", price: "$33,999", sample: true });
   });
@@ -32,9 +44,10 @@ describe("order-confirm page", () => {
     expect(html).toContain('<script src="../js/rivet-config.js"></script>');
     expect(html).toContain('<script src="../js/rivet-auth.js"></script>');
   });
-  it("draws the no-photo tile with a valid background (image layers comma-separated)", () => {
-    const rule = html.match(/\.robot-row \.noimg\{[^}]*\}/)![0];
-    expect(rule).toMatch(/background:center\/56px no-repeat url\("data:image\/svg\+xml,[^"]+"\),linear-gradient\(/);
-    expect(html).toMatch(/addEventListener\('error', showGlyph\)/);
+  it("shows the vendor photo, or a labelled illustration when there is none or it won't load", () => {
+    expect(html).toMatch(/addEventListener\('error', showArt\)/);
+    expect(html).toContain("'/img/robots/robot.svg'");
+    expect(html).toContain('id="r-art-tag"');
+    expect(html).not.toMatch(/class="noimg"/);
   });
 });

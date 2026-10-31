@@ -204,6 +204,216 @@ export const seedFlagshipDemo = internalMutation({
   },
 });
 
+// ---------- Pond / wetland demo: real aquatic products ----------
+// Same rules as the flagship robots above: read by hand from each manufacturer's own page on
+// AQUATIC_VERIFIED_ON, every spec carries the exact sentence and URL it came from, and anything the
+// page didn't state is either left out or marked as an estimate in `assumptions`. Photos are the
+// manufacturer's own published product images (og:image or the product photo on the same page),
+// referenced by URL, never copied. Prices: only Lake Groomer publishes a USD price; the WasteShark
+// FAQ gives a euro base price, kept in the notes rather than converted, so it stays quote-only.
+// Idempotent by url: a second run patches rows to match this list, so a correction here lands.
+// Run: npx convex run --prod robots:seedAquaticDemo
+const AQUATIC_VERIFIED_ON = "2026-10-31";
+const WSPRO = "https://www.ranmarine.io/wastesharkpro/";
+const WS = "https://www.ranmarine.io/wastesharkclassic/";
+const HYDRONE = "https://www.seafloorsystems.com/hydrone";
+const LAKE_GROOMER = "https://lakegroomer.net/product/lake-groomer/";
+const WEEDROLLER = "https://weedroller.com/products/";
+const ESTIMATED_SHARE =
+  "No manufacturer-stated labor-saved percentage. Assumed to replace a conservative 15% of the task's labor.";
+
+export const AQUATIC_ROBOTS = [
+  {
+    name: "RanMarine WasteShark+ Pro",
+    vendor: "RanMarine Technology",
+    task: "debris skimming",
+    extraTasks: ["aquatic weed removal", "water survey"],
+    url: WSPRO,
+    imageUrl: "https://www.ranmarine.io/wp-content/uploads/WSPRO.webp",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    connected: true,
+    specs: [
+      { name: "payload_kg", value: 60, quote: "Basket Weight Capacity 60 kg 132 lbs", sourceUrl: WSPRO },
+      { name: "weight_kg", value: 78, quote: "Weight 78 kg 172 lbs", sourceUrl: WSPRO },
+      { name: "runtime_hours", value: 6, quote: "6-Hour Autonomous Runtime", sourceUrl: WSPRO },
+    ],
+    assumptions: [
+      "Autonomous surface drone (GPS RTK waypoint routes, LiDAR collision avoidance): it skims floating " +
+        "litter and loose biomass such as duckweed or cut weed into a 160-liter basket. It does not uproot " +
+        "rooted, submerged weeds.",
+      "The page lists both \"Operating Time per Charge 8 hours\" and a \"6-Hour Autonomous Runtime\"; the " +
+        "lower, autonomous figure is used here.",
+      "Depth and temperature logging is standard (\"automatically logging bathymetry and thermal profiles " +
+        "during every mission\"); water-quality sensors are optional add-on modules.",
+      "Price on request: the manufacturer publishes no price for this model. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from RanMarine's official WasteShark+ Pro page on ${AQUATIC_VERIFIED_ON}. Daily ` +
+      "figures stated there: \"Daily Coverage Capability 5,000 m² 1.2 acres\" and \"Waste Collection " +
+      "Capacity/Day 500 kg\". Photo: the page's own og:image.",
+  },
+  {
+    name: "RanMarine WasteShark",
+    vendor: "RanMarine Technology",
+    task: "debris skimming",
+    extraTasks: ["aquatic weed removal"],
+    url: WS,
+    imageUrl: "https://www.ranmarine.io/wp-content/uploads/WasteShark-biomass-1.jpeg",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    connected: true,
+    specs: [
+      { name: "payload_kg", value: 60, quote: "Basket weight capacity 60 kg 132 lbs", sourceUrl: WS },
+      { name: "weight_kg", value: 72, quote: "Weight 72 kg 159 lbs", sourceUrl: WS },
+      { name: "runtime_hours", value: 5, quote: "Up to 5 hrs. of continuous operations before recharging", sourceUrl: WS },
+    ],
+    assumptions: [
+      "Remote-operated, not autonomous: the manufacturer says it is \"100% pilot operated\" from shore, so a " +
+        "person still drives it. It collects \"trash, weeds, or algae\" floating at the surface (up to 160 " +
+        "liters a run); it does not uproot rooted weeds.",
+      "The manufacturer's FAQ gives a base price of €23,500 (drone and remote controller; trolley, floating " +
+        "basket and hook extra). Shown here as price on request rather than converted to dollars.",
+      ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from RanMarine's official WasteShark page on ${AQUATIC_VERIFIED_ON}. Stated there: ` +
+      "\"Trash collection capacity 500 kg/workday\", \"Coverage capability 10,000 m2 /workday\". Photo: the " +
+      "page's own og:image (a WasteShark collecting duckweed and litter).",
+  },
+  {
+    name: "Seafloor Systems HyDrone 4.5",
+    vendor: "Seafloor Systems",
+    task: "water survey",
+    url: HYDRONE,
+    imageUrl:
+      "https://static.wixstatic.com/media/5e48e6_43cff92d6d7944bb8a673f7c67389f98%7Emv2.jpg/v1/fit/w_2500,h_1330,al_c/5e48e6_43cff92d6d7944bb8a673f7c67389f98%7Emv2.jpg",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    connected: true,
+    specs: [
+      { name: "runtime_hours", value: 9, quote: "Battery Endurance: Up to 9 hours at survey speed with 6S 22Ah batteries (field-swappable)", sourceUrl: HYDRONE },
+      { name: "payload_kg", value: 15, quote: "Payload: 15 kg / 35 lbs", sourceUrl: HYDRONE },
+      { name: "weight_kg", value: 9.8, quote: "Empty Hull Weight w/ Batteries: 9.8 kg / 25 lbs", sourceUrl: HYDRONE },
+    ],
+    assumptions: [
+      "Unmanned survey catamaran for depth (bathymetry) and site surveys of ponds, lakes and rivers; " +
+        "\"Both remotely controlled and autonomous navigation suites available\" (RCV, AutoNav, AutoNav Plus). " +
+        "The echo sounder or sonar payload is configured per quote.",
+      "Price on request: the manufacturer publishes no price. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Seafloor Systems' official HyDrone page on ${AQUATIC_VERIFIED_ON}. Use stated ` +
+      "there: \"Inspection / survey of mines, sewage treatment plants, contaminated lakes, and rivers.\" " +
+      "Photo: the page's own og:image (HyDrone survey boats on a lake).",
+  },
+  {
+    name: "Lake Groomer",
+    vendor: "Lake Groomer",
+    task: "aquatic weed removal",
+    url: LAKE_GROOMER,
+    imageUrl: "https://lakegroomer.net/wp-content/uploads/2016/06/Lake-Groomer-2022.jpg",
+    price: 4995,
+    priceStatus: "listed" as const,
+    yearlyOpex: 400,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    madeIn: "US",
+    mobile: false,
+    specs: [
+      { name: "reach_m", value: 6.4, quote: "The standard model Lake Groomer comes with 21 feet of rollers (3 roller tubes each measuring 7 feet in length).", sourceUrl: LAKE_GROOMER },
+    ],
+    assumptions: [
+      "Dock- or shore-mounted, automated roller that \"effortlessly uproots weeds\" along the bottom in a " +
+        "circle around its mount (42 ft across as standard, up to 84 ft with extra rollers), in up to 4.5 ft " +
+        "of water at the power head. One unit keeps one stretch of shoreline clear; it does not cover a " +
+        "whole pond.",
+      "Price is the low end of the listed range ($4,995.00 through $6,900.95).",
+      "Running cost estimated at 8% of price per year (no manufacturer-stated figure).",
+      ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Lake Groomer's official product page on ${AQUATIC_VERIFIED_ON} ("Price range: ` +
+      "$4,995.00 through $6,900.95\"; \"made in the U.S.A\"). Photo: the page's own og:image.",
+  },
+  {
+    name: "Crary WeedRoller PRO",
+    vendor: "Crary WeedRoller",
+    task: "aquatic weed removal",
+    url: WEEDROLLER,
+    imageUrl: "https://weedroller.com/wp-content/uploads/2024/09/WR_on-dock_1280x854_2017.png",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: false,
+    specs: [
+      { name: "reach_m", value: 6.4, quote: "The WeedRoller PRO can coperate in a 300 degree arc and is supplied with three 7′ rollers with a total length of 21′ from the drive head.", sourceUrl: WEEDROLLER },
+    ],
+    assumptions: [
+      "Dock-mounted roller that \"works automatically when the waterfront is not in use\", rolling along the " +
+        "bottom to uproot weeds and firm up muck; it reverses on its own in heavy weeds. Covers one arc of " +
+        "shoreline per unit (up to 42 ft of rollers), not a whole pond. Local permits may limit the cleared area.",
+      "Price on request here: the product page shows no price (sold through dealers). " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Crary WeedRoller's official products page on ${AQUATIC_VERIFIED_ON}. Photo: the ` +
+      "product photo on the same page (WeedRoller PRO drive head on a dock).",
+  },
+];
+
+// JSON with object keys sorted, so a stored row (whose key order the database may change) compares
+// equal to the same data written here.
+function stableJson(x: unknown): string {
+  return JSON.stringify(x, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val);
+}
+
+export const seedAquaticDemo = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const added: string[] = [];
+    const updated: string[] = [];
+    for (const r of AQUATIC_ROBOTS) {
+      const row = { ...r, sample: false, fetchedAt: Date.parse(`${AQUATIC_VERIFIED_ON}T12:00:00Z`) };
+      const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
+      if (!existing) {
+        await ctx.db.insert("robots", row);
+        added.push(r.name);
+        continue;
+      }
+      const differs = Object.entries(row).some(
+        ([k, val]) => stableJson((existing as Record<string, unknown>)[k]) !== stableJson(val),
+      );
+      if (differs) {
+        await ctx.db.patch(existing._id, row);
+        updated.push(r.name);
+      }
+    }
+    return { added, updated, unchanged: AQUATIC_ROBOTS.length - added.length - updated.length };
+  },
+});
+
 // One-time backfill for robots scraped before automationShareEstimated existed (robots.ts
 // upsertScraped / lib/extract.ts). Those rows already carry an assumptions sentence recording that
 // their automation share was guessed, not read off the vendor's page -- this reads that sentence
@@ -298,10 +508,16 @@ export const insert = internalMutation({
 });
 // ---------- Robots found on the web ----------
 
-// Every robot for one task, real and sample, for the decision layer.
+// Every robot for one task, real and sample, for the decision layer: its main task, or one of its
+// extraTasks (a skimmer that also logs depth). The catalog is small, so the extra-task check scans.
 export const forTask = internalQuery({
   args: { task: v.string() },
-  handler: async (ctx, { task }) => ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", task)).collect(),
+  handler: async (ctx, { task }) => {
+    const main = await ctx.db.query("robots").withIndex("by_task", (q) => q.eq("task", task)).collect();
+    const ids = new Set(main.map((r) => r._id));
+    const extra = (await ctx.db.query("robots").collect()).filter((r) => !ids.has(r._id) && r.extraTasks?.includes(task));
+    return [...main, ...extra];
+  },
 });
 
 // Task names already in the catalog, so the AI reuses "mowing" instead of inventing "lawn mowing".
@@ -309,7 +525,10 @@ export const knownTasks = internalQuery({
   args: {},
   handler: async (ctx) => {
     const tasks = new Set<string>();
-    for (const r of await ctx.db.query("robots").collect()) tasks.add(r.task);
+    for (const r of await ctx.db.query("robots").collect()) {
+      tasks.add(r.task);
+      for (const t of r.extraTasks ?? []) tasks.add(t);
+    }
     for (const d of await ctx.db.query("discoveries").collect()) tasks.add(d.task);
     return [...tasks].sort();
   },

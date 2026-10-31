@@ -87,6 +87,7 @@ const OUTDOOR_TASK_WORDS = [
   "mow", "lawn", "turf", "grass", "slope", "embankment", "hillside", "vegetation", "brush",
   "landscap", "yard", "garden", "spray", "weed", "outdoor", "grounds", "trim", "edging", "drainage",
   "gutter", "roof", "solar", "paving", "sidewalk", "parking",
+  "pond", "lake", "wetland", "aquatic", "skimming", "water survey",
 ];
 const INDOOR_TASK_WORDS = ["floor", "carpet", "indoor", "warehouse", "tile", "janitorial", "vacuum"];
 

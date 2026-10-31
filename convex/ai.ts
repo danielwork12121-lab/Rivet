@@ -14,6 +14,7 @@ import { nextAction, rankRobots, type Requirement } from "./lib/decide";
 import { cleanIntent, robotFromPage } from "./lib/extract";
 import { numbersIn } from "./lib/verify";
 import { cleanSteps } from "./lib/workflow";
+import { catalogTaskFor } from "./lib/taskAlias";
 import { isSpecName, SPEC_NAMES } from "./lib/specs";
 import type { Id } from "./_generated/dataModel";
 import { PERSONAS } from "./lib/personas";
@@ -464,7 +465,21 @@ export const matchRobots = internalAction({
 
       // 2. Catalog, or a web search when we have no real robots for this task yet.
       // Only real robots: the fictional demo ones are never shown to operators.
-      const robots = (await ctx.runQuery(internal.robots.forTask, { task: intent.task })).filter((r) => !r.sample);
+      let robots = (await ctx.runQuery(internal.robots.forTask, { task: intent.task })).filter((r) => !r.sample);
+      // Nothing under the AI's own task name: try the catalog task its wording clearly names
+      // ("aquatic weed removal" for "weed removal" on a pond; see lib/taskAlias.ts). Saved on the
+      // match so a re-run after a web search reads the same task.
+      if (robots.length === 0) {
+        const alias = catalogTaskFor(intent.task, intent.searchPhrase);
+        if (alias && alias !== intent.task) {
+          const found = (await ctx.runQuery(internal.robots.forTask, { task: alias })).filter((r) => !r.sample);
+          if (found.length > 0) {
+            robots = found;
+            intent = { ...intent, task: alias };
+            await ctx.runMutation(internal.agent.patchMatch, { matchId, intent });
+          }
+        }
+      }
       if (!searched && robots.length === 0) {
         const search = await ctx.runMutation(internal.discovery.start, {
           task: intent.task, searchPhrase: intent.searchPhrase, matchId,

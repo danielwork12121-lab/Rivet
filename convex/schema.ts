@@ -253,6 +253,9 @@ export default defineSchema({
     name: v.string(),
     vendor: v.string(),
     task: v.string(), // e.g. "inspection", "mowing", "spraying"
+    // Other catalog tasks this robot also does (e.g. a skimmer that also logs depth does "water
+    // survey" too). robots.forTask reads these as well as `task`.
+    extraTasks: v.optional(v.array(v.string())),
     price: v.number(), // USD, one unit
     yearlyOpex: v.number(), // USD per year to run it
     automationShare: v.number(), // 0..1, share of the task's labor it replaces

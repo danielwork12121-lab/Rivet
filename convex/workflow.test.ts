@@ -107,7 +107,7 @@ describe("workflow breakdown", () => {
     await raw.run((ctx) => ctx.db.patch(wf.steps[1].matchId!, { status: "done", picks: [], searchNote: old }));
     const view = (await t.query(api.agent.latestWorkflow, { requestId }))!;
     expect(view.steps[1].verdict).toBe("skipped");
-    expect(view.steps[1].searchNote).toBe("Web search is off for this deployment; results come from Rivet's catalog.");
+    expect(view.steps[1].searchNote).toBe("Matched against Rivet's verified catalog: no listed robot covers this step yet.");
     expect(JSON.stringify(view)).not.toMatch(/DISCOVERY_ENABLED|APIFY_TOKEN/);
   });
 

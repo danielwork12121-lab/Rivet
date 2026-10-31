@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: unmanned survey catamaran">
+  <defs><linearGradient id="w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EAF3FB"/><stop offset="1" stop-color="#B8D5EF"/></linearGradient></defs>
+  <rect width="400" height="300" fill="url(#w)"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.8">
+    <path d="M30 60c14-5 28-5 42 0s28 5 42 0"/><path d="M290 52c14-5 28-5 42 0s28 5 42 0"/><path d="M286 262c14-5 28-5 42 0s28 5 42 0"/>
+  </g>
+  <!-- sonar fan below the boat -->
+  <path d="M206 214 L120 292 L292 292 Z" fill="#1660CE" opacity="0.12"/>
+  <g fill="none" stroke="#1660CE" stroke-width="2" opacity="0.35"><path d="M160 256q46 18 92 0"/><path d="M140 276q66 24 132 0"/></g>
+  <ellipse cx="206" cy="206" rx="140" ry="20" fill="#7FA9D2" opacity="0.45"/>
+  <!-- back hull -->
+  <path d="M120 150 L318 138 L334 146 L322 158 L126 168 L112 160 Z" fill="#F2C230" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <!-- deck plate and electronics box -->
+  <path d="M150 150 L292 141 L292 176 L150 186 Z" fill="#2A3647" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M180 140 L262 135 L272 146 L190 151 Z" fill="#E6ECF4" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M190 151 L272 146 L272 166 L190 172 Z" fill="#C3CFDE" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <!-- GNSS mast -->
+  <path d="M232 140 L232 84" stroke="#13243D" stroke-width="4" stroke-linecap="round"/>
+  <ellipse cx="232" cy="80" rx="20" ry="8" fill="#FFFFFF" stroke="#13243D" stroke-width="3"/>
+  <path d="M212 80 a20 8 0 0 0 40 0" fill="#E6ECF4" stroke="#13243D" stroke-width="3"/>
+  <path d="M200 140 L200 110" stroke="#13243D" stroke-width="3" stroke-linecap="round"/><circle cx="200" cy="107" r="4" fill="#F2A33A" stroke="#13243D" stroke-width="2"/>
+  <!-- front hull -->
+  <path d="M104 182 L322 168 L344 178 L330 192 L112 204 L94 194 Z" fill="#F2C230" stroke="#13243D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M112 204 L330 192 L322 198 L118 210 Z" fill="#C99A2E"/>
+  <path d="M150 186 L292 177" stroke="#13243D" stroke-width="3"/>
+  <!-- transducer pod -->
+  <rect x="198" y="186" width="16" height="22" rx="4" fill="#13243D"/>
+  <!-- waterline -->
+  <path d="M84 198 L344 182 L360 194 L94 218 Z" fill="#B8D5EF" opacity="0.75"/>
+  <path d="M86 214c10 6 26 6 40 2" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+</svg>

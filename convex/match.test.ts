@@ -172,8 +172,22 @@ describe("matchRobots (real action, stubbed transport)", () => {
     stubClaude(intentFixture);
     await t.action(internal.ai.matchRobots, { matchId }); // DISCOVERY_ENABLED is not set
     const note = (await latest())!.searchNote!;
-    expect(note).toBe("Web search is off for this deployment; results come from Rivet's catalog.");
+    expect(note).toBe("Matched against Rivet's verified catalog: no listed robot covers this step yet.");
     expect(note).not.toMatch(/DISCOVERY_ENABLED|APIFY_TOKEN|\bset\b|backend/);
+  });
+
+  it("finds catalog robots when the AI names a pond step its own way", async () => {
+    const { raw, t, matchId, latest } = await setup();
+    await raw.mutation(internal.robots.seedAquaticDemo, {});
+    stubClaude({ // TEST FIXTURE: a task name no robot is filed under
+      task: "weed removal", searchPhrase: "aquatic weed removal robot", annualTaskCost: 90000, budget: null, requirements: [],
+    });
+    await t.action(internal.ai.matchRobots, { matchId });
+    const m = (await latest())!;
+    expect(m.intent!.task).toBe("aquatic weed removal");
+    expect(m.picks.length).toBe(3);
+    expect(m.picks.every((p) => p.imageUrl)).toBe(true);
+    expect(m.searchNote).toBeNull();
   });
 
   it("suggests a bounty listing the gap when no robot meets a must-have", async () => {

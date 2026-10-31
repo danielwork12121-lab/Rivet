@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: robotic lawn mower">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EEF5E8"/><stop offset="1" stop-color="#BBD8A6"/></linearGradient>
+  <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DCE4EE"/></linearGradient></defs>
+  <rect width="400" height="300" fill="url(#g)"/>
+  <g stroke="#9CC383" stroke-width="18" opacity="0.45"><path d="M-20 120 L420 60"/><path d="M-20 190 L420 130"/><path d="M-20 260 L420 200"/></g>
+  <ellipse cx="206" cy="214" rx="132" ry="26" fill="#5E8F48" opacity="0.35"/>
+  <!-- rear wheel -->
+  <ellipse cx="296" cy="186" rx="26" ry="30" fill="#13243D"/><ellipse cx="300" cy="186" rx="14" ry="18" fill="#5B7090"/>
+  <!-- body -->
+  <path d="M104 178 C104 136 150 112 214 108 C282 104 330 128 332 168 C334 196 300 210 214 214 C140 218 104 206 104 178 Z" fill="url(#b)" stroke="#13243D" stroke-width="3"/>
+  <path d="M108 186 C122 206 160 214 214 212 C290 210 326 198 332 172 L332 186 C326 210 290 222 214 224 C150 226 116 214 108 196 Z" fill="#13243D"/>
+  <path d="M170 124 C200 116 250 116 280 126 C268 150 236 160 214 160 C192 160 176 148 170 124 Z" fill="#1660CE"/>
+  <rect x="198" y="128" width="40" height="10" rx="5" fill="#FFFFFF" opacity="0.85"/>
+  <circle cx="148" cy="164" r="6" fill="#F2A33A" stroke="#13243D" stroke-width="2"/>
+  <!-- front wheel -->
+  <ellipse cx="132" cy="208" rx="14" ry="10" fill="#13243D"/>
+  <!-- antenna -->
+  <path d="M276 124 L284 92" stroke="#13243D" stroke-width="3" stroke-linecap="round"/><circle cx="285" cy="89" r="4" fill="#13243D"/>
+  <g stroke="#6FAE5B" stroke-width="3" stroke-linecap="round"><path d="M60 250l-4-12M70 252l2-14M80 250l-2-10M330 256l-4-12M342 258l2-14"/></g>
+</svg>

@@ -19,8 +19,9 @@ h1{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-siz
 .sub{color:#4A5668;margin:0 0 24px;font-size:14px}
 .card{background:#FFFFFF;border:1px solid #CBD3DE;border-radius:12px;padding:20px;margin-bottom:16px}
 .robot-row{display:flex;gap:16px;align-items:flex-start}
-.robot-row img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8}
-.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #DCE4F0;background:center/56px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none' stroke='%235B7090' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0M30 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0'/%3E%3Cpath d='M7 33h22v-9H7zM29 28l7-9 7 3M36 19l-3-8'/%3E%3C/svg%3E"),linear-gradient(160deg,#EEF3FA,#E2EAF5);flex:none}
+.robot-row img{width:128px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8;vertical-align:top}
+.r-pic{position:relative;flex:none}
+.art-tag{position:absolute;left:5px;bottom:5px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.88);font-size:9px;font-weight:700;letter-spacing:.04em;color:#4A5668}
 .robot-name{font-weight:700;font-size:18px;margin:0}
 .robot-vendor{color:#4A5668;font-size:13px;margin:2px 0 0}
 .robot-price{font-weight:800;font-size:18px;margin-top:8px;font-variant-numeric:tabular-nums}
@@ -90,8 +91,7 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 
       <div class="card">
         <div class="robot-row">
-          <img id="r-img" alt="" referrerpolicy="no-referrer" hidden>
-          <div id="r-noimg" class="noimg" hidden></div>
+          <div class="r-pic"><img id="r-img" alt="" referrerpolicy="no-referrer" hidden><span id="r-art-tag" class="art-tag" hidden>ILLUSTRATION</span></div>
           <div>
             <p class="robot-name" id="r-name">—</p>
             <p class="robot-vendor" id="r-vendor">—</p>
@@ -171,6 +171,8 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
   var price = priceRaw === '' ? null : Number(priceRaw);
   if (price !== null && !isFinite(price)) price = null;
   var img = /^https?:\/\//i.test(qp('img')) ? qp('img') : '';
+  // A drawing of this kind of robot (from find-solution), shown when there's no vendor photo or it won't load.
+  var art = /^\/img\/robots\/[a-z-]+\.svg$/.test(qp('art')) ? qp('art') : '/img/robots/robot.svg';
   var url = /^https?:\/\//i.test(qp('url')) ? qp('url') : '';
   var robotId = qp('robotId');
   var requestId = qp('requestId');
@@ -183,20 +185,25 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 
   document.getElementById('r-name').textContent = name;
   document.getElementById('r-vendor').textContent = vendor;
-  // No photo, or one the vendor's site won't serve to us: show the drawn robot tile instead of an empty box.
-  function showGlyph() {
-    document.getElementById('r-img').hidden = true;
-    document.getElementById('r-noimg').hidden = false;
+  // The vendor's photo; with none, or one the vendor's site won't serve to us, the illustration of
+  // this kind of robot (labelled as one), never an empty box.
+  var imgEl = document.getElementById('r-img');
+  function showArt() {
+    if (imgEl.getAttribute('data-art') === '1') return;
+    imgEl.setAttribute('data-art', '1');
+    imgEl.alt = 'Illustration of ' + name + ' (no vendor photo on file)';
+    imgEl.title = imgEl.alt;
+    imgEl.src = art;
+    document.getElementById('r-art-tag').hidden = false;
   }
+  imgEl.hidden = false;
   if (img) {
-    var imgEl = document.getElementById('r-img');
-    imgEl.addEventListener('error', showGlyph);
-    imgEl.addEventListener('load', function () { if (!imgEl.naturalWidth) showGlyph(); });
+    imgEl.addEventListener('error', showArt);
+    imgEl.addEventListener('load', function () { if (!imgEl.naturalWidth) showArt(); });
     imgEl.alt = 'Photo of ' + name;
-    imgEl.hidden = false;
     imgEl.src = img;
   } else {
-    showGlyph();
+    showArt();
   }
 
   var priceEl = document.getElementById('r-price');
@@ -243,6 +250,7 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
   var mv = new URLSearchParams();
   mv.set('name', name); mv.set('vendor', qp('vendor')); mv.set('price', priceRaw);
   if (img) mv.set('img', img);
+  mv.set('art', art);
   if (url) mv.set('url', url);
   if (robotId) mv.set('robotId', robotId);
   if (requestId) mv.set('requestId', requestId);

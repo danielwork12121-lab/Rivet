@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Illustration: tracked inspection crawler">
+  <defs><linearGradient id="p" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E9EDF2"/><stop offset="1" stop-color="#C9D1DC"/></linearGradient></defs>
+  <rect width="400" height="300" fill="url(#p)"/>
+  <!-- pipe interior -->
+  <ellipse cx="200" cy="150" rx="180" ry="128" fill="none" stroke="#AEB9C8" stroke-width="10"/>
+  <ellipse cx="200" cy="150" rx="120" ry="84" fill="none" stroke="#BCC6D3" stroke-width="6"/>
+  <ellipse cx="200" cy="150" rx="60" ry="42" fill="#A3AEBD" opacity="0.5"/>
+  <ellipse cx="206" cy="236" rx="118" ry="16" fill="#5B7090" opacity="0.3"/>
+  <!-- light beam -->
+  <path d="M276 180 L392 140 L392 230 Z" fill="#F2C230" opacity="0.22"/>
+  <!-- tracks -->
+  <rect x="104" y="196" width="190" height="36" rx="18" fill="#13243D"/>
+  <g fill="#5B7090"><circle cx="124" cy="214" r="11"/><circle cx="274" cy="214" r="11"/><circle cx="166" cy="216" r="6"/><circle cx="200" cy="216" r="6"/><circle cx="234" cy="216" r="6"/></g>
+  <!-- body -->
+  <rect x="126" y="160" width="146" height="40" rx="8" fill="#E8EDF3" stroke="#13243D" stroke-width="3"/>
+  <rect x="140" y="172" width="90" height="10" rx="5" fill="#1660CE"/>
+  <!-- camera head -->
+  <path d="M244 160 L244 136" stroke="#13243D" stroke-width="6" stroke-linecap="round"/>
+  <rect x="228" y="112" width="52" height="30" rx="8" fill="#2A3647" stroke="#13243D" stroke-width="3"/>
+  <circle cx="270" cy="127" r="9" fill="#13243D"/><circle cx="270" cy="127" r="5" fill="#F2C230"/>
+  <!-- tether -->
+  <path d="M126 186 C80 186 60 160 20 168" fill="none" stroke="#F2A33A" stroke-width="4" stroke-linecap="round"/>
+</svg>
