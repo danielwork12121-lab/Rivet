@@ -29,6 +29,7 @@ import type * as lib_pool from "../lib/pool.js";
 import type * as lib_roi from "../lib/roi.js";
 import type * as lib_score from "../lib/score.js";
 import type * as lib_specs from "../lib/specs.js";
+import type * as lib_usSale from "../lib/usSale.js";
 import type * as lib_validation from "../lib/validation.js";
 import type * as lib_verify from "../lib/verify.js";
 import type * as lib_workflow from "../lib/workflow.js";
@@ -68,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   "lib/roi": typeof lib_roi;
   "lib/score": typeof lib_score;
   "lib/specs": typeof lib_specs;
+  "lib/usSale": typeof lib_usSale;
   "lib/validation": typeof lib_validation;
   "lib/verify": typeof lib_verify;
   "lib/workflow": typeof lib_workflow;
