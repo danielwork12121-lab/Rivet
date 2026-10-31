@@ -94,6 +94,8 @@ cp .env.example .env.local
 npx convex dev            # creates a dev deployment and writes CONVEX_DEPLOYMENT/CONVEX_URL
 ```
 
+Hosting (Vercel, Convex, env vars, seeding) is covered in [docs/deploy.md](docs/deploy.md).
+
 Then serve the static site from the repo root (any static server works):
 
 ```bash

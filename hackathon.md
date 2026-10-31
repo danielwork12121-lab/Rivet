@@ -6,7 +6,7 @@
 - **Live app:** https://rivet-rose.vercel.app
 - **Repo:** https://github.com/danielwork12121-lab/Rivet
 - **Frontend:** Vercel
-- **Convex deployment:** https://woozy-warbler-733.convex.cloud (a development deployment, as returned by the live app's /api/config)
+- **Convex deployment:** https://agreeable-bobcat-49.convex.cloud (production, team `rivet-hq`). Moved from the hackathon dev deployment woozy-warbler-733; see docs/deploy.md.
 - **Components:** none
 - **Convex features:** schema (15 tables, 22 indexes), queries, mutations, internal actions, scheduled functions, cron jobs, realtime subscriptions (ConvexClient.onUpdate, no React useQuery), Clerk auth via ctx.auth
 - **Auth:** Clerk

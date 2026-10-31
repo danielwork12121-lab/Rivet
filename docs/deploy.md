@@ -1,95 +1,101 @@
-# Deploying feature/agent-refinements
+# Hosting
 
-For whoever holds the keys. Keys go into the Vercel and Convex prompts or dashboards only, never
-into chat, commits or screenshots.
+Runbook for the production setup. Secret values never go into chat, commits or screenshots; set them
+in the Vercel or Convex dashboards or CLIs only.
 
-## 1. Pick what you're deploying
+## Who owns what
 
-Vercel builds **Production from `main`** and a **Preview for every other branch**. This work is on
-`feature/agent-refinements`, so either:
+| Piece | Where | Details |
+| --- | --- | --- |
+| Frontend + `/api` | Vercel project `rivet`, team `danielwork12121-labs-projects` | Production tracks branch `main`. Live at https://rivet-rose.vercel.app |
+| Backend | Convex team `rivet-hq`, project `rivet` | Production: `agreeable-bobcat-49` (https://agreeable-bobcat-49.convex.cloud). Dev: `industrious-ox-314` (`dev/daniel-li`, no env vars set yet) |
+| Auth | Clerk Development instance `relevant-kingfish-8271` | Not in Daniel's Clerk account, see the TODO below |
 
-- **Demo from the preview**: every push to the branch rebuilds
-  `rivet-git-feature-agent-re-…vercel.app` (the link is in the Vercel dashboard under
-  Deployments). Preview has its own environment variables, so set them for **Preview** too (step 3).
-- **Make it production**: merge `feature/agent-refinements` into `main`. It already contains all
-  of `main`, so the merge has no conflicts.
+Production used to track the branch `website-merged`, which is why pushes to `main` never went live.
+It now tracks `main`: a push to `main` deploys the frontend. Other branches get Previews.
 
-## 2. Deploy the Convex backend that matches the site
+The old backend `woozy-warbler-733` was a hackathon teammate's dev deployment in the Convex team
+"Rivet". It is no longer used.
 
-The page calls new functions (`agent:planWorkflow`, `agent:latestWorkflow`, `requests:setVideoNotes`,
-`bounties:pooledDemand`…). If the Convex deployment the site points at runs older code, the page
-shows errors. From a clone of this branch:
+## Deploying
+
+**Frontend:** push to `main`. Vercel builds Production. Changed env vars only apply to a new
+deployment, so redeploy after changing them.
+
+**Backend:** from a clone of `main`, with a logged-in CLI:
 
 ```
-git checkout feature/agent-refinements && git pull
+npx convex login          # once
 npm install
-npx convex deploy          # the deployment Vercel's CONVEX_URL points at
+npx convex deploy -y      # deploys to the production deployment
 ```
 
-The schema change is additive (new optional fields and a `workflows` table), so existing data stays
-valid.
+Deploy the backend whenever `convex/` changes, before or together with the frontend that calls it.
+The deploy also installs the cron.
 
-## 3. Environment variables
+## Environment variables (names only)
 
-**Convex** (`npx convex env set NAME value`, or the Convex dashboard → Settings → Environment Variables):
+**Convex production** (`npx convex env set NAME value --prod`, or Dashboard, Settings, Environment Variables):
 
-| Name | Value |
+| Name | Notes |
 | --- | --- |
+| `CLERK_FRONTEND_API_URL` | Issuer of the Clerk instance |
+| `RIVET_SERVER_SECRET` | Must equal the Vercel value |
 | `ANTHROPIC_API_KEY` | Claude key |
 | `AI_MATCH_ENABLED` | `true` |
-| `DISCOVERY_ENABLED` | `true` |
-| `APIFY_TOKEN` | Apify token |
-| `APIFY_ACTOR_ID` | `unselfish_kingsnake~robot-spec-finder`, or your own copy (see below) |
-| `CLERK_FRONTEND_API_URL` | `https://relevant-kingfish-8271.clerk.accounts.dev` |
-| `RIVET_SERVER_SECRET` | a long random value, **the same as on Vercel** |
-| `DISCOVERY_DAILY_LIMIT`, `DISCOVERY_USER_DAILY_LIMIT` | defaults are 3 and 1 a day; use e.g. `100` for the demo |
-| `AI_DAILY_LIMIT`, `AI_USER_DAILY_LIMIT`, `AI_REQUEST_DAILY_LIMIT` | defaults 25 / 10 / 3; raise for the demo |
-| `VIDEO_DAILY_LIMIT`, `VIDEO_USER_DAILY_LIMIT` | defaults 10 / 3 |
+| `DISCOVERY_ENABLED` | `false` (no Apify token) |
+| `AI_DAILY_LIMIT`, `AI_USER_DAILY_LIMIT`, `AI_REQUEST_DAILY_LIMIT` | 200 / 50 / 10 |
+| `VIDEO_DAILY_LIMIT`, `VIDEO_USER_DAILY_LIMIT` | 50 / 10 |
+| `DISCOVERY_DAILY_LIMIT`, `DISCOVERY_USER_DAILY_LIMIT` | 0 / 0 |
 
-A limit that isn't a whole number counts as 0, which turns that feature off.
+A limit that isn't a whole number counts as 0, which turns that feature off. Values are trimmed
+server-side (`api/lib/env.js`, `convex/lib/env.ts`), so stray whitespace from pasting no longer
+breaks the gates.
 
-**Vercel** (`npx vercel env add NAME production`, and again with `preview` if you demo from the preview):
+**Vercel** (`npx vercel env add NAME production`):
 
-| Name | Value |
+| Name | Notes |
 | --- | --- |
-| `CONVEX_URL` | `https://<deployment>.convex.cloud` of the backend from step 2 |
-| `RIVET_SERVER_SECRET` | same value as Convex |
+| `CONVEX_URL` | The production deployment URL above |
+| `RIVET_SERVER_SECRET` | Must equal the Convex value |
+| `ANTHROPIC_API_KEY` | Chat and the Excel tab |
+| `GEMINI_API_KEY` | Video input |
 | `CHAT_ENABLED` | `true` |
-| `ANTHROPIC_API_KEY` | Claude key (chat and the Excel tab) |
 | `VIDEO_ENABLED` | `true` |
-| `GEMINI_API_KEY` | from aistudio.google.com/apikey |
 
-Vercel only applies changed variables to a **new** deployment: redeploy after setting them.
-
-## 4. The Apify Actor
-
-`APIFY_ACTOR_ID` must be an Actor the `APIFY_TOKEN` account can run. If the token belongs to a
-different Apify account than `unselfish_kingsnake`, push your own copy and use its id:
+## Seeding the catalog
 
 ```
-cd apify/robot-spec-finder
-npx apify-cli login          # with the token's account
-npx apify-cli push --force
+npx convex run --prod robots:seed              # 14 sample robots
+npx convex run --prod robots:seedFlagshipDemo  # 3 real robots
 ```
 
-If the Actor can't start, the backend falls back to Apify's own Google search + crawler, so searches
-still work but are slower. The free Apify plan runs 5 jobs at once; extra searches wait and retry.
+## Known TODO: Clerk
 
-## 5. Before the demo
+The app uses a Development Clerk instance (`relevant-kingfish-8271`; publishable key in
+`js/rivet-config.js`) that is not in Daniel's Clerk account. After the YC deadline:
 
-- **Warm the catalog.** A fresh backend has no robots, so the first search for each task takes a few
-  minutes. Run the demo jobs once beforehand (e.g. mowing, floor scrubbing); later searches for the
-  same task are instant.
-- **Test with a Client account**: chat → the job flow appears → robots with photos and scores →
-  "Start a bounty" on a "Possible" step. Then Video Input with a short clip (steps tagged
-  "In your video") and Excel Input.
-- If a step says "Web search skipped", a daily limit or `DISCOVERY_ENABLED` is the cause; "Web search
-  failed" shows Apify's error.
+1. Create your own Clerk application.
+2. Swap the publishable key in `js/rivet-config.js`.
+3. Set `CLERK_FRONTEND_API_URL` on Convex production, then redeploy both sides.
 
-## 6. Self-healing
+## Self-healing
 
-`convex/crons.ts` runs `sweep:sweepStuck` every 5 minutes. It ends searches stuck for 15 minutes,
-matches stuck reading for 10 (or searching for 20) and breakdowns stuck splitting for 10, so the page
-always shows a result or a "try again" message instead of spinning. `npx convex deploy` installs the
-cron; nothing else to set up. The page itself polls with backoff, stops after 25 minutes, and doesn't
-re-run the paid breakdown when the job text hasn't changed or the message is just a question.
+`convex/crons.ts` runs `sweep:sweepStuck` every 5 minutes using the `by_status` indexes, ending
+searches, matches and breakdowns that are stuck so the page shows a result or "try again" instead of
+spinning. It used to run every 2 minutes with full table scans.
+
+## Troubleshooting
+
+- **503 "unavailable"** from `/api` or a feature: an env gate is closed. Check the matching flag
+  (`CHAT_ENABLED`, `VIDEO_ENABLED`, `AI_MATCH_ENABLED`, `DISCOVERY_ENABLED`), that
+  `RIVET_SERVER_SECRET` is identical on Vercel and Convex, that the API key is set, and that the daily
+  limit is not 0. Redeploy Vercel after changing its variables.
+- **Web search skipped**: `DISCOVERY_ENABLED=false` and its limits are 0 by design until an Apify
+  token is added.
+- **Pushes don't go live**: confirm Vercel Production tracks `main` (Settings, Git).
+- **Convex over-limit warnings**: the free plan's database I/O was exceeded by the old 2-minute
+  full-scan sweeper. The 5-minute `by_status` version fixed it; if the warning returns, look for new
+  full scans or tight polling before upgrading the plan.
+- **Page errors about missing functions**: the frontend is ahead of the backend; run
+  `npx convex deploy -y`.
