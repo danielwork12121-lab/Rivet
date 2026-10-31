@@ -7,7 +7,7 @@
 body{margin:0;font:15px/1.5 "Public Sans",-apple-system,BlinkMacSystemFont,sans-serif;background:#F3F5F8;color:#13243D}
 img{max-width:100%}
 header.top{background:#13243D;display:flex;align-items:center;min-height:64px;padding:0 20px;gap:16px}
-header.top a.logo{display:flex;align-items:center;gap:8px;text-decoration:none}
+header.top a.logo{display:flex;align-items:center;gap:12px;text-decoration:none}
 header.top .wordmark{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-size:20px;letter-spacing:.22em;color:#D3D9E2}
 header.top nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap;font-size:15px;font-weight:600}
 header.top nav a{display:flex;align-items:center;min-height:64px;padding:0 12px;color:#9FACC2;text-decoration:none}
@@ -20,7 +20,7 @@ h1{font-family:Castellar,Cinzel,'Times New Roman',serif;font-weight:700;font-siz
 .card{background:#FFFFFF;border:1px solid #CBD3DE;border-radius:12px;padding:20px;margin-bottom:16px}
 .robot-row{display:flex;gap:16px;align-items:flex-start}
 .robot-row img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8}
-.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #CBD3DE;background:#F3F5F8;flex:none}
+.robot-row .noimg{width:96px;height:96px;border-radius:8px;border:1px solid #DCE4F0;background:linear-gradient(160deg,#EEF3FA,#E2EAF5) center/56px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48' fill='none' stroke='%235B7090' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0M30 38a4 4 0 1 0 8 0a4 4 0 1 0-8 0'/%3E%3Cpath d='M7 33h22v-9H7zM29 28l7-9 7 3M36 19l-3-8'/%3E%3C/svg%3E");flex:none}
 .robot-name{font-weight:700;font-size:18px;margin:0}
 .robot-vendor{color:#4A5668;font-size:13px;margin:2px 0 0}
 .robot-price{font-weight:800;font-size:18px;margin-top:8px;font-variant-numeric:tabular-nums}
@@ -57,13 +57,14 @@ textarea:focus,input[type=text]:focus{outline:2px solid #1660CE;outline-offset:1
 .confirm h2{font-family:Castellar,Cinzel,'Times New Roman',serif;font-size:20px;margin:0 0 6px}
 .confirm p{color:#4A5668;margin:0 0 4px;font-size:14px}
 .confirm .ref{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#13243D;background:#F3F5F8;border:1px solid #CBD3DE;border-radius:6px;padding:4px 10px;display:inline-block;margin:10px 0}
+@media(max-width:600px){header.top{flex-wrap:wrap;padding:0 16px;gap:0}header.top a.logo{min-height:56px}header.top nav{margin-left:0;width:100%;flex-wrap:nowrap;justify-content:space-between;font-size:13px}header.top nav a{min-height:48px;padding:0 4px;white-space:nowrap}}
 .missing{padding:40px 20px;text-align:center;color:#4A5668}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
 <header class="top">
-  <a class="logo" href="find-solution.html"><span class="wordmark">RIVET</span></a>
+  <a class="logo" href="find-solution.html" aria-label="Rivet home"><img src="../img/rivet-mark.png" alt="" width="34" height="35" style="width:34px;height:35px;object-fit:contain"><span class="wordmark">RIVET</span></a>
   <nav aria-label="Main">
     <a href="find-solution.html">Find a solution</a>
     <a href="engineers.html">For engineers</a>
