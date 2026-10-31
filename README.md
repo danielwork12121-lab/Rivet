@@ -71,7 +71,7 @@ Vercel ──── api/*.js (serverless)         Convex (realtime backend)
                                           ├─ lib/{decide,score,roi,specs,pool}  pure logic
                                           ├─ lib/aiBudget.ts    per-day spend caps
                                           ├─ discovery/scrape   → Apify actor
-                                          └─ crons.ts           stuck-work sweeper (2 min)
+                                          └─ crons.ts           stuck-work sweeper (5 min)
 ```
 
 | Layer | Choice | Why |
