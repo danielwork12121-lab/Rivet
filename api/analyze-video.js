@@ -27,6 +27,7 @@
 // required to pick it up.
 
 import { createHmac } from "node:crypto";
+import { env } from "./lib/env.js";
 
 const MODEL = "gemini-3.8-flash";
 const TIMEOUT_MS = 25000; // keep under vercel.json's maxDuration: 30 for this function
@@ -173,7 +174,8 @@ export default async function handler(req, res) {
     return fail(res, 405, "method_not_allowed", "Use POST.");
   }
 
-  const { VIDEO_ENABLED, GEMINI_API_KEY, CONVEX_URL, RIVET_SERVER_SECRET } = process.env;
+  const [VIDEO_ENABLED, GEMINI_API_KEY, CONVEX_URL, RIVET_SERVER_SECRET] =
+    ["VIDEO_ENABLED", "GEMINI_API_KEY", "CONVEX_URL", "RIVET_SERVER_SECRET"].map(env);
   if (VIDEO_ENABLED !== "true" || !GEMINI_API_KEY || !CONVEX_URL || !RIVET_SERVER_SECRET) {
     return fail(res, 503, "unavailable", UNAVAILABLE);
   }

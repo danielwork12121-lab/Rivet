@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { normalizeTask } from "./lib/decide";
 import { AI_BLOCK_MESSAGES, budgetBlock } from "./lib/aiBudget";
 import { requireClient } from "./lib/auth";
+import { env } from "./lib/env";
 
 // Database side of the web search for robots. The Apify calls live in scrape.ts
 // and the extraction in ai.ts; these functions track progress and store pages.
@@ -16,7 +17,7 @@ export const STUCK_MS = 15 * 60 * 1000; // a search older than this has crashed 
 // DISCOVERY_ENABLED=true and APIFY_TOKEN are set, and each one spends a unit of a small daily
 // budget charged to the account whose match asked for it (lib/aiBudget.ts). The check and the
 // usage row are in this one mutation, so concurrent matches can't both take the last unit.
-const discoveryEnabled = () => process.env.DISCOVERY_ENABLED === "true" && !!process.env.APIFY_TOKEN;
+const discoveryEnabled = () => env("DISCOVERY_ENABLED") === "true" && !!env("APIFY_TOKEN");
 const DISCOVERY_OFF = "Web search is turned off on this backend (set DISCOVERY_ENABLED=true and APIFY_TOKEN).";
 
 // Tells the match why it went on without a web search, so the page can say so.

@@ -15,6 +15,7 @@ import {
   reconcileProcess,
   reconcileTotals,
 } from "./lib/financials.js";
+import { env } from "./lib/env.js";
 
 const MODEL = "claude-sonnet-5-5";
 const TIMEOUT_MS = 25000;
@@ -129,7 +130,7 @@ export default async function handler(req, res) {
     return errorRes(res, 405, "Method not allowed");
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = env("ANTHROPIC_API_KEY");
   if (!apiKey) {
     return errorRes(res, 500, "ANTHROPIC_API_KEY not configured");
   }

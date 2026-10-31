@@ -10,6 +10,7 @@ import { nextAction, rankRobots, type Requirement } from "./lib/decide";
 import { isSpecName } from "./lib/specs";
 import { numbersIn } from "./lib/verify";
 import { stepCost, stepVerdict, stepsToSearch, workflowSummary } from "./lib/workflow";
+import { env } from "./lib/env";
 
 // Database side of the AI agent. Claude itself is called from ai.ts; these
 // functions start the AI work and store what it produces.
@@ -25,7 +26,7 @@ const owner = { requestId: v.id("operatorRequests"), clientToken: v.optional(v.s
 
 // AI calls need an Anthropic key in the backend's environment (npx convex env set
 // ANTHROPIC_API_KEY ...). It never reaches the browser; only this yes/no does.
-const aiAvailable = () => !!process.env.ANTHROPIC_API_KEY;
+const aiAvailable = () => !!env("ANTHROPIC_API_KEY");
 const AI_UNAVAILABLE = "AI drafting is unavailable: no Anthropic API key is configured on the backend.";
 
 // Why a new paid call can't start right now (no key, or a daily limit), or null.
@@ -362,7 +363,7 @@ export const logRun = internalMutation({
 // matching.ts (saved requirements, no AI) shares the matches table; its rows carry engine "rules"
 // and this flow neither reads nor replaces them.
 
-const matchEnabled = () => process.env.AI_MATCH_ENABLED === "true" && aiAvailable();
+const matchEnabled = () => env("AI_MATCH_ENABLED") === "true" && aiAvailable();
 const MATCH_OFF = "AI robot matching is turned off on this backend.";
 
 // The latest row this flow made for a request (rows from before `engine` existed count as ours).

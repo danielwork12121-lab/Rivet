@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+import { env } from "./env";
 
 // Server-enforced limits on paid AI calls. Every path that starts a paid call
 // (spec, recommend, bounty brief, website chat) checks these first and records
@@ -8,7 +9,8 @@ import type { Id } from "../_generated/dataModel";
 // The global daily cap is the hard guarantee; the per-request, per-account and
 // hashed-visitor limits spread the budget fairly.
 //
-// Convex env vars (whole numbers >= 0; unset = default; anything else = 0, i.e. off):
+// Convex env vars (whole numbers >= 0, surrounding whitespace ignored; unset = default;
+// anything else = 0, i.e. off):
 //   AI_DAILY_LIMIT          all paid AI calls in the last 24 h     (default 25)
 //   AI_REQUEST_DAILY_LIMIT  per operator request in the last 24 h  (default 3)
 //   AI_CLIENT_DAILY_LIMIT   per website visitor in the last 24 h   (default 10)
@@ -23,8 +25,9 @@ import type { Id } from "../_generated/dataModel";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function limit(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
+  if (process.env[name] === undefined || process.env[name] === "") return fallback;
+  const raw = env(name); // " 5\n" reads as 5; whitespace only reads as "" and fails closed below
+  if (raw === "") return 0;
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 ? n : 0; // misconfigured: fail closed
 }

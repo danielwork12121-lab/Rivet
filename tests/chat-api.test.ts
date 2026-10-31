@@ -147,6 +147,19 @@ describe("api/chat", () => {
     expect(calls(ANTHROPIC)).toHaveLength(0);
   });
 
+  it("works when env values were pasted with trailing whitespace or newlines", async () => {
+    vi.stubEnv("CHAT_ENABLED", "true\n");
+    vi.stubEnv("ANTHROPIC_API_KEY", " test-key-not-real\n");
+    vi.stubEnv("CONVEX_URL", `${CONVEX}\n`);
+    vi.stubEnv("RIVET_SERVER_SECRET", "shared-secret-for-tests\r\n");
+    const res = await call();
+    expect(res.statusCode).toBe(200);
+    const [, init] = calls(CONVEX)[0];
+    expect(calls(CONVEX)[0][0]).toBe(`${CONVEX}/api/mutation`);
+    expect(JSON.parse(init.body).args.secret).toBe("shared-secret-for-tests");
+    expect(calls(ANTHROPIC)[0][1].headers["x-api-key"]).toBe("test-key-not-real");
+  });
+
   it("sends a small, low-effort request and returns the reply", async () => {
     const res = await call();
     expect(res.statusCode).toBe(200);

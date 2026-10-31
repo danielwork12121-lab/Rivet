@@ -109,11 +109,18 @@ describe("AI budget: global daily cap", () => {
     await expect(t.mutation(api.agent.generateSpec, b)).resolves.toMatchObject({ reused: false });
   });
 
-  it.each([["-1"], ["2.5"], ["lots"]])("a misconfigured limit (%s) fails closed", async (value) => {
+  it.each([["-1"], ["2.5"], ["lots"], ["2.5 \n"], ["  "]])("a misconfigured limit (%j) fails closed", async (value) => {
     vi.stubEnv("AI_DAILY_LIMIT", value);
     const { t, reqs: [r], scheduled } = await setup();
     await expect(t.mutation(api.agent.generateSpec, r)).rejects.toThrow(/used up/);
     expect(await scheduled()).toHaveLength(0);
+  });
+
+  it("ignores whitespace around a limit (pasted with a trailing newline)", async () => {
+    vi.stubEnv("AI_DAILY_LIMIT", " 1\n");
+    const { t, reqs: [a, b] } = await setup(2);
+    await expect(t.mutation(api.agent.generateSpec, a)).resolves.toMatchObject({ reused: false });
+    await expect(t.mutation(api.agent.generateSpec, b)).rejects.toThrow(/used up/);
   });
 
   it("without a key, nothing is spent and the reason is no_key", async () => {
@@ -132,6 +139,16 @@ describe("aiBudget:reserveChat (Vercel /api/chat)", () => {
     vi.stubEnv("RIVET_SERVER_SECRET", "");
     await expect(t.mutation(api.aiBudget.reserveChat, { secret: "", clientKey: key("a") })).rejects.toThrow(/forbidden/);
     expect(await usage()).toHaveLength(0);
+  });
+
+  it("ignores whitespace around the secret, stored or sent", async () => {
+    vi.stubEnv("RIVET_SERVER_SECRET", "server-secret-for-tests\n");
+    const { t, usage } = await setup(0);
+    expect(await t.mutation(api.aiBudget.reserveChat, { secret: "server-secret-for-tests", clientKey: key("a") })).toEqual({ ok: true });
+    expect(await t.mutation(api.aiBudget.reserveChat, { secret: " server-secret-for-tests \n", clientKey: key("b") })).toEqual({ ok: true });
+    vi.stubEnv("RIVET_SERVER_SECRET", " \n");
+    await expect(t.mutation(api.aiBudget.reserveChat, { secret: " ", clientKey: key("c") })).rejects.toThrow(/forbidden/);
+    expect(await usage()).toHaveLength(2);
   });
 
   it("rejects a client key that isn't a hash", async () => {

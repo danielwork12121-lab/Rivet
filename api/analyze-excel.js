@@ -36,6 +36,7 @@ import {
 } from "./lib/financials.js";
 import { buildCorrectedWorkbook } from "./lib/corrected-workbook.js";
 import { readWorkbookSheets } from "./lib/workbook.js";
+import { env } from "./lib/env.js";
 
 // Sonnet 5.5 is the right pick here: fast enough to fit inside Vercel
 // Hobby's hard 10-second function limit (Opus 5.5 regularly exceeds it),
@@ -163,7 +164,7 @@ export default async function handler(req, res) {
     return errorRes(res, 405, "Method not allowed");
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = env("ANTHROPIC_API_KEY");
   if (!apiKey) {
     return errorRes(res, 500, "ANTHROPIC_API_KEY not configured");
   }

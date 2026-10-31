@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, type MutationCtx } from "./_generated/server";
 import { budgetBlock } from "./lib/aiBudget";
 import { getViewer } from "./lib/auth";
+import { env } from "./lib/env";
 
 // Called by the Vercel functions /api/chat and /api/analyze-video, server to server,
 // before each paid call. Not for browsers: it requires RIVET_SERVER_SECRET, which lives
@@ -10,8 +11,8 @@ import { getViewer } from "./lib/auth";
 // who is asking: only a signed-in Client account may spend budget. The check and the
 // usage row happen in one mutation, so concurrent callers can't both take the last unit.
 async function reserve(ctx: MutationCtx, kind: "chat" | "video", secret: string, clientKey: string) {
-  const expected = process.env.RIVET_SERVER_SECRET;
-  if (!expected || secret !== expected) throw new ConvexError("forbidden");
+  const expected = env("RIVET_SERVER_SECRET");
+  if (!expected || secret.trim() !== expected) throw new ConvexError("forbidden");
   if (!/^[a-f0-9]{32,128}$/.test(clientKey)) throw new ConvexError("invalid client key");
   if (!(await ctx.auth.getUserIdentity())) return { ok: false as const, reason: "unauthenticated" as const };
   const user = await getViewer(ctx);

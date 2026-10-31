@@ -17,10 +17,11 @@ import { cleanSteps } from "./lib/workflow";
 import { isSpecName, SPEC_NAMES } from "./lib/specs";
 import type { Id } from "./_generated/dataModel";
 import { PERSONAS } from "./lib/personas";
+import { env } from "./lib/env";
 
 // Created per call so a key set later (npx convex env set) is picked up without a
 // redeploy. Reads ANTHROPIC_API_KEY from Convex env vars.
-const client = () => new Anthropic();
+const client = () => new Anthropic({ apiKey: env("ANTHROPIC_API_KEY") || undefined });
 const MODEL = "claude-opus-5-5"; // deep layer: careful writing and judgment
 const FAST_MODEL = "claude-haiku-5-5"; // fast layer: reading messages and pages
 

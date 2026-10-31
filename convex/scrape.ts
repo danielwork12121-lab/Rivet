@@ -11,6 +11,7 @@ import { normalizeTask } from "./lib/decide";
 import { callActor, datasetItems, getRun, isBusy, isRunning, startActor } from "./lib/apify";
 import { robotFromActorRow, type ActorRow } from "./lib/actorRows";
 import { pageImage, type CrawledPage } from "./lib/images";
+import { env } from "./lib/env";
 
 const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets at most 4
 
@@ -20,7 +21,7 @@ const WAIT_SECS = 240; // Convex actions stop after 10 minutes; each Actor gets 
 // It runs with crawlOnly: it finds and crawls the vendor pages and returns their text. Claude
 // reads them here (ai.extractPages), so ANTHROPIC_API_KEY never goes into an Apify run's input,
 // which Apify stores and shows. The Actor must be a version that has the crawlOnly input.
-const finderActor = () => process.env.APIFY_ACTOR_ID;
+const finderActor = () => env("APIFY_ACTOR_ID") || undefined;
 const CHECK_EVERY_MS = 30_000;
 const BUSY_WAIT_MS = 30_000; // Apify's concurrent-run limit: wait this long, then try again
 const BUSY_RETRY_MS = 8 * 60 * 1000; // ...for at most this long after the search was created
@@ -42,7 +43,7 @@ export const discover = internalAction({
           task: d.task,
           searchPhrase: d.searchPhrase,
           crawlOnly: true, // no AI inside Apify, so no key in the input
-          maxSites: Number(process.env.APIFY_MAX_SITES) || 8, // pages to read; more = slower but more robots
+          maxSites: Number(env("APIFY_MAX_SITES")) || 8, // pages to read; more = slower but more robots
         }).catch((err) => {
           if (isBusy(err)) throw err; // wait for a free slot (below), don't switch paths
           console.warn(`Robot Spec Finder (${actorId}) wouldn't start, using the built-in search: ${String(err).slice(0, 300)}`);

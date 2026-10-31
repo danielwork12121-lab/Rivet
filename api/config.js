@@ -2,7 +2,9 @@
 // repo. Set CONVEX_URL in Vercel → Project Settings → Environment Variables to the
 // deployment URL, e.g. https://happy-otter-123.convex.cloud. Not a secret: the
 // browser talks to that URL directly.
+import { env } from "./lib/env.js";
+
 export default function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
-  res.status(200).json({ convexUrl: process.env.CONVEX_URL || null });
+  res.status(200).json({ convexUrl: env("CONVEX_URL") || null });
 }

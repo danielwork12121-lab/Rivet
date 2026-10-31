@@ -1,5 +1,6 @@
 // A small client for Apify's REST API (https://docs.apify.com/api/v2), using plain
 // fetch. The apify-client package crashed when bundled into Convex, so we don't use it.
+import { env } from "./env";
 
 const BASE = "https://api.apify.com/v2";
 
@@ -9,7 +10,7 @@ export type ApifyRun = { id: string; status: string; defaultDatasetId: string };
 const actorPath = (actorId: string) => encodeURIComponent(actorId.trim().replace("/", "~"));
 
 async function api(path: string, init: RequestInit = {}): Promise<unknown> {
-  const token = process.env.APIFY_TOKEN;
+  const token = env("APIFY_TOKEN");
   if (!token) throw new Error("APIFY_TOKEN is not set in Convex");
   const res = await fetch(BASE + path, {
     ...init,

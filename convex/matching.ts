@@ -4,6 +4,7 @@ import type { Doc } from "./_generated/dataModel";
 import { loadOwnedDraft } from "./lib/drafts";
 import { nextAction, normalizeTask, rankRobots, type Intent, type Requirement, type RobotFacts } from "./lib/decide";
 import { SPEC_LABELS, isSpecName, type SpecName } from "./lib/specs";
+import { env } from "./lib/env";
 
 // Robot matching for a signed-in Client's own request: rank the catalog with lib/decide.ts (plain
 // code, no AI) and save the result under that request. Every function here goes through
@@ -31,7 +32,7 @@ const MAX_ROBOTS = 500;
 // Fictional demo robots are hidden unless this deployment says otherwise. Only an isolated test
 // deployment should set SHOW_SAMPLE_ROBOTS=true; production never shows them (ai.matchRobots
 // drops them too). When shown, every result labels them (FICTIONAL_NOTE, dataSource).
-const showSamples = () => process.env.SHOW_SAMPLE_ROBOTS === "true";
+const showSamples = () => env("SHOW_SAMPLE_ROBOTS") === "true";
 
 // This flow's latest row for a request. The AI flow (agent:findRobots) shares the matches table;
 // its rows have no engine or engine "agent", and this file never reads or replaces them.

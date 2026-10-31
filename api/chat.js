@@ -19,6 +19,7 @@
 // Every failure returns an explicit { error, message }; never a made-up reply.
 
 import { createHmac } from "node:crypto";
+import { env } from "./lib/env.js";
 
 // The fast model: this route writes one short sentence, so speed matters more
 // than depth. convex/ai.ts uses the same model (FAST_MODEL) for its quick steps.
@@ -107,7 +108,8 @@ export default async function handler(req, res) {
     return fail(res, 405, "method_not_allowed", "Use POST.");
   }
 
-  const { CHAT_ENABLED, ANTHROPIC_API_KEY, CONVEX_URL, RIVET_SERVER_SECRET } = process.env;
+  const [CHAT_ENABLED, ANTHROPIC_API_KEY, CONVEX_URL, RIVET_SERVER_SECRET] =
+    ["CHAT_ENABLED", "ANTHROPIC_API_KEY", "CONVEX_URL", "RIVET_SERVER_SECRET"].map(env);
   if (CHAT_ENABLED !== "true" || !ANTHROPIC_API_KEY || !CONVEX_URL || !RIVET_SERVER_SECRET) {
     return fail(res, 503, "unavailable", UNAVAILABLE);
   }
