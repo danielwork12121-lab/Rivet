@@ -275,6 +275,14 @@ export default defineSchema({
     automationShareEstimated: v.optional(v.boolean()),
     fetchedAt: v.optional(v.number()),
     imageUrl: v.optional(v.string()), // product photo from the vendor's page (og:image or similar)
+    // Origin facts for the US sale status (lib/usSale.ts). All optional: missing means "not known".
+    madeIn: v.optional(v.string()), // ISO 3166-1 alpha-2 country of manufacture, e.g. "US"
+    mobile: v.optional(v.boolean()),
+    connected: v.optional(v.boolean()), // has network connectivity (>= 200 kbps)
+    stationaryArm: v.optional(v.boolean()), // fixed industrial arm / delta / gantry / SCARA
+    underwater: v.optional(v.boolean()),
+    usContentShare: v.optional(v.number()), // 0..1 domestic share of component cost
+    fccAuthorizedBefore: v.optional(v.boolean()), // FCC authorization predates 2026-07-28
   })
     .index("by_sample_key", ["sampleKey"])
     .index("by_task", ["task"])

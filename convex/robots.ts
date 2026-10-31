@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
 import { robotSpec } from "./schema";
+import { usSaleOfRobot } from "./lib/usSale";
 
 // Made-up demo robots so you can build before the Apify import works.
 // Prices are rough placeholders: replace them with real data.
@@ -81,6 +82,20 @@ export const removeSamples = internalMutation({
 // Idempotent by url: run again any time to pick up a future manual correction; it is a no-op.
 // Run: npx convex run robots:seedFlagshipDemo
 const VERIFIED_ON = "2026-10-25"; // the date these pages were actually read
+
+// Origin facts for the US sale status (lib/usSale.ts), by robot name. Kept separate from
+// FLAGSHIP_ROBOTS so backfillUsSaleFields can patch rows that were seeded before these existed.
+// usContentShare is left out on purpose wherever no figure has been verified.
+const FLAGSHIP_US_SALE: Record<string, {
+  madeIn: string; mobile: boolean; connected: boolean; fccAuthorizedBefore: boolean; usContentShare?: number;
+}> = {
+  // RC Mowers, Germantown, Wisconsin; shipping before the July 2026 rule.
+  "RC Mowers REAPER 52": { madeIn: "US", mobile: true, connected: true, fccAuthorizedBefore: true },
+  // Sold in the US for years before the rule.
+  "Husqvarna Automower 435X AWD NERA": { madeIn: "SE", mobile: true, connected: true, fccAuthorizedBefore: true },
+  // RC Mowers, Germantown, Wisconsin; announced for 2027, so it must meet the rule as a new model.
+  "RC Mowers RECONX": { madeIn: "US", mobile: true, connected: true, fccAuthorizedBefore: false },
+};
 
 const FLAGSHIP_ROBOTS = [
   {
@@ -182,7 +197,7 @@ export const seedFlagshipDemo = internalMutation({
     for (const r of FLAGSHIP_ROBOTS) {
       const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
       if (existing) continue;
-      await ctx.db.insert("robots", { ...r, sample: false, fetchedAt: Date.now() });
+      await ctx.db.insert("robots", { ...r, ...FLAGSHIP_US_SALE[r.name], sample: false, fetchedAt: Date.now() });
       added++;
     }
     return `Added ${added} flagship robots (${FLAGSHIP_ROBOTS.length - added} already present)`;
@@ -212,16 +227,39 @@ export const backfillAutomationShareEstimated = internalMutation({
   },
 });
 
+// Sets the US-sale origin fields on the flagship robots already in the table (seedFlagshipDemo only
+// inserts missing rows). Matches by name; only writes fields that differ, so running it again is a
+// no-op. Sample robots need nothing: sample alone makes their status "unknown".
+// Run: npx convex run --prod robots:backfillUsSaleFields
+export const backfillUsSaleFields = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const updated: string[] = [];
+    for (const r of await ctx.db.query("robots").collect()) {
+      const want = r.sample ? undefined : FLAGSHIP_US_SALE[r.name];
+      if (!want) continue;
+      const patch: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(want)) if ((r as Record<string, unknown>)[k] !== val) patch[k] = val;
+      if (Object.keys(patch).length === 0) continue;
+      await ctx.db.patch(r._id, patch);
+      updated.push(r.name);
+    }
+    return { updated, unchanged: Object.keys(FLAGSHIP_US_SALE).filter((n) => !updated.includes(n)) };
+  },
+});
+
 // The manual-filter side of search (price slider, task).
 export const search = query({
   args: { task: v.optional(v.string()), maxPrice: v.optional(v.number()) },
   handler: async (ctx, { task, maxPrice }) => {
     const all = await ctx.db.query("robots").collect();
     // Robots without a listed price are kept out of a price filter: their price is unknown.
-    return all.filter(
-      (r) => (!task || r.task === task) &&
-        (maxPrice === undefined || (r.priceStatus !== "quote_only" && r.price <= maxPrice)),
-    );
+    return all
+      .filter(
+        (r) => (!task || r.task === task) &&
+          (maxPrice === undefined || (r.priceStatus !== "quote_only" && r.price <= maxPrice)),
+      )
+      .map((r) => ({ ...r, usSale: usSaleOfRobot(r) }));
   },
 });
 
@@ -233,7 +271,7 @@ export const searchInternal = internalQuery({
     return all
       .filter((r) => (!task || r.task === task) &&
         (maxPrice === undefined || (r.priceStatus !== "quote_only" && r.price <= maxPrice)))
-      .map((r) => ({ id: r._id, name: r.name, vendor: r.vendor, task: r.task, price: r.price, environments: r.environments }));
+      .map((r) => ({ id: r._id, name: r.name, vendor: r.vendor, task: r.task, price: r.price, environments: r.environments, usSale: usSaleOfRobot(r).status }));
   },
 });
 

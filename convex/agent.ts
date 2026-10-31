@@ -6,6 +6,7 @@ import { loadOwnedDraft, withoutToken } from "./lib/drafts";
 import { AI_BLOCK_MESSAGES, budgetBlock, spendAiBudget, type AiBlock } from "./lib/aiBudget";
 import { intentInfo, matchNext, matchPick, workflowStep } from "./schema";
 import { dataSourceOf } from "./matching";
+import { usSaleOfRobot } from "./lib/usSale";
 import { nextAction, rankRobots, type Requirement } from "./lib/decide";
 import { isSpecName } from "./lib/specs";
 import { numbersIn } from "./lib/verify";
@@ -437,6 +438,7 @@ async function picksWithRobots(ctx: QueryCtx, picks: Doc<"matches">["picks"]) {
       fetchedAt: r.fetchedAt ?? null,
       dataSource: dataSourceOf(r),
       imageUrl: r.imageUrl ?? null,
+      usSale: usSaleOfRobot(r),
     });
   }
   return robots;

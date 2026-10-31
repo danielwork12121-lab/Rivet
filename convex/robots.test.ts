@@ -108,3 +108,25 @@ describe("robots:backfillAutomationShareEstimated", () => {
     );
   });
 });
+
+describe("robots:backfillUsSaleFields", () => {
+  it("patches flagship rows seeded without origin fields, once, and search reports their US sale status", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(internal.robots.seedFlagshipDemo, {});
+    await t.mutation(internal.robots.seed, {});
+    // Simulate rows seeded before the fields existed.
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query("robots").collect()) {
+        if (!r.sample) await ctx.db.patch(r._id, { madeIn: undefined, mobile: undefined, connected: undefined, fccAuthorizedBefore: undefined });
+      }
+    });
+    const first = await t.mutation(internal.robots.backfillUsSaleFields, {});
+    expect(first.updated.sort()).toEqual(["Husqvarna Automower 435X AWD NERA", "RC Mowers REAPER 52", "RC Mowers RECONX"]);
+    expect((await t.mutation(internal.robots.backfillUsSaleFields, {})).updated).toEqual([]);
+    const byName = new Map((await t.query(api.robots.search, {})).map((r) => [r.name, r]));
+    expect(byName.get("RC Mowers REAPER 52")!.usSale.status).toBe("ok");
+    expect(byName.get("Husqvarna Automower 435X AWD NERA")!.usSale.status).toBe("ok");
+    expect(byName.get("RC Mowers RECONX")!.usSale).toMatchObject({ status: "review", note: "US-made; domestic-content share not yet verified" });
+    expect(byName.get("TurfRover R2")!.usSale.status).toBe("unknown");
+  });
+});

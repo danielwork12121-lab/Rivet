@@ -5,6 +5,7 @@ import { loadOwnedDraft } from "./lib/drafts";
 import { nextAction, normalizeTask, rankRobots, type Intent, type Requirement, type RobotFacts } from "./lib/decide";
 import { SPEC_LABELS, isSpecName, type SpecName } from "./lib/specs";
 import { env } from "./lib/env";
+import { usSaleOfRobot } from "./lib/usSale";
 
 // Robot matching for a signed-in Client's own request: rank the catalog with lib/decide.ts (plain
 // code, no AI) and save the result under that request. Every function here goes through
@@ -329,6 +330,7 @@ async function matchView(ctx: QueryCtx, request: Doc<"operatorRequests">) {
       fetchedAt: r.fetchedAt ?? null,
       dataSource: dataSourceOf(r),
       provenance: r.provenance ?? null,
+      usSale: usSaleOfRobot(r),
       // aligned with intent.requirements: where this robot's figure for each requirement comes from
       fitSources: (match.intent?.requirements ?? []).map((q) => fitSource(r, q.name)),
     });
