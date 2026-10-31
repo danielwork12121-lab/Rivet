@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // js/rivet-auth.js against a fake Clerk object. This checks our own logic (which
 // Clerk calls we make, in what order, and what the page is told). It does NOT
@@ -220,6 +220,140 @@ describe("rivet-api auth glue", () => {
     await clerk.setActive({ session: "sess_2" });
     expect(client.close).toHaveBeenCalledTimes(1);
     expect(client.setAuth).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("rivet-api calls wait for sign-in and heal it", () => {
+  beforeAll(async () => {
+    // @ts-expect-error plain JS, no types
+    await import("../js/rivet-api.js");
+  });
+  afterEach(() => g.RivetApi._setClient(null));
+  const NOT_SIGNED_IN = "Please sign in to continue.";
+  const NO_ACCOUNT = "Finish setting up your account first.";
+  const refusal = (data: string) => Object.assign(new Error("ConvexError"), { data });
+  const signedInClerk = () => {
+    clerk.session = { id: "sess_1", getToken: vi.fn().mockResolvedValue(jwt({ aud: "convex" })) };
+    clerk.user = { id: "user_1", firstName: "Ana", primaryEmailAddress: { emailAddress: "ana@example.test" } };
+  };
+  // A Convex client whose server confirms (or refuses) the token when told to.
+  const fakeConvex = (mutation: any) => {
+    const c: any = { mutation, query: vi.fn(), close: vi.fn() };
+    c.setAuth = vi.fn((_fetch: any, onAuth: (ok: boolean) => void) => { c.onAuth = onAuth; });
+    return c;
+  };
+  const wire = (c: any) => { g.RivetApi._authenticate(c, () => {}); g.RivetApi._setClient(c); };
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+
+  it("a call made while clerk-js is still loading waits until Convex accepted the token", async () => {
+    let loaded!: () => void;
+    clerk.load = vi.fn(() => new Promise<void>((r) => (loaded = r)));
+    signedInClerk();
+    const c = fakeConvex(vi.fn().mockResolvedValue("req_1"));
+    wire(c);
+    const p = g.RivetApi.createRequest({ title: "x" });
+    await flush();
+    expect(c.mutation).not.toHaveBeenCalled(); // before the fix this went out anonymously
+    loaded();
+    await vi.waitFor(() => expect(c.setAuth).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(c.mutation).not.toHaveBeenCalled(); // token sent, not yet confirmed
+    c.onAuth(true);
+    expect(await p).toBe("req_1");
+  });
+
+  it("signed out: the call goes ahead once Clerk has answered, without a token", async () => {
+    const c = fakeConvex(vi.fn().mockRejectedValue(refusal(NOT_SIGNED_IN)));
+    wire(c);
+    const err = await g.RivetApi.createRequest({}).catch((e: any) => e);
+    expect(c.setAuth).not.toHaveBeenCalled();
+    expect(c.mutation).toHaveBeenCalledTimes(1); // no retry for a real signed-out visitor
+    expect(g.RivetApi.friendlyError(err)).toBe(NOT_SIGNED_IN);
+  });
+
+  it("re-sends the token when Convex dropped it, before the next call", async () => {
+    signedInClerk();
+    const c = fakeConvex(vi.fn().mockResolvedValue("ok"));
+    wire(c);
+    await vi.waitFor(() => expect(c.setAuth).toHaveBeenCalledTimes(1));
+    c.onAuth(false); // e.g. one token refresh failed in a sleeping tab
+    const p = g.RivetApi.planWorkflow("req_1");
+    await vi.waitFor(() => expect(c.setAuth).toHaveBeenCalledTimes(2));
+    c.onAuth(true);
+    expect(await p).toBe("ok");
+    expect(c.mutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("refused as signed out while Clerk has a session: re-authenticates and retries once", async () => {
+    signedInClerk();
+    const mutation = vi.fn().mockRejectedValueOnce(refusal(NOT_SIGNED_IN)).mockResolvedValueOnce("req_1");
+    const c = fakeConvex(mutation);
+    c.setAuth = vi.fn((_f: any, onAuth: (ok: boolean) => void) => { c.onAuth = onAuth; queueMicrotask(() => onAuth(true)); });
+    wire(c);
+    expect(await g.RivetApi.createRequest({})).toBe("req_1");
+    expect(mutation).toHaveBeenCalledTimes(2);
+    expect(c.setAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("still refused after that: says so without telling a signed-in person to sign in", async () => {
+    signedInClerk();
+    const c = fakeConvex(vi.fn().mockRejectedValue(refusal(NOT_SIGNED_IN)));
+    c.setAuth = vi.fn((_f: any, onAuth: (ok: boolean) => void) => queueMicrotask(() => onAuth(true)));
+    wire(c);
+    const err = await g.RivetApi.createRequest({}).catch((e: any) => e);
+    expect(c.mutation).toHaveBeenCalledTimes(2);
+    expect(g.RivetApi.friendlyError(err)).not.toMatch(/please sign in/i);
+    expect(g.RivetApi.friendlyError(err)).toMatch(/couldn't confirm your sign-in/);
+  });
+
+  it("no account row on this backend: creates it, then retries when the role is known", async () => {
+    signedInClerk();
+    const mutation = vi.fn(async (name: string) => {
+      if (name === "users:ensureAccount") return { role: "client" };
+      if (mutation.mock.calls.filter((x: any[]) => x[0] === name).length === 1) throw refusal(NO_ACCOUNT);
+      return "req_1";
+    });
+    const c = fakeConvex(mutation);
+    c.setAuth = vi.fn((_f: any, onAuth: (ok: boolean) => void) => queueMicrotask(() => onAuth(true)));
+    wire(c);
+    expect(await g.RivetApi.createRequest({})).toBe("req_1");
+    expect(mutation.mock.calls.map((x: any[]) => x[0])).toEqual(["requests:create", "users:ensureAccount", "requests:create"]);
+  });
+
+  it("no role yet: the error asks the person to choose how they'll use Rivet", async () => {
+    signedInClerk();
+    const mutation = vi.fn(async (name: string) => {
+      if (name === "users:ensureAccount") return { role: null };
+      throw refusal(NO_ACCOUNT);
+    });
+    const c = fakeConvex(mutation);
+    c.setAuth = vi.fn((_f: any, onAuth: (ok: boolean) => void) => queueMicrotask(() => onAuth(true)));
+    wire(c);
+    const err = await g.RivetApi.createRequest({}).catch((e: any) => e);
+    expect(g.RivetApi.needsRole(err)).toBe(true);
+    expect(g.RivetApi.friendlyError(err)).toBe("Choose how you'll use Rivet to continue.");
+    expect(mutation).toHaveBeenCalledTimes(2); // no role is ever chosen for them
+  });
+});
+
+describe("nav link while signed in", () => {
+  const fakeDoc = () => {
+    const attrs: Record<string, string> = {};
+    const a: any = {
+      textContent: "Log in",
+      hasAttribute: (k: string) => k in attrs, getAttribute: (k: string) => attrs[k] ?? null,
+      setAttribute: (k: string, v: string) => { attrs[k] = v; }, removeAttribute: (k: string) => { delete attrs[k]; },
+    };
+    return { a, attrs, doc: { querySelectorAll: () => [a] } };
+  };
+  it("reads Account (email in the title) when signed in, and Log in again when signed out", () => {
+    const { a, attrs, doc } = fakeDoc();
+    expect(auth()._decorateNav({ signedIn: true, email: "ana@example.test" }, doc)).toBe(1);
+    expect(a.textContent).toBe("Account");
+    expect(attrs.title).toMatch(/ana@example\.test/);
+    auth()._decorateNav({ signedIn: false }, doc);
+    expect(a.textContent).toBe("Log in");
+    expect(attrs.title).toBeUndefined();
   });
 });
 

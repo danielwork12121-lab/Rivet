@@ -28,6 +28,21 @@ describe("users:me and ensureAccount", () => {
     expect(rows[0]).toMatchObject({ clerkUserId: "user_1", email: "one@example.test" });
   });
 
+  // A Clerk account older than this backend (e.g. after moving to a new deployment) arrives
+  // with a valid token and no row. The pages heal it (js/rivet-api.js): on NO_ACCOUNT they call
+  // ensureAccount and, if no role is set, ask the person to choose one. Nothing is assumed.
+  it("a Clerk account with no row here: refused as 'finish setting up', never 'sign in'; healed by ensureAccount + chooseRole", async () => {
+    const t = convexTest(schema, modules);
+    const as = signedIn(t, "user_old");
+    const req = { title: "Mow", description: "Mow the lawn weekly.", environment: "Outdoor grounds", constraints: [] };
+    await expect(as.mutation(api.requests.create, req)).rejects.toThrow(/Finish setting up your account first/);
+    expect(await as.mutation(api.users.ensureAccount, {})).toMatchObject({ role: null });
+    await expect(as.mutation(api.requests.create, req)).rejects.toThrow(/Finish setting up your account first/);
+    await as.mutation(api.users.chooseRole, { role: "client" });
+    await expect(as.mutation(api.requests.create, req)).resolves.toBeTruthy();
+    expect(await users(t)).toHaveLength(1);
+  });
+
   it("refuses signed-out callers", async () => {
     const t = convexTest(schema, modules);
     await expect(t.mutation(api.users.ensureAccount, {})).rejects.toThrow(/Please sign in/);

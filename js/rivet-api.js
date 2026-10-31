@@ -30,6 +30,8 @@
     developerOnly: "This needs an approved Developer account.",
   };
 
+  var NEEDS_ROLE = "Choose how you'll use Rivet to continue.";
+
   var BUSINESS_LABELS = { lawn: "Lawn care", pest: "Pest control" };
   // Units for the frontend's illustrative numbers. Questions not listed here have
   // no unit (e.g. the obstacle multiplier, which is a modelling factor).
@@ -193,6 +195,8 @@
 
   function friendlyError(err) {
     if (isDraftMissing(err)) return "Your saved request could not be found. Press the button again to save it as a new request.";
+    if (authProblem(err) === "signIn" && err && err.rivetSignedIn) return "Rivet couldn't confirm your sign-in. Reload the page; if this keeps happening, log out and back in.";
+    if (needsRole(err)) return NEEDS_ROLE;
     if (authProblem(err) === "signIn" && !(err && typeof err.data === "string")) return "Your session has ended. Please sign in again.";
     if (err && typeof err.data === "string") return err.data; // ConvexError from validation
     if (err && err.name === "RivetTimeout") {
@@ -215,15 +219,56 @@
   // de-authenticate it: with convex 1.48 a socket kept acting as the old user after
   // setAuth(() => null) and clearAuth() (checked against a local backend). The next
   // call opens a fresh connection with the new session, if any.
+  //
+  // Calls wait until the socket's sign-in state is settled: Clerk has said whether
+  // anyone is signed in and, if so, Convex has accepted or refused the token. Without
+  // that wait, a call made while clerk-js was still loading went out anonymously and
+  // was refused with "Please sign in" even though the person was signed in. If Convex
+  // drops the token later (a token fetch that failed once, e.g. in a sleeping tab, makes
+  // convex 1.48 fall back to anonymous for good), the next call re-sends it, and a call
+  // refused as signed-out while Clerk still has a session is retried once after
+  // re-authenticating. That retry is safe: the backend refuses before changing anything.
   var injected = null;
   var clientPromise = null;
+  var AUTH_WAIT_MS = 8000; // never hold a call longer than this waiting for sign-in to settle
+  var authOf = typeof WeakMap === "function" ? new WeakMap() : null;
 
   function authenticate(client, onEnded) {
     var auth = root.RivetAuth;
-    if (!auth) return;
+    var rec = { known: !auth, signedIn: false, confirmed: null, waiters: [] };
+    rec.settled = function () { return rec.known && (!rec.signedIn || rec.confirmed !== null); };
+    var wake = function () {
+      if (!rec.settled()) return;
+      var w = rec.waiters; rec.waiters = [];
+      w.forEach(function (f) { f(); });
+    };
+    rec.ready = function () {
+      if (rec.settled()) return Promise.resolve(rec);
+      return new Promise(function (resolve) {
+        var done = function () { clearTimeout(t); resolve(rec); };
+        var t = setTimeout(function () { rec.waiters = rec.waiters.filter(function (f) { return f !== done; }); resolve(rec); }, AUTH_WAIT_MS);
+        rec.waiters.push(done);
+      });
+    };
+    // (Re)sends the session token; Convex reports back whether it accepted it.
+    rec.arm = function () {
+      rec.confirmed = null;
+      client.setAuth(function (o) {
+        var force = !!(o && o.forceRefreshToken);
+        return auth.getToken({ forceRefresh: force }).then(function (t) {
+          if (t) return t;
+          // One transient failure must not sign the socket out for good: try once more.
+          return new Promise(function (r) { setTimeout(r, 750); }).then(function () { return auth.getToken({ forceRefresh: true }); });
+        });
+      }, function (ok) { rec.confirmed = !!ok; wake(); });
+      return rec.ready();
+    };
+    if (authOf) authOf.set(client, rec);
+    if (!auth) return rec;
     var session = null, ended = false;
     var stop = auth.onChange(function (st) {
-      if (ended || st.sessionId === session) return;
+      if (ended) return;
+      if (st.sessionId === session) { if (!rec.known) { rec.known = true; wake(); } return; }
       if (session !== null) { // was signed in: this socket must not be reused
         ended = true;
         if (typeof stop === "function") stop();
@@ -232,8 +277,11 @@
         return;
       }
       session = st.sessionId;
-      if (st.signedIn) client.setAuth(function (o) { return auth.getToken({ forceRefresh: !!(o && o.forceRefreshToken) }); });
+      rec.known = true;
+      rec.signedIn = !!st.signedIn;
+      if (st.signedIn) rec.arm(); else wake();
     });
+    return rec;
   }
 
   // Which backend to talk to: window.RIVET_CONVEX_URL if set (pages on this machine, and tests);
@@ -283,9 +331,44 @@
     });
   }
 
+  // Signed in (per Clerk) but refused as signed out, or signed in with no account row
+  // or role yet: see authenticate() above and accountProblem() below.
   function call(kind, name, args) {
-    return withTimeout(getClient().then(function (c) { return c[kind](name, args); }));
+    return withTimeout(getClient().then(function (c) {
+      var rec = authOf && authOf.get(c);
+      if (!rec) return c[kind](name, args); // tests inject a bare client
+      return rec.ready().then(function () {
+        // Clerk has a session but Convex isn't using it (refused or dropped): send it again.
+        return rec.signedIn && rec.confirmed === false ? rec.arm() : rec;
+      }).then(function () {
+        return c[kind](name, args);
+      }).catch(function (err) {
+        if (!rec.signedIn) throw err;
+        var p = authProblem(err);
+        if (p === "signIn") {
+          return rec.arm().then(function () { return c[kind](name, args); }).catch(function (e2) {
+            if (authProblem(e2) === "signIn") e2.rivetSignedIn = true; // Clerk says signed in: don't tell them to sign in
+            throw e2;
+          });
+        }
+        if (p === "noAccount" && name !== "users:ensureAccount") return healAccount(c, kind, name, args, err);
+        throw err;
+      });
+    }));
   }
+
+  // "Finish setting up your account first": signed in, but this backend has no account
+  // row (e.g. the Clerk account predates the backend) or no role yet. Create the row
+  // (users:ensureAccount is idempotent); if a role is still missing, the page must ask
+  // for one: the error is marked so friendlyError/needsRole can say so.
+  function healAccount(c, kind, name, args, original) {
+    return c.mutation("users:ensureAccount", {}).then(function (account) {
+      if (account && account.role) return c[kind](name, args);
+      original.rivetNeedsRole = true;
+      throw original;
+    });
+  }
+  function needsRole(err) { return !!err && (err.rivetNeedsRole === true || authProblem(err) === "noAccount"); }
 
   // Each resolves only after Convex has confirmed; rejections carry err.data when
   // the backend refused the input.
@@ -339,6 +422,9 @@
   function watchPostedBounties(onData, onError, limit) {
     var stopped = false, unsubscribe = null;
     getClient().then(function (c) {
+      var rec = authOf && authOf.get(c);
+      return rec ? rec.ready().then(function () { return c; }) : c;
+    }).then(function (c) {
       if (stopped) return;
       unsubscribe = c.onUpdate("bounties:listPosted", { limit: limit || 50 }, onData, onError);
     }, function (e) { if (!stopped && onError) onError(e); });
@@ -403,6 +489,7 @@
     friendlyError: friendlyError,
     isDraftMissing: isDraftMissing,
     authProblem: authProblem,
+    needsRole: needsRole,
     createRequest: createRequest,
     updateIntake: updateIntake,
     saveFollowUps: saveFollowUps,
