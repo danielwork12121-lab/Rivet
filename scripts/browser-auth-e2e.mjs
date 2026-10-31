@@ -214,7 +214,7 @@ async function main() {
     check("…and the login page says why", await v.waitFor(has("Please log in to continue.")));
     await v.go(`${base}/pages/engineers.html`);
     check("signed out: the engineers board shows samples and asks for a Developer login", await v.waitFor(has("Log in with an approved Developer account")));
-    await v.go(`${base}/pages/index.html`);
+    await v.go(`${base}/pages/find-solution.html`);
     await v.waitFor(`document.querySelector("textarea, input[type=text]")`);
     const before = chatLog.length;
     const chatInput = await v.ev(`(() => { const el = [...document.querySelectorAll("textarea, input")].find((e) => e.getAttribute("data-enter-submit")); return el ? (el.id ? "#" + el.id : el.tagName.toLowerCase() + "[data-enter-submit]") : null; })()`);
@@ -319,14 +319,14 @@ async function main() {
     check("a Client on the engineers page gets samples only, with an explanation", await c.waitFor(has("You’re signed in with a Client account")) && !(await c.ev(has("posted on Rivet"))));
 
     // ---- chat with a session ---------------------------------------------------------------------
-    await c.go(`${base}/pages/index.html`);
+    await c.go(`${base}/pages/find-solution.html`);
     await c.waitFor(`!!document.querySelector("[data-enter-submit]")`);
     const sel = await c.ev(`(() => { const el = [...document.querySelectorAll("textarea, input")].find((e) => e.getAttribute("data-enter-submit")); return el.id ? "#" + el.id : el.tagName.toLowerCase() + "[data-enter-submit]"; })()`);
     const n0 = chatLog.length;
     await c.typeInto(sel, "We mow 40 fictional lawns a week.");
     await c.pressEnter();
     check("a signed-in Client's chat reaches /api/chat, Convex verifies the token, and the reply shows", await c.waitFor(has("Stubbed reply: got your mowing job."), 20000) && chatLog.slice(n0).join(",") === "claude,chat 200");
-    await d.go(`${base}/pages/index.html`);
+    await d.go(`${base}/pages/find-solution.html`);
     await d.waitFor(`!!document.querySelector("[data-enter-submit]")`);
     const n1 = chatLog.length;
     await d.typeInto(sel, "We build robots.");

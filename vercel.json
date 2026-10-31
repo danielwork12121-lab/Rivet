@@ -23,23 +23,71 @@
     }
   },
   "rewrites": [
-    { "source": "/", "destination": "/pages/index.html" },
-    { "source": "/find-solution", "destination": "/pages/find-solution.html" },
-    { "source": "/engineers", "destination": "/pages/engineers.html" },
-    { "source": "/messages", "destination": "/pages/messages.html" },
-    { "source": "/login", "destination": "/pages/login.html" },
-    { "source": "/signup", "destination": "/pages/signup.html" },
-    { "source": "/message-vendor", "destination": "/pages/message-vendor.html" },
-    { "source": "/engineer-claims", "destination": "/pages/engineer-claims.html" },
-    { "source": "/client-bounty-journey", "destination": "/pages/client-bounty-journey.html" },
-    { "source": "/robot-finder", "destination": "/pages/robot-finder.html" }
+    {
+      "source": "/",
+      "destination": "/pages/find-solution.html"
+    },
+    {
+      "source": "/find-solution",
+      "destination": "/pages/find-solution.html"
+    },
+    {
+      "source": "/engineers",
+      "destination": "/pages/engineers.html"
+    },
+    {
+      "source": "/messages",
+      "destination": "/pages/messages.html"
+    },
+    {
+      "source": "/login",
+      "destination": "/pages/login.html"
+    },
+    {
+      "source": "/signup",
+      "destination": "/pages/signup.html"
+    },
+    {
+      "source": "/message-vendor",
+      "destination": "/pages/message-vendor.html"
+    },
+    {
+      "source": "/engineer-claims",
+      "destination": "/pages/engineer-claims.html"
+    },
+    {
+      "source": "/client-bounty-journey",
+      "destination": "/pages/client-bounty-journey.html"
+    },
+    {
+      "source": "/robot-finder",
+      "destination": "/pages/robot-finder.html"
+    },
+    {
+      "source": "/order-confirm",
+      "destination": "/pages/order-confirm.html"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "geolocation=(), microphone=()"
+        }
       ]
     }
   ]

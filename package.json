@@ -1,8 +1,8 @@
 {
-  "name": "rivet-backend",
+  "name": "rivet",
   "version": "0.1.0",
   "private": true,
-  "description": "Rivet backend (Convex + TypeScript) — Cal Hacks 13.0",
+  "description": "Rivet \u2014 AI robotics procurement for small trade businesses: describe the job, get ranked robots with payback computed in code, pool bounties for robots that do not exist yet.",
   "type": "module",
   "scripts": {
     "dev": "convex dev",
@@ -16,7 +16,8 @@
     "e2e:clerk:matching": "node scripts/browser-clerk-matching.mjs",
     "e2e:clerk:requirements": "node scripts/browser-clerk-requirements.mjs",
     "check:frontend": "node scripts/check-frontend.mjs",
-    "test-data:list": "convex run maintenance:testData '{\"action\":\"list\"}'"
+    "test-data:list": "convex run maintenance:testData '{\"action\":\"list\"}'",
+    "ci": "npm run typecheck && npm test && npm run check:frontend"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
@@ -30,5 +31,13 @@
     "convex-test": "^0.0.65",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
+  },
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danielwork12121-lab/Rivet"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
