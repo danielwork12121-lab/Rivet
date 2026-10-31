@@ -267,7 +267,40 @@
     return (inPages ? "" : "/pages/") + name + ".html";
   }
 
+  // ---- nav: "Log in" reads "Account" while signed in ------------------------------------
+  // Every page's header nav links to login.html, which shows who is signed in and has
+  // "Sign out". While a session exists that link says "Account" (its title names the
+  // email); signed out, it says what the page wrote. Bundled pages render their nav
+  // after unpacking, so a MutationObserver re-applies the label when the nav appears.
+  function decorateNav(st, doc) {
+    doc = doc || root.document;
+    if (!doc || typeof doc.querySelectorAll !== "function") return 0;
+    var links = doc.querySelectorAll('nav a[href$="login.html"], nav a[data-rivet-login-label]');
+    Array.prototype.forEach.call(links, function (a) {
+      if (!a.hasAttribute("data-rivet-login-label")) a.setAttribute("data-rivet-login-label", a.textContent);
+      var on = !!(st && st.signedIn);
+      var label = on ? "Account" : a.getAttribute("data-rivet-login-label");
+      if (a.textContent !== label) a.textContent = label;
+      if (on) a.setAttribute("title", "Signed in as " + (st.email || "you") + ": account and sign out");
+      else a.removeAttribute("title");
+    });
+    return links.length;
+  }
+  function watchNav() {
+    var doc = root.document, last = null, queued = false;
+    if (!doc || typeof root.MutationObserver !== "function") return;
+    var apply = function () { queued = false; decorateNav(last, doc); };
+    onChange(function (st) { last = st; apply(); });
+    new root.MutationObserver(function () {
+      if (queued || !last || !last.signedIn) return;
+      queued = true;
+      (root.requestAnimationFrame || setTimeout)(apply);
+    }).observe(doc.documentElement, { childList: true, subtree: true });
+  }
+  watchNav();
+
   root.RivetAuth = {
+    _decorateNav: decorateNav, // tests only
     ready: ready,
     current: current,
     onChange: onChange,
