@@ -1,5 +1,7 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { internalMutation, internalQuery, query, type MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import type { WithoutSystemFields } from "convex/server";
 import { robotSpec } from "./schema";
 import { usSaleOfRobot } from "./lib/usSale";
 
@@ -79,8 +81,8 @@ export const removeSamples = internalMutation({
 // would produce. `sample: false` (these are real products), `priceStatus`/`automationShare` follow
 // the same conventions as the scraped path (lib/extract.ts), and automationShareEstimated is set
 // wherever a figure is a conservative placeholder rather than something the manufacturer stated.
-// Idempotent by url: run again any time to pick up a future manual correction; it is a no-op.
-// Run: npx convex run robots:seedFlagshipDemo
+// Idempotent by url: a second run patches rows to match this list (so a re-read page's new photo or
+// figure lands), and is otherwise a no-op. Run: npx convex run --prod robots:seedFlagshipDemo
 const VERIFIED_ON = "2026-10-25"; // the date these pages were actually read
 
 // Origin facts for the US sale status (lib/usSale.ts), by robot name. Kept separate from
@@ -89,7 +91,8 @@ const VERIFIED_ON = "2026-10-25"; // the date these pages were actually read
 const FLAGSHIP_US_SALE: Record<string, {
   madeIn: string; mobile: boolean; connected: boolean; fccAuthorizedBefore: boolean; usContentShare?: number;
 }> = {
-  // RC Mowers, Germantown, Wisconsin; shipping before the July 2026 rule.
+  // RC Mowers, Wisconsin ("engineered and built in Green Bay, Wisconsin" on the REAPER page); shipping
+  // before the July 2026 rule.
   "RC Mowers REAPER 52": { madeIn: "US", mobile: true, connected: true, fccAuthorizedBefore: true },
   // Sold in the US for years before the rule.
   "Husqvarna Automower 435X AWD NERA": { madeIn: "SE", mobile: true, connected: true, fccAuthorizedBefore: true },
@@ -97,43 +100,59 @@ const FLAGSHIP_US_SALE: Record<string, {
   "RC Mowers RECONX": { madeIn: "US", mobile: true, connected: true, fccAuthorizedBefore: false },
 };
 
+const REAPER = "https://www.rcmowersusa.com/mowers/reaper/";
+const HUSQVARNA_435X = "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/";
+// REAPER and Husqvarna were read again on this date: both pages now serve a product photo, the
+// REAPER page was redesigned (new wording, a published labor-savings figure), so their quotes
+// below are the current page's exact sentences.
+const FLAGSHIP_REVERIFIED_ON = "2026-10-31";
+
 const FLAGSHIP_ROBOTS = [
   {
     name: "RC Mowers REAPER 52",
     vendor: "RC Mowers",
     task: "mowing",
-    url: "https://www.rcmowersusa.com/mowers/reaper/",
+    // Heavy brush and tall weeds on steep ground are what the maker builds it for (quoted below).
+    extraTasks: ["brush clearing"],
+    url: REAPER,
+    imageUrl: "https://www.rcmowersusa.com/wp-content/uploads/2026/10/reaper-inline-962x1024.jpg",
+    verifiedOn: FLAGSHIP_REVERIFIED_ON,
     price: 0,
     priceStatus: "quote_only" as const,
     yearlyOpex: 0,
-    automationShare: 0.15,
-    automationShareEstimated: true,
+    // The manufacturer's own page: "92% labor savings reported" (see assumptions for the quote).
+    automationShare: 0.92,
+    automationShareEstimated: false,
     environments: ["outdoor"],
     specs: [
-      { name: "max_slope_deg", value: 50, quote: "Slope capability: 50°, any direction", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
-      { name: "coverage_sqft_per_hour", value: 108900, quote: "Mow rate: Up to 2.5 acres/hour", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
-      { name: "width_m", value: 1.32, quote: "Cutting width: 52 in", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
-      { name: "weight_kg", value: 860.47, quote: "Dry weight: 1,897 lbs", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
-      { name: "runtime_hours", value: 8, quote: "Runtime: Up to 8 hours", sourceUrl: "https://www.rcmowersusa.com/mowers/reaper/" },
+      { name: "max_slope_deg", value: 50, quote: "The same 50° slope and 1,000-ft remote on a narrower 52-inch platform.", sourceUrl: REAPER },
+      { name: "coverage_sqft_per_hour", value: 108900, quote: "Mows up to 2.5 acres an hour, cuts 10-foot grass, heavy brush, and 2-inch trees, and treads even lighter at 2.3 psi.", sourceUrl: REAPER },
+      { name: "width_m", value: 1.32, quote: "52\" cutting width", sourceUrl: REAPER },
+      { name: "weight_kg", value: 860.47, quote: "1,897 lbs (fuel & fluids add up to 100 lbs)", sourceUrl: REAPER },
+      { name: "runtime_hours", value: 8, quote: "Both run up to 8 hours on a 12-gallon tank.", sourceUrl: REAPER },
     ],
     assumptions: [
-      "Remote-operated, not autonomous: a trained operator still runs it from up to 1,000 ft away, so " +
-        "this isn't the same labor story as a fully autonomous mower. automationShare is a conservative " +
-        "placeholder, not a manufacturer-stated labor-saved percentage.",
-      "The manufacturer's page gives no new-unit price (quote only); it cites about $40,000 as a starting " +
-        "cost for used machines, which this catalog entry deliberately does not use as the new-unit price.",
+      "Remote-operated, not autonomous: one trained operator runs it from up to 1,000 ft away, off the " +
+        "slope. Built for the work a string-trimmer crew does by hand on steep ground: the maker says it " +
+        "\"cuts 10-foot grass, heavy brush, and 2-inch trees\".",
+      "Labor share is the manufacturer's published figure, not a Rivet estimate: its page states \"92% labor " +
+        "savings reported\", quoting a customer: \"After our first 1,000 hours, we had a 92% savings in " +
+        "labor\". That is one customer's result, not a guarantee for this job.",
+      "The manufacturer publishes no new-unit price (quote only), so no payback is computed for it.",
     ],
     provenance:
-      `Manually verified from the manufacturer's official specification page on ${VERIFIED_ON}. Commercial, ` +
-      "remote-operated slope mower built for steep embankments, retention/detention ponds, ditches, heavy " +
-      "brush and similar hazardous terrain; the manufacturer states it is not built for residential or " +
-      "small-scale use.",
+      `Manually verified from the manufacturer's official REAPER page on ${FLAGSHIP_REVERIFIED_ON}. Commercial, ` +
+      "remote-operated slope mower for embankments, ditches, pond banks and heavy brush; the manufacturer " +
+      "states it is \"Not built for residential or small-scale use.\" Photo: the page's own og:image.",
   },
   {
     name: "Husqvarna Automower 435X AWD NERA",
     vendor: "Husqvarna",
     task: "mowing",
-    url: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/",
+    url: HUSQVARNA_435X,
+    imageUrl:
+      "https://www.husqvarna.com/-/images/aprimo/husqvarna/robotic-mowers/photos/studio/o/ok/ok-383431.jpg?v=57f05ae6d152aa71&format=opengraph-cover",
+    verifiedOn: FLAGSHIP_REVERIFIED_ON,
     price: 2999.99,
     priceStatus: "listed" as const,
     yearlyOpex: 240,
@@ -141,30 +160,31 @@ const FLAGSHIP_ROBOTS = [
     automationShareEstimated: true,
     environments: ["outdoor"],
     specs: [
-      { name: "max_slope_deg", value: 35, quote: "Max slope: 70% inside the installation area (about 35°)", sourceUrl: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/" },
-      { name: "runtime_hours", value: 2.4, quote: "About 145 minutes of typical mow time per charge", sourceUrl: "https://www.husqvarna.com/us/robotic-lawn-mowers/automower-435x-awd/" },
+      { name: "max_slope_deg", value: 35, quote: "can comfortably handle slopes up to 70% (35 degrees) inside the cutting area", sourceUrl: HUSQVARNA_435X },
+      { name: "runtime_hours", value: 2.4, quote: "The 435X AWD provides a typical mow time of 145 minutes on a single charge.", sourceUrl: HUSQVARNA_435X },
     ],
     assumptions: [
       "Running cost estimated at 8% of price per year (no manufacturer-stated figure).",
       // Keeps the literal phrase "Assumed to replace" for the same reason lib/extract.ts does:
       // pages/index.html already greys out and caveats the ROI figures when it sees that phrase.
       "No manufacturer-stated labor-saved percentage. Assumed to replace a conservative 15% of the task's labor.",
-      "Husqvarna's own page classifies this model under residential robotic lawn mowers, for maintained " +
-        "lawns up to about 0.9 acre -- this catalog doesn't yet encode a hard maximum-area limit, so check " +
-        "the job's actual area against that figure before trusting a high match score alone.",
+      "Husqvarna's own page rates this model for \"medium-to-large sized lawns up to 0.9 acres\" of maintained " +
+        "grass. It mows grass; it does not cut tall weeds or brush, so it is not a string-trimmer replacement " +
+        "on overgrown ground. This catalog doesn't yet encode a maximum-area limit: check the job's area first.",
       "The 'NERA' (wire-free) variant's exact slope and price figures weren't separately confirmed on the " +
         "page read for this entry; verify before quoting a NERA-specific number.",
     ],
     provenance:
-      `Manually verified from Husqvarna's official US product page on ${VERIFIED_ON}. Not a substitute for ` +
-      "a heavy-duty commercial brush-clearing machine: Husqvarna positions it for maintained residential " +
-      "lawns, and sells a separate commercial robotic-mower line for larger properties.",
+      `Manually verified from Husqvarna's official US product page on ${FLAGSHIP_REVERIFIED_ON} ("Price from ` +
+      "$2,999.99\"). Not a substitute for a heavy-duty commercial brush-clearing machine: Husqvarna positions " +
+      "it for maintained residential lawns. Photo: the page's own og:image.",
   },
   {
     name: "RC Mowers RECONX",
     vendor: "RC Mowers",
     task: "mowing",
     url: "https://www.rcmowersusa.com/",
+    verifiedOn: VERIFIED_ON,
     price: 0,
     priceStatus: "quote_only" as const, // deliberate: see provenance -- not yet purchasable at any price
     yearlyOpex: 0,
@@ -190,18 +210,47 @@ const FLAGSHIP_ROBOTS = [
   },
 ];
 
+// Inserts each curated robot, or patches its row (found by url) to match the list, so a correction
+// here lands on the next run. `verifiedOn` (the day its page was read) becomes fetchedAt.
+async function upsertCurated(
+  ctx: MutationCtx,
+  list: readonly ({ name: string; url: string; verifiedOn: string } & Omit<WithoutSystemFields<Doc<"robots">>, "sample" | "fetchedAt">)[],
+  extra: (name: string) => Partial<WithoutSystemFields<Doc<"robots">>> = () => ({}),
+) {
+  const added: string[] = [];
+  const updated: string[] = [];
+  for (const { verifiedOn, ...r } of list) {
+    const row = { ...r, ...extra(r.name), sample: false, fetchedAt: Date.parse(`${verifiedOn}T12:00:00Z`) };
+    const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
+    if (!existing) {
+      await ctx.db.insert("robots", row);
+      added.push(r.name);
+      continue;
+    }
+    const differs = Object.entries(row).some(
+      ([k, val]) => stableJson((existing as Record<string, unknown>)[k]) !== stableJson(val),
+    );
+    if (differs) {
+      await ctx.db.patch(existing._id, row);
+      updated.push(r.name);
+    }
+  }
+  return { added, updated, unchanged: list.length - added.length - updated.length };
+}
+
+// JSON with object keys sorted, so a stored row (whose key order the database may change) compares
+// equal to the same data written here.
+function stableJson(x: unknown): string {
+  return JSON.stringify(x, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val);
+}
+
+// Idempotent: adds missing flagship robots and patches drifted ones (e.g. a re-read page's new photo).
 export const seedFlagshipDemo = internalMutation({
   args: {},
-  handler: async (ctx) => {
-    let added = 0;
-    for (const r of FLAGSHIP_ROBOTS) {
-      const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
-      if (existing) continue;
-      await ctx.db.insert("robots", { ...r, ...FLAGSHIP_US_SALE[r.name], sample: false, fetchedAt: Date.now() });
-      added++;
-    }
-    return `Added ${added} flagship robots (${FLAGSHIP_ROBOTS.length - added} already present)`;
-  },
+  handler: async (ctx) => upsertCurated(ctx, FLAGSHIP_ROBOTS, (name) => FLAGSHIP_US_SALE[name] ?? {}),
 });
 
 // ---------- Pond / wetland demo: real aquatic products ----------
@@ -380,38 +429,189 @@ export const AQUATIC_ROBOTS = [
   },
 ];
 
-// JSON with object keys sorted, so a stored row (whose key order the database may change) compares
-// equal to the same data written here.
-function stableJson(x: unknown): string {
-  return JSON.stringify(x, (_k, val) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
-      : val);
-}
-
 export const seedAquaticDemo = internalMutation({
   args: {},
-  handler: async (ctx) => {
-    const added: string[] = [];
-    const updated: string[] = [];
-    for (const r of AQUATIC_ROBOTS) {
-      const row = { ...r, sample: false, fetchedAt: Date.parse(`${AQUATIC_VERIFIED_ON}T12:00:00Z`) };
-      const existing = await ctx.db.query("robots").withIndex("by_url", (q) => q.eq("url", r.url)).first();
-      if (!existing) {
-        await ctx.db.insert("robots", row);
-        added.push(r.name);
-        continue;
-      }
-      const differs = Object.entries(row).some(
-        ([k, val]) => stableJson((existing as Record<string, unknown>)[k]) !== stableJson(val),
-      );
-      if (differs) {
-        await ctx.db.patch(existing._id, row);
-        updated.push(r.name);
-      }
-    }
-    return { added, updated, unchanged: AQUATIC_ROBOTS.length - added.length - updated.length };
+  handler: async (ctx) => upsertCurated(ctx, AQUATIC_ROBOTS.map((r) => ({ ...r, verifiedOn: AQUATIC_VERIFIED_ON }))),
+});
+
+// ---------- Weed/brush clearing and swamp/wetland demo: real products ----------
+// Same rules as above, pages read by hand on FIELD_VERIFIED_ON. Two kinds of job the demo runs:
+// - "brush clearing": tall weeds and brush on steep ground, the work a string-trimmer ("weed
+//   whacker") crew does by hand. The REAPER 52 above also does it (its extraTasks).
+// - swamp/marsh vegetation: amphibious machines that drive from land into a marsh or pond, cut
+//   invasive vegetation and haul it out. They are crewed machines, not robots: each entry says so.
+// Run: npx convex run --prod robots:seedBrushAndWetlandDemo (idempotent; patches drift)
+const FIELD_VERIFIED_ON = "2026-10-31";
+const MOWRATOR_50 =
+  "https://mowrator.com/products/mowrator-s1-4wd-119-slope-remote-control-lawn-mower-with-leaf-shredding-vacuum";
+const WEEDOO_6925 = "https://weedooboats.com/tc-6925-amphibious-vessels/";
+const WEEDOO_6450 = "https://weedooboats.com/tc-6450-amphibious-vessels/";
+const TRUXOR_T50 = "https://truxor.com/en/product/products-truxor-machines/truxor-t50--T50";
+const AQUARIUS_HARVESTERS = "https://aquarius-systems.com/equipment/aquatic-weed-harvester/";
+const CREWED =
+  "Crewed machine, not a robot: an operator drives it on board. It replaces hand crews wading in with rakes " +
+  "and trimmers, not the operator.";
+
+export const BRUSH_AND_WETLAND_ROBOTS = [
+  {
+    name: "Mowrator S1 4WD (50° slope)",
+    vendor: "Mowrator",
+    task: "brush clearing",
+    extraTasks: ["mowing"],
+    url: MOWRATOR_50,
+    imageUrl: "https://mowrator.com/cdn/shop/files/4WD-GP-18.webp?v=1792764238",
+    price: 3739,
+    priceStatus: "listed" as const,
+    yearlyOpex: 299,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor"],
+    mobile: true,
+    specs: [
+      { name: "max_slope_deg", value: 50, quote: "S1 4WD 119% Slope (50°)", sourceUrl: MOWRATOR_50 },
+      { name: "coverage_sqft_per_hour", value: 21780, quote: "A 21-inch deck running at 3.4 mph covers 0.5 acres per hour.", sourceUrl: MOWRATOR_50 },
+      { name: "runtime_hours", value: 2.25, quote: "56V LFP Battery, 2.25h Runtime, 1.125 Acres Per Charge", sourceUrl: MOWRATOR_50 },
+      { name: "width_m", value: 0.53, quote: "A 21-inch deck running at 3.4 mph covers 0.5 acres per hour.", sourceUrl: MOWRATOR_50 },
+    ],
+    assumptions: [
+      "Remote-controlled, not autonomous: one person drives it with a handheld remote from flat ground " +
+        "instead of working the slope with a string trimmer. The maker lists 51-inch \"Max Tall Grass Cut\" " +
+        "on slopes up to 50°; it is a 21-inch electric mower, not a flail mulcher for woody brush or saplings.",
+      "Price is the 50° model's listed price on the maker's store (\"4WD 18Ah 50° Slope - $3,739.00\"; " +
+        "regular price $4,399.00).",
+      "Running cost estimated at 8% of price per year (no manufacturer-stated figure).",
+      ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Mowrator's official product page on ${FIELD_VERIFIED_ON}. Photo: the page's own ` +
+      "og:image (the S1 4WD with its remote).",
   },
+  {
+    name: "Weedoo TC-6925 Amphibious Weed Harvester",
+    vendor: "Weedoo Greenboat",
+    task: "aquatic weed removal",
+    url: WEEDOO_6925,
+    imageUrl: "https://weedooboats.com/wp-content/uploads/2023/12/Weedoo6925.jpg",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    specs: [
+      { name: "width_m", value: 2.3, quote: "Cut Away—U-double-knife cutting system: mowing width 2.3m (7’-7”), mowing depth up to 1.5m (4’-11”)", sourceUrl: WEEDOO_6925 },
+      { name: "payload_kg", value: 2750, quote: "5.5 m3 (7.2 yd.3)/2,750 kg (6,063 lb.)", sourceUrl: WEEDOO_6925 },
+      { name: "weight_kg", value: 8900, quote: "Approx. 8,900 kg (19, 621 lb.)", sourceUrl: WEEDOO_6925 },
+      { name: "coverage_sqft_per_hour", value: 123784.85, quote: "Estimated Production Rate 11,500 m2 (13,754 yd.)2/h", sourceUrl: WEEDOO_6925 },
+    ],
+    assumptions: [
+      CREWED + " Cockpit-driven (\"Cockpit with clear and ergonomic controls\"); \"Autonomous loading and " +
+        "unloading, drives itself into the water\" means it launches and lands itself on tracks, not that it " +
+        "runs unmanned.",
+      "Cuts rooted and floating vegetation down to 1.5 m, carries up to 2,750 kg of it on a conveyor deck and " +
+        "drives up the bank on rubber tracks to unload, so cut weeds leave the water. The production rate is the " +
+        "maker's own estimate.",
+      "Price on request: Weedoo publishes no price for this model. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Weedoo Greenboat's official TC-6925 page on ${FIELD_VERIFIED_ON} (Weedoo Greenboat, ` +
+      "Inc., Stuart, Florida). Photo: the page's own og:image.",
+  },
+  {
+    name: "Weedoo AmphiKing 6450",
+    vendor: "Weedoo Greenboat",
+    task: "aquatic weed removal",
+    extraTasks: ["debris skimming"],
+    url: WEEDOO_6450,
+    imageUrl: "https://weedooboats.com/wp-content/uploads/2023/12/tc-6450.jpg",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    specs: [
+      { name: "reach_m", value: 2.4, quote: "7’10” (2.4 m) reach and 180o swing radius with quick-change system", sourceUrl: WEEDOO_6450 },
+    ],
+    assumptions: [
+      CREWED + " The page lists \"Driver’s seat features armrests with pilot controls\".",
+      "Built for swamps: \"Its powerful auger drives and compact size will ensure this model can easily navigate " +
+        "even in the most demanding terrains, such as marshes, bogs, and swamps.\" Tracks for land, a boom with " +
+        "cutting bar, weed grapple, collecting rake or dredge; the maker says it will \"remove all types of " +
+        "weeds, debris, or unwanted vegetation\".",
+      "Price on request: Weedoo publishes no price for this model. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Weedoo Greenboat's official AmphiKing 6450 page on ${FIELD_VERIFIED_ON}. Photo: the ` +
+      "product photo on the same page.",
+  },
+  {
+    name: "Truxor T50",
+    vendor: "Truxor Wetland Equipment",
+    task: "aquatic weed removal",
+    url: TRUXOR_T50,
+    imageUrl: "https://truxor.com/image/getthumbnail/1656?width=600&height=600&version=1&s=001",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    specs: [
+      { name: "weight_kg", value: 1470, quote: "Total length max. 5030 mm, min 4700 mm. Total width 2080 mm. Total height max 2600, min 2020 mm. Set weight : 1470 kg", sourceUrl: TRUXOR_T50 },
+      { name: "width_m", value: 2.08, quote: "Total length max. 5030 mm, min 4700 mm. Total width 2080 mm. Total height max 2600, min 2020 mm. Set weight : 1470 kg", sourceUrl: TRUXOR_T50 },
+      { name: "payload_kg", value: 350, quote: "Lifting power 350 kg, X4 bracket for fast change of tools. Semi-automatic locking of tools.", sourceUrl: TRUXOR_T50 },
+    ],
+    assumptions: [
+      CREWED + " Driven with two joysticks from the seat; \"remote assistance\" on the page is diagnostics for its " +
+        "control units, not remote driving.",
+      "Amphibious tool carrier on pontoons and paddle tracks for reed beds, marshes and shallow water. It cuts, " +
+        "rakes and collects with attachments sold separately (cutter bar, rake, pumps); payload here is the " +
+        "front lift's \"Lifting power 350 kg\".",
+      "Price on request: Truxor sells through dealers and publishes no price. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Truxor Wetland Equipment's official T50 page on ${FIELD_VERIFIED_ON}. The same site's ` +
+      "invasive-plants page (https://truxor.com/en/content/invasive-aquatic-plants) names the Truxor for " +
+      "\"lakes, rivers, and wetlands\" overrun by invasive plants. Photo: " +
+      "the product photo on the T50 page.",
+  },
+  {
+    name: "Aquarius Systems HM-420 Aquatic Weed Harvester",
+    vendor: "Aquarius Systems",
+    task: "aquatic weed removal",
+    url: AQUARIUS_HARVESTERS,
+    imageUrl: "https://aquarius-systems.com/wp-content/uploads/2022/09/home-product-harvester-2-1.webp",
+    price: 0,
+    priceStatus: "quote_only" as const,
+    yearlyOpex: 0,
+    automationShare: 0.15,
+    automationShareEstimated: true,
+    environments: ["outdoor", "water"],
+    mobile: true,
+    specs: [
+      { name: "width_m", value: 2.13, quote: "The ever popular 420 Series Weed Harvester has a minimum 7’ 0” (2,13 m) wide horizontal sickle bar and is the solution for medium sized harvesting projects.", sourceUrl: AQUARIUS_HARVESTERS },
+    ],
+    assumptions: [
+      CREWED + " \"The Aquatic Weed Harvester has an operating console built for maximum comfort during long " +
+        "workdays.\" It cuts submerged weeds with sickle bars and lifts them aboard on a conveyor; it works from " +
+        "open water, not on land or in a reed marsh.",
+      "Built to order: \"Many of our mechanical weed harvesters are customized to match the needs of your " +
+        "lake.\" Price on request. " + ESTIMATED_SHARE,
+    ],
+    provenance:
+      `Manually verified from Aquarius Systems' official aquatic weed harvester page on ${FIELD_VERIFIED_ON}. ` +
+      "Photo: the harvester photo on the same page.",
+  },
+];
+
+export const seedBrushAndWetlandDemo = internalMutation({
+  args: {},
+  handler: async (ctx) =>
+    upsertCurated(ctx, BRUSH_AND_WETLAND_ROBOTS.map((r) => ({ ...r, verifiedOn: FIELD_VERIFIED_ON }))),
 });
 
 // One-time backfill for robots scraped before automationShareEstimated existed (robots.ts

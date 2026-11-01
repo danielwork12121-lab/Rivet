@@ -87,7 +87,7 @@ const OUTDOOR_TASK_WORDS = [
   "mow", "lawn", "turf", "grass", "slope", "embankment", "hillside", "vegetation", "brush",
   "landscap", "yard", "garden", "spray", "weed", "outdoor", "grounds", "trim", "edging", "drainage",
   "gutter", "roof", "solar", "paving", "sidewalk", "parking",
-  "pond", "lake", "wetland", "aquatic", "skimming", "water survey",
+  "pond", "lake", "wetland", "aquatic", "skimming", "water survey", "swamp", "marsh", "bog",
 ];
 const INDOOR_TASK_WORDS = ["floor", "carpet", "indoor", "warehouse", "tile", "janitorial", "vacuum"];
 
@@ -154,7 +154,8 @@ export function fitCheck(intent: Intent, robot: RobotFacts): FitRow[] {
 // Scores every robot for this operator (lib/score.ts) and returns the best three.
 // Robots that miss a must-have all score 0; among those (and on ties) the closest one comes first
 // (+10 per requirement met, -40 per mandatory miss, -10 per optional miss, -2 per unknown, up to
-// +30 for a fast payback), so the bounty suggestion names the fewest gaps.
+// +30 for a fast payback), so the bounty suggestion names the fewest gaps. Still tied: more
+// vendor-quoted specs first. None of this changes a score.
 export function rankRobots(intent: Intent, robots: RobotFacts[], limit = 3): RankedRobot[] {
   return robots
     // The hard engineering gate runs first and is final: an indoor-only robot for an outdoor job
@@ -209,9 +210,13 @@ export function rankRobots(intent: Intent, robots: RobotFacts[], limit = 3): Ran
           assumptions: fleetCaveat ? [...(robot.assumptions ?? []), fleetCaveat] : (robot.assumptions ?? []),
         },
         closeness,
+        // Last tie-break only: among robots with the same score and closeness, the one whose spec
+        // sheet has more figures read off the vendor's page (each with its quote) comes first, so
+        // the order of equal scores is decided by evidence rather than by when a row was added.
+        quotedSpecs: robot.specs?.length ?? 0,
       };
     })
-    .sort((a, b) => b.exact - a.exact || b.closeness - a.closeness)
+    .sort((a, b) => b.exact - a.exact || b.closeness - a.closeness || b.quotedSpecs - a.quotedSpecs)
     .slice(0, limit)
     .map((r) => r.ranked);
 }

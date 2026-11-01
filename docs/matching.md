@@ -60,9 +60,19 @@ step's search phrase and its share of the job's yearly labor, so `ai.matchRobots
   shows a drawing of that kind of robot from `img/robots/*.svg`, labelled "Illustration".
 - Catalog lookup (`robots.forTask`) reads a robot's `task` and its `extraTasks`. When the AI's task
   name finds no real robot, `lib/taskAlias.ts` maps clear water-job wording ("weed removal" on a pond,
-  "inspection" of a pond) onto the catalog's `aquatic weed removal`, `debris skimming` or
-  `water survey` before giving up. Those tasks are covered by `robots:seedAquaticDemo` (RanMarine
-  WasteShark and WasteShark+ Pro, Seafloor Systems HyDrone 4.5, Lake Groomer, Crary WeedRoller PRO).
+  "inspection" of a pond, "swamp" or "marsh" vegetation) onto the catalog's `aquatic weed removal`,
+  `debris skimming` or `water survey`, and dry-land weed wording ("cut tall weeds and brush", which the
+  breakdown files under "trimming") onto `brush clearing`, before giving up. Weed spraying and edging
+  around fences never map. Those tasks are covered by `robots:seedAquaticDemo` (RanMarine WasteShark and
+  WasteShark+ Pro, Seafloor Systems HyDrone 4.5, Lake Groomer, Crary WeedRoller PRO) and
+  `robots:seedBrushAndWetlandDemo` (Mowrator S1 4WD 50°, Weedoo TC-6925 and AmphiKing 6450, Truxor T50,
+  Aquarius Systems HM-420; the REAPER 52 from `seedFlagshipDemo` also does `brush clearing`). The
+  amphibious harvesters are crewed machines, and each says so in its assumptions.
+- The curated seeds (`seedFlagshipDemo`, `seedAquaticDemo`, `seedBrushAndWetlandDemo`) are idempotent and
+  patch a row that drifted from the list, so a re-read page's photo or figure reaches production.
+- A labor-saved share counts as vendor-sourced only when the maker's own page states it (REAPER 52:
+  "92% labor savings reported", a customer figure the page quotes). Everything else keeps the 15%
+  estimate and `automationShareEstimated: true`.
 - Live web discovery stays off in production. A step with nothing in the catalog reads "No verified
   match yet" and offers a bounty, not an error.
 
@@ -75,7 +85,10 @@ All plain code; Claude never computes these.
   never = 0; without a payback, price against budget; unknown price = 0.5). R is the share of
   requirements met. E is the share of judged figures (each requirement's spec, and the price) read
   from the vendor's page with a quote; fictional sample robots get 0. Robots are ranked by S; ties
-  and zero scores fall back to the old closeness points so bounty gaps stay the fewest.
+  and zero scores fall back to the old closeness points so bounty gaps stay the fewest, then to the
+  number of vendor-quoted specs (never to row order). No tie-break changes a score.
+- Operator numbers are kept only if the operator wrote them (`lib/verify.ts numberAppears`); money
+  written as "58k", "$1.2M" or "2 million" counts as written.
 - **Lifetime value** (`convex/lib/roi.ts` `lifetimeValue`): over 5 years at an 8% discount rate,
   `NPV = −C0 + Σ (B − O)/(1 + r)^t`, `TCO = C0 + N·O`, `ROI = (N(B − O) − C0)/C0`. Stored on each
   pick as `lifetime` and shown on the page as one plain sentence.

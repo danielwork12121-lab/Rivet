@@ -67,8 +67,9 @@ breaks the gates.
 
 ```
 npx convex run --prod robots:seed              # 14 sample robots
-npx convex run --prod robots:seedFlagshipDemo  # 3 real robots
+npx convex run --prod robots:seedFlagshipDemo  # 3 real mowers (idempotent; patches drift)
 npx convex run --prod robots:seedAquaticDemo   # 5 real pond/wetland robots (idempotent; patches drift)
+npx convex run --prod robots:seedBrushAndWetlandDemo  # 1 brush cutter + 4 swamp/marsh harvesters (idempotent)
 ```
 
 ## Known TODO: Clerk

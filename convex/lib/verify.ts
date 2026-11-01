@@ -21,7 +21,26 @@ export function numberAppears(n: number, text: string): boolean {
   const digits = String(n).replace(".", "\\.");
   const zeros = Number.isInteger(n) ? "(\\.0+)?" : "0*";
   const re = new RegExp(`(^|[^\\d.])${digits}${zeros}(?![\\d]|\\.\\d)`);
-  return re.test(plain);
+  return re.test(plain) || scaledAppears(n, plain);
+}
+
+// Money written the way people type it: "58k", "$58K", "1.2M", "2 million". The operator wrote
+// that number, so it counts; nothing is estimated. A bare lower-case "m" ("5 m wide") is a length,
+// not millions, so it only counts with a "$" in front ("$1.2m").
+const SCALED = /(^|[^\d.])(\$\s?)?(\d+(?:\.\d+)?)\s?(k|thousand|mm|million|m)(?![a-z])/gi;
+
+function scaledAppears(n: number, plain: string): boolean {
+  for (const m of plain.matchAll(SCALED)) {
+    const [, , dollar, num, unitRaw] = m;
+    const unit = unitRaw.toLowerCase();
+    let factor: number;
+    if (unit === "k" || unit === "thousand") factor = 1e3;
+    else if (unit === "mm" || unit === "million") factor = 1e6;
+    else if (unitRaw === "M" || dollar) factor = 1e6;
+    else continue;
+    if (Math.abs(Number(num) * factor - n) < 1e-6) return true;
+  }
+  return false;
 }
 
 export type Evidence = { value: number | null; unit: string | null; quote: string | null };

@@ -40,6 +40,26 @@ describe("numberAppears", () => {
     expect(numberAppears(2399, "$2,399.50")).toBe(false);
     expect(numberAppears(2399, "$2,399.001")).toBe(false);
   });
+
+  it("reads money written as 58k, $1.2M or 2 million, the way operators type it", () => {
+    // The live demo request: "This process costs me 58k a year." used to lose the cost entirely.
+    expect(numberAppears(58000, "This process costs me 58k a year.")).toBe(true);
+    expect(numberAppears(58000, "about $58K/yr")).toBe(true);
+    expect(numberAppears(1500, "1.5k")).toBe(true);
+    expect(numberAppears(1200000, "a $1.2M contract")).toBe(true);
+    expect(numberAppears(1200000, "1.2M a year")).toBe(true);
+    expect(numberAppears(2000000, "$2m budget")).toBe(true);
+    expect(numberAppears(2000000, "2 million")).toBe(true);
+    expect(numberAppears(30000, "30 thousand dollars")).toBe(true);
+  });
+
+  it("never reads a length, a unit or a different number as shorthand money", () => {
+    expect(numberAppears(5000000, "a 5 m wide deck")).toBe(false);
+    expect(numberAppears(58000, "58km away")).toBe(false);
+    expect(numberAppears(5000, "5 kg payload")).toBe(false);
+    expect(numberAppears(580000, "58k a year")).toBe(false);
+    expect(numberAppears(58000, "158k a year")).toBe(false);
+  });
 });
 
 describe("toCanonical", () => {

@@ -22,6 +22,11 @@ describe("cleanIntent", () => {
   it("prefers the cost from the intake form", () => {
     expect(cleanIntent(raw, text, 70000).annualTaskCost).toBe(70000);
   });
+  it("keeps a yearly cost the operator wrote as shorthand, like the live demo's \"58k a year\"", () => {
+    const demo = "Two people have to mow a steep grassy terrain. This process costs me 58k a year.";
+    expect(cleanIntent({ ...raw, annualTaskCost: 58000, budget: null, requirements: [] }, demo).annualTaskCost).toBe(58000);
+    expect(cleanIntent({ ...raw, annualTaskCost: 85000, budget: null, requirements: [] }, demo).annualTaskCost).toBeNull();
+  });
 });
 
 describe("robotFromPage", () => {

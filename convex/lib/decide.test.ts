@@ -38,6 +38,19 @@ describe("rankRobots", () => {
     expect(ranked[0].robotId).toBe("slope");
     expect(ranked[0].paybackMonths).toBe(9); // 40000 / (54000 - 3000) * 12 = 9.4
   });
+  it("breaks an exact tie by how many vendor-quoted specs each robot has, never by row order", () => {
+    const bare: RobotFacts = { ...quoteOnly, _id: "bare", environments: ["outdoor"] };
+    const documented: RobotFacts = {
+      ...quoteOnly, _id: "documented", environments: ["outdoor"],
+      specs: [{ name: "width_m", value: 2.3 }, { name: "payload_kg", value: 2750 }],
+    };
+    const noReqs: Intent = { task: "aquatic weed removal", annualTaskCost: 30000, budget: null, requirements: [] };
+    for (const order of [[bare, documented], [documented, bare]]) {
+      const ranked = rankRobots(noReqs, order);
+      expect(ranked.map((r) => r.robotId)).toEqual(["documented", "bare"]);
+      expect(ranked[0].score).toBe(ranked[1].score); // same score: only the order is decided
+    }
+  });
   it("gives no ROI for a robot without a listed price", () => {
     const ranked = rankRobots(hills, [quoteOnly]);
     expect(ranked[0].paybackMonths).toBeNull();
