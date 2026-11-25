@@ -56,10 +56,6 @@
       "destination": "/pages/engineer-claims.html"
     },
     {
-      "source": "/client-bounty-journey",
-      "destination": "/pages/client-bounty-journey.html"
-    },
-    {
       "source": "/robot-finder",
       "destination": "/pages/robot-finder.html"
     },

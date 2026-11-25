@@ -83,7 +83,9 @@ describe("friendlyError", () => {
     expect(api().friendlyError({ data: "title must not be empty" })).toBe("title must not be empty");
   });
   it("describes network failures as a connection problem", () => {
-    expect(api().friendlyError(new TypeError("Failed to fetch"))).toMatch(/Can't reach the Rivet server/);
+    const m = api().friendlyError(new TypeError("Failed to fetch"));
+    expect(m).toMatch(/can't reach its server/i);
+    expect(m).not.toMatch(/backend/i); // never name server-side machinery to an operator
   });
   it("describes server-side rejections without leaking internals", () => {
     const m = api().friendlyError(new Error("[Request ID: abc] Server Error Uncaught ..."));
@@ -92,7 +94,10 @@ describe("friendlyError", () => {
   });
   it("tells the user a timeout is safe to retry", () => {
     const e = new Error("timeout"); e.name = "RivetTimeout";
-    expect(api().friendlyError(e)).toMatch(/will not create a duplicate/);
+    const m = api().friendlyError(e);
+    expect(m).toMatch(/won't create a duplicate|will not create a duplicate/);
+    expect(m).not.toMatch(/may or may not/i); // never tell someone we lost track of their data
+    expect(m).not.toMatch(/press the button/i); // there is no button on the chat
   });
 });
 

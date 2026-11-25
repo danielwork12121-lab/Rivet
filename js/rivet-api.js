@@ -200,13 +200,13 @@
     if (authProblem(err) === "signIn" && !(err && typeof err.data === "string")) return "Your session has ended. Please sign in again.";
     if (err && typeof err.data === "string") return err.data; // ConvexError from validation
     if (err && err.name === "RivetTimeout") {
-      return "The server took too long to respond. Your answers may or may not have been saved. Press the button again; it will not create a duplicate.";
+      return "Rivet's server didn't answer in time. Send that again \u2014 repeating it won't create a duplicate.";
     }
     var msg = String((err && err.message) || "");
     if (/Request ID|Server Error|ArgumentValidation/i.test(msg)) {
       return "The server rejected that request. Please check the fields and try again.";
     }
-    return "Can't reach the Rivet server. Check that the backend is running and try again.";
+    return "Rivet can't reach its server right now. Try again in a moment.";
   }
 
   // ---- client ---------------------------------------------------------------------
